@@ -1,0 +1,136 @@
+/* 全局样式 */
+body {
+    background-color: #f8f9fa;
+}
+
+/* 代币相关样式 */
+.token-img {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.token-img-lg {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.token-placeholder {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background-color: #6c757d;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.token-placeholder-lg {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background-color: #6c757d;
+    color: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* 消息样式 */
+.message-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 0.9rem;
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 5px;
+}
+
+.message-image {
+    max-height: 200px;
+    border-radius: 5px;
+}
+
+/* 分页样式 */
+.pagination {
+    margin-top: 20px;
+}
+
+/* 卡片增强样式 */
+.card {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    margin-bottom: 20px;
+}
+
+.card-header {
+    font-weight: 500;
+}
+
+/* 表格增强样式 */
+.table th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .token-img-lg, .token-placeholder-lg {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+}
+
+/* 动画效果 */
+.like-btn {
+    transition: all 0.3s ease;
+}
+
+.like-btn:hover {
+    transform: scale(1.05);
+}
+
+/* 统计和图表样式 */
+.chart-container {
+    position: relative;
+    margin: auto;
+    height: 300px;
+}
+
+#tokenDistribution {
+    margin-bottom: 20px;
+}
+
+.stats-card {
+    transition: all 0.3s ease;
+}
+
+.stats-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.stats-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #495057;
+}
+
+.stats-label {
+    color: #6c757d;
+    font-size: 0.9rem;
+} 

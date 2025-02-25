@@ -1,0 +1,110 @@
+<div class="table-responsive">
+    <table class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th>代币</th>
+                <th>链</th>
+                <th>当前市值</th>
+                <th>涨跌幅</th>
+                <th>首次推荐</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if tokens %}
+                {% for token in tokens %}
+                <tr class="{% if token.is_profit %}table-success{% else %}table-danger{% endif %}">
+                    <td>
+                        <div class="d-flex align-items-center">
+                            {% if token.image_url %}
+                            <img src="{{ token.image_url }}" class="me-2 token-img" alt="{{ token.token_symbol }}">
+                            {% else %}
+                            <div class="token-placeholder me-2">{{ token.token_symbol[:1] }}</div>
+                            {% endif %}
+                            <div>
+                                <div class="fw-bold">{{ token.token_symbol }}</div>
+                                <div class="small text-muted">{{ token.contract[:10] }}...</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>{{ token.chain }}</td>
+                    <td>{{ token.market_cap_formatted }}</td>
+                    <td class="{% if token.change_pct_value and token.change_pct_value > 0 %}text-success{% elif token.change_pct_value and token.change_pct_value < 0 %}text-danger{% endif %}">
+                        {{ token.change_percentage }}
+                    </td>
+                    <td>{{ token.first_update_formatted }}</td>
+                    <td>
+                        <div class="btn-group">
+                            <a href="{{ get_dexscreener_url(token.chain, token.contract) }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-graph-up"></i>
+                            </a>
+                            <button class="btn btn-sm btn-outline-success like-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}">
+                                <i class="bi bi-heart"></i> <span class="like-count">{{ token.likes_count }}</span>
+                            </button>
+                            <a href="/token/{{ token.chain }}/{{ token.contract }}" class="btn btn-sm btn-outline-info">
+                                <i class="bi bi-info-circle"></i>
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="6" class="text-center">没有找到代币数据</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if pagination and pagination.pages > 1 %}
+<nav aria-label="Page navigation">
+    <ul class="pagination justify-content-center">
+        {% if pagination.has_prev %}
+        <li class="page-item">
+            <a class="page-link" href="?page={{ pagination.prev_num }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Previous">
+                <span aria-hidden="true">&laquo;</span>
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <a class="page-link" href="#" aria-label="Previous">
+                <span aria-hidden="true">&laquo;</span>
+            </a>
+        </li>
+        {% endif %}
+
+        {% for page in pagination.iter_pages() %}
+            {% if page %}
+                {% if page != pagination.page %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page }}&chain={{ chain_filter }}&search={{ search_query }}">{{ page }}</a>
+                </li>
+                {% else %}
+                <li class="page-item active">
+                    <span class="page-link">{{ page }}</span>
+                </li>
+                {% endif %}
+            {% else %}
+                <li class="page-item disabled">
+                    <span class="page-link">…</span>
+                </li>
+            {% endif %}
+        {% endfor %}
+
+        {% if pagination.has_next %}
+        <li class="page-item">
+            <a class="page-link" href="?page={{ pagination.next_num }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Next">
+                <span aria-hidden="true">&raquo;</span>
+            </a>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <a class="page-link" href="#" aria-label="Next">
+                <span aria-hidden="true">&raquo;</span>
+            </a>
+        </li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %} 
