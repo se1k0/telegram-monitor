@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram 监控系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Telegram 监控系统</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">首页</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/channels">频道管理</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/tokens">代币列表</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/statistics">统计数据</a>
+                    </li>
+                </ul>
+                <form class="d-flex" method="GET" action="/tokens">
+                    <select class="form-select me-2" name="chain" id="chainSelector">
+                        <option value="ALL">全部链</option>
+                        <option value="SOL">Solana</option>
+                        <option value="ETH">Ethereum</option>
+                        <option value="BSC">BSC</option>
+                    </select>
+                    <input class="form-control me-2" type="search" placeholder="搜索代币..." name="search">
+                    <button class="btn btn-outline-light" type="submit">搜索</button>
+                </form>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">系统状态</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>监控状态:</span>
+                            <span class="badge bg-success">运行中</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>活跃频道:</span>
+                            <span id="activeChannels">{{ active_channels_count }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>收集消息:</span>
+                            <span id="messageCount">{{ message_count }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>追踪代币:</span>
+                            <span id="tokenCount">{{ token_count }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>最后更新:</span>
+                            <span id="lastUpdate">{{ last_update }}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">活跃频道</h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <ul class="list-group list-group-flush" id="channelList">
+                            {% for channel in channels %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                {{ channel.channel_name }}
+                                <span class="badge bg-primary rounded-pill">{{ channel.chain }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-9">
+                <div class="card">
+                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">最新代币</h5>
+                        <div>
+                            <a href="/tokens?sort=profit" class="btn btn-sm btn-outline-light me-2">按涨幅排序</a>
+                            <a href="/tokens?sort=recent" class="btn btn-sm btn-outline-light">最近更新</a>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="recentTokens">
+                            {% include 'partials/token_list.html' %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="bg-dark text-white text-center p-3 mt-5">
+        <p class="mb-0">Telegram 监控系统 &copy; {{ year }}</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html> 

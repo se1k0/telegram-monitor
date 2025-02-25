@@ -1,0 +1,178 @@
+{% extends 'layout.html' %}
+
+{% block title %}统计数据{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <!-- 统计卡片区域 -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card stats-card bg-light">
+                <div class="card-body text-center">
+                    <i class="bi bi-broadcast-pin mb-2" style="font-size: 2rem; color: #0d6efd;"></i>
+                    <div class="stats-value">{{ active_channels_count }}</div>
+                    <div class="stats-label">活跃频道</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stats-card bg-light">
+                <div class="card-body text-center">
+                    <i class="bi bi-chat-left-text mb-2" style="font-size: 2rem; color: #198754;"></i>
+                    <div class="stats-value">{{ message_count }}</div>
+                    <div class="stats-label">收集消息</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stats-card bg-light">
+                <div class="card-body text-center">
+                    <i class="bi bi-currency-bitcoin mb-2" style="font-size: 2rem; color: #dc3545;"></i>
+                    <div class="stats-value">{{ token_count }}</div>
+                    <div class="stats-label">追踪代币</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stats-card bg-light">
+                <div class="card-body text-center">
+                    <i class="bi bi-clock-history mb-2" style="font-size: 2rem; color: #6c757d;"></i>
+                    <div class="stats-value">{{ last_update }}</div>
+                    <div class="stats-label">最后更新</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">代币分布</h5>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="tokenDistribution"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card mt-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">趋势分析</h5>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle me-2"></i>
+                        数据收集中，敬请期待更多统计分析功能...
+                    </div>
+                    <p class="text-muted">未来将支持以下分析：</p>
+                    <ul class="text-muted">
+                        <li>代币推荐频率趋势</li>
+                        <li>高回报率代币分析</li>
+                        <li>频道活跃度评估</li>
+                        <li>历史表现跟踪</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">频道概览</h5>
+                </div>
+                <div class="card-body p-0">
+                    <ul class="list-group list-group-flush">
+                        {% for channel in channels %}
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <i class="bi bi-broadcast me-2"></i>
+                                {{ channel.channel_name }}
+                            </div>
+                            <span class="badge bg-primary rounded-pill">{{ channel.chain }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="card mt-3">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">数据来源分布</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-center">
+                        <i class="bi bi-exclamation-triangle text-warning" style="font-size: 2rem;"></i>
+                    </p>
+                    <p class="text-center text-muted">
+                        目前数据来源分析功能正在开发中。<br>
+                        此功能将展示各频道的数据贡献占比。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // 页面加载完成后设置活跃的导航项
+    document.addEventListener('DOMContentLoaded', function() {
+        const navLinks = document.querySelectorAll('.nav-link');
+        navLinks.forEach(link => link.classList.remove('active'));
+        document.querySelector('a[href="/statistics"]').classList.add('active');
+        
+        // 设置图表
+        const ctx = document.getElementById('tokenDistribution').getContext('2d');
+        const chartData = JSON.parse('{{ chart_data|tojson|safe }}');
+        
+        // 检查是否有数据可以显示
+        if (!chartData.chains || chartData.chains.length === 0) {
+            // 无数据时显示提示信息
+            const noDataMsg = document.createElement('div');
+            noDataMsg.className = 'text-center text-muted py-5';
+            noDataMsg.innerHTML = '<i class="bi bi-exclamation-circle" style="font-size: 2rem;"></i><p class="mt-3">暂无代币数据</p>';
+            
+            const chartContainer = document.querySelector('.chart-container');
+            chartContainer.innerHTML = '';
+            chartContainer.appendChild(noDataMsg);
+            return;
+        }
+        
+        // 生成随机颜色
+        const colors = chartData.chains.map(() => {
+            const r = Math.floor(Math.random() * 200);
+            const g = Math.floor(Math.random() * 200);
+            const b = Math.floor(Math.random() * 200);
+            return `rgba(${r}, ${g}, ${b}, 0.7)`;
+        });
+        
+        new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: chartData.chains,
+                datasets: [{
+                    data: chartData.counts,
+                    backgroundColor: colors,
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right'
+                    },
+                    title: {
+                        display: true,
+                        text: '各链代币分布'
+                    }
+                }
+            }
+        });
+    });
+</script>
+{% endblock %} 

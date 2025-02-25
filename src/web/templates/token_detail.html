@@ -1,0 +1,262 @@
+{% extends 'layout.html' %}
+
+{% block title %}{{ token.token_symbol }} 详情{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">{{ token.token_symbol }} 详情信息</h5>
+                    <span class="badge bg-light text-dark">{{ token.chain }}</span>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center mb-3">
+                                {% if token.image_url %}
+                                <img src="{{ token.image_url }}" class="me-3 token-img-lg" alt="{{ token.token_symbol }}">
+                                {% else %}
+                                <div class="token-placeholder-lg me-3">{{ token.token_symbol[:1] }}</div>
+                                {% endif %}
+                                <div>
+                                    <h3 class="mb-0">{{ token.token_symbol }}</h3>
+                                    <p class="text-muted mb-0">{{ token.name if token.name else '未命名代币' }}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="text-end">
+                                <div class="mb-2">
+                                    <span class="badge bg-info">首次推荐: {{ token.first_update_formatted }}</span>
+                                </div>
+                                <div class="d-flex justify-content-end gap-2">
+                                    <a href="{{ get_dexscreener_url(token.chain, token.contract) }}" target="_blank" class="btn btn-outline-primary">
+                                        <i class="bi bi-graph-up"></i> 查看行情
+                                    </a>
+                                    <button class="btn btn-outline-success like-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}">
+                                        <i class="bi bi-heart"></i> <span class="like-count">{{ token.likes_count }}</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-4">
+                                <h6 class="border-bottom pb-2">基本信息</h6>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>合约地址:</span>
+                                    <span class="text-break">{{ token.contract }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>当前市值:</span>
+                                    <span class="fw-bold">{{ token.market_cap_formatted }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>首次市值:</span>
+                                    <span>{{ token.first_market_cap_formatted }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>涨跌幅:</span>
+                                    <span class="{% if token.change_pct_value and token.change_pct_value > 0 %}text-success{% elif token.change_pct_value and token.change_pct_value < 0 %}text-danger{% endif %}">
+                                        {{ token.change_percentage }}
+                                    </span>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>推荐次数:</span>
+                                    <span>{{ token.promotion_count }}</span>
+                                </div>
+                                <div class="d-flex justify-content-between">
+                                    <span>消息ID:</span>
+                                    <span>{{ token.message_id }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <div class="mb-4">
+                                <h6 class="border-bottom pb-2">社交链接</h6>
+                                {% if token.telegram_url %}
+                                <div class="mb-2">
+                                    <a href="{{ token.telegram_url }}" target="_blank" class="d-flex align-items-center text-decoration-none">
+                                        <i class="bi bi-telegram me-2 text-primary"></i>
+                                        <span>Telegram</span>
+                                    </a>
+                                </div>
+                                {% endif %}
+                                {% if token.twitter_url %}
+                                <div class="mb-2">
+                                    <a href="{{ token.twitter_url }}" target="_blank" class="d-flex align-items-center text-decoration-none">
+                                        <i class="bi bi-twitter me-2 text-primary"></i>
+                                        <span>Twitter</span>
+                                    </a>
+                                </div>
+                                {% endif %}
+                                {% if token.website_url %}
+                                <div class="mb-2">
+                                    <a href="{{ token.website_url }}" target="_blank" class="d-flex align-items-center text-decoration-none">
+                                        <i class="bi bi-globe me-2 text-primary"></i>
+                                        <span>{{ token.website_url }}</span>
+                                    </a>
+                                </div>
+                                {% endif %}
+                                {% if not token.telegram_url and not token.twitter_url and not token.website_url %}
+                                <div class="text-muted">没有找到社交链接</div>
+                                {% endif %}
+                            </div>
+                            
+                            {% if token.holders %}
+                            <div>
+                                <h6 class="border-bottom pb-2">持有者信息</h6>
+                                <div>总持有者: {{ token.holders }}</div>
+                                {% if token.top_holders and token.top_holders|length > 0 %}
+                                <div class="mt-2">
+                                    <small class="text-muted">前几大持有者</small>
+                                    <ul class="list-group list-group-flush small">
+                                        {% for holder in token.top_holders %}
+                                        <li class="list-group-item px-0 py-1 d-flex justify-content-between">
+                                            <span>{{ holder.address[:8] }}...{{ holder.address[-6:] }}</span>
+                                            <span>{{ holder.percentage }}%</span>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            {% if token_history %}
+            <div class="card mt-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">价格历史</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="priceChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">原始消息</h5>
+                </div>
+                <div class="card-body">
+                    {% if original_message %}
+                    <pre class="message-text">{{ original_message.text }}</pre>
+                    {% if original_message.media_path %}
+                    <div class="text-center mt-3">
+                        <img src="/media/{{ original_message.media_path }}" class="img-fluid message-image" alt="媒体内容">
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-muted">未找到原始消息</p>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <div class="card mt-3">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">相关代币</h5>
+                </div>
+                <div class="card-body p-0">
+                    <ul class="list-group list-group-flush">
+                        {% for related_token in related_tokens %}
+                        <li class="list-group-item">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <a href="/token/{{ related_token.chain }}/{{ related_token.contract }}" class="fw-bold">{{ related_token.token_symbol }}</a>
+                                    <div class="small text-muted">{{ related_token.market_cap_formatted }}</div>
+                                </div>
+                                <span class="badge bg-{{ 'success' if related_token.is_profit else 'danger' }}">
+                                    {{ related_token.change_percentage }}
+                                </span>
+                            </div>
+                        </li>
+                        {% else %}
+                        <li class="list-group-item text-center text-muted">暂无相关代币</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if token_history %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 设置图表数据
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        const chartData = JSON.parse('{{ chart_data|tojson|safe }}');
+        
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: chartData.labels,
+                datasets: [{
+                    label: '市值 ({{ token.chain }})',
+                    data: chartData.values,
+                    borderColor: 'rgb(75, 192, 192)',
+                    tension: 0.1,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: false
+                    }
+                }
+            }
+        });
+    });
+</script>
+{% endif %}
+
+<script>
+    // 页面加载完成后设置活跃的导航项
+    document.addEventListener('DOMContentLoaded', function() {
+        const navLinks = document.querySelectorAll('.nav-link');
+        navLinks.forEach(link => link.classList.remove('active'));
+        document.querySelector('a[href="/tokens"]').classList.add('active');
+        
+        // 点赞功能
+        document.querySelectorAll('.like-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const chain = this.dataset.chain;
+                const contract = this.dataset.contract;
+                const likeCount = this.querySelector('.like-count');
+                
+                fetch('/api/like', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ chain, contract })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        likeCount.textContent = data.likes_count;
+                        this.classList.add('btn-success');
+                        this.classList.remove('btn-outline-success');
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+            });
+        });
+    });
+</script>
+{% endblock %} 
