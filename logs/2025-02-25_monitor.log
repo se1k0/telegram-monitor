@@ -1,0 +1,477 @@
+2025-02-25 07:13:25,049 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:13:25,062 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:13:25,062 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:13:25,063 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:13:25,063 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:13:25,064 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=.
+2025-02-25 07:13:25,065 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:13:25,068 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:13:25,072 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:13:25,073 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:13:25,075 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:13:25,190 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:13:25,406 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:13:25,407 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:13:25,514 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:13:25,717 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:14:00,155 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:14:00,156 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:14:00,156 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:14:00,156 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:14:00,156 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:14:00,157 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:14:00,157 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:14:00,158 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:14:00,162 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:14:00,162 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:14:00,164 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:14:00,280 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:14:00,495 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:14:00,496 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:14:00,604 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:14:00,808 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:22:07,438 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:22:07,553 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:22:07,768 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:22:07,770 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:22:07,879 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:22:08,083 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:22:08,227 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:22:08,229 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:22:08,229 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:22:08,230 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:22:08,230 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:22:08,230 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:22:08,230 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:22:08,231 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:22:08,232 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:22:08,233 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:22:46,371 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:22:46,474 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:22:46,676 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:22:46,677 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:22:46,785 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:22:47,001 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:22:47,152 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:22:47,153 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:22:47,154 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:22:47,154 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:22:47,154 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:22:47,155 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:22:47,155 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:22:47,156 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:22:47,157 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:22:47,158 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:22:47,188 [INFO] src.core.telegram_listener - 收到新消息 - 频道: test_channel, 链: SOL, 消息ID: 12345
+2025-02-25 07:22:47,189 [INFO] src.core.telegram_listener - 消息内容:
+--------------------------------------------------
+🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef
+💰 市值: 100K...
+--------------------------------------------------
+2025-02-25 07:22:47,190 [INFO] src.core.telegram_listener - 成功更新 token 信息: TEST
+2025-02-25 07:22:47,190 [INFO] src.core.telegram_listener - 首次推荐时间: 2025-02-25 15:22:47
+2025-02-25 07:22:47,190 [INFO] src.core.telegram_listener - 当前市值: 10.00万
+2025-02-25 07:22:47,202 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:22:47,203 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:22:47,210 [INFO] src.core.telegram_listener - 客户端已成功连接
+2025-02-25 07:22:47,211 [INFO] src.core.telegram_listener - 已加载 2 个活跃频道
+2025-02-25 07:23:23,161 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:23:23,266 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:23:23,482 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:23:23,484 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:23:23,591 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:23:23,795 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:23:23,941 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:23:23,942 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:23:23,943 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:23:23,943 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:23:23,943 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:23:23,944 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:23:23,944 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:23:23,944 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:23:23,946 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:23:23,946 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:23:23,976 [INFO] src.core.telegram_listener - 收到新消息 - 频道: test_channel, 链: SOL, 消息ID: 12345
+2025-02-25 07:23:23,977 [INFO] src.core.telegram_listener - 消息内容:
+--------------------------------------------------
+🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef
+💰 市值: 100K...
+--------------------------------------------------
+2025-02-25 07:23:23,978 [INFO] src.core.telegram_listener - 成功更新 token 信息: TEST
+2025-02-25 07:23:23,978 [INFO] src.core.telegram_listener - 首次推荐时间: 2025-02-25 15:23:23
+2025-02-25 07:23:23,978 [INFO] src.core.telegram_listener - 当前市值: 10.00万
+2025-02-25 07:23:23,991 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:23:23,991 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:23:23,999 [INFO] src.core.telegram_listener - 客户端已成功连接
+2025-02-25 07:23:23,999 [INFO] src.core.telegram_listener - 已加载 2 个活跃频道
+2025-02-25 07:27:41,604 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:27:41,712 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:27:41,918 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:27:41,919 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:27:42,026 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:27:42,230 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:27:42,375 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:27:42,377 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=
+2025-02-25 07:27:42,379 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:27:42,380 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:27:42,380 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:27:42,381 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:27:42,382 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:27:42,382 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:27:42,385 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:27:42,385 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:27:42,415 [INFO] src.core.telegram_listener - 收到新消息 - 频道: test_channel, 链: SOL, 消息ID: 12345
+2025-02-25 07:27:42,415 [INFO] src.core.telegram_listener - 消息内容:
+--------------------------------------------------
+🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef
+💰 市值: 100K...
+--------------------------------------------------
+2025-02-25 07:27:42,416 [INFO] src.core.telegram_listener - 成功更新 token 信息: TEST
+2025-02-25 07:27:42,416 [INFO] src.core.telegram_listener - 首次推荐时间: 2025-02-25 15:27:42
+2025-02-25 07:27:42,416 [INFO] src.core.telegram_listener - 当前市值: 10.00万
+2025-02-25 07:27:42,438 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:27:42,439 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:27:42,446 [INFO] src.core.telegram_listener - 客户端已成功连接
+2025-02-25 07:27:42,446 [INFO] src.core.telegram_listener - 已加载 2 个活跃频道
+2025-02-25 07:28:32,175 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:28:32,289 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:28:32,494 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:28:32,495 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:28:32,604 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:28:32,820 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:28:32,965 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:28:33,251 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=
+2025-02-25 07:28:33,252 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:28:33,256 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:28:33,256 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:28:33,259 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:28:33,259 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:28:33,262 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:28:33,264 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:28:33,264 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:28:33,294 [INFO] src.core.telegram_listener - 收到新消息 - 频道: test_channel, 链: SOL, 消息ID: 12345
+2025-02-25 07:28:33,295 [INFO] src.core.telegram_listener - 消息内容:
+--------------------------------------------------
+🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef
+💰 市值: 100K...
+--------------------------------------------------
+2025-02-25 07:28:33,296 [INFO] src.core.telegram_listener - 成功更新 token 信息: TEST
+2025-02-25 07:28:33,296 [INFO] src.core.telegram_listener - 首次推荐时间: 2025-02-25 15:28:33
+2025-02-25 07:28:33,296 [INFO] src.core.telegram_listener - 当前市值: 10.00万
+2025-02-25 07:28:33,310 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:28:33,310 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:28:33,317 [INFO] src.core.telegram_listener - 客户端已成功连接
+2025-02-25 07:28:33,318 [INFO] src.core.telegram_listener - 已加载 2 个活跃频道
+2025-02-25 07:29:02,620 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (1/2): 模拟错误
+2025-02-25 07:29:02,732 [WARNING] src.core.telegram_listener - 函数 always_fail 失败，正在重试 (2/2): 模拟错误
+2025-02-25 07:29:02,935 [ERROR] src.core.telegram_listener - 函数 always_fail 在重试 2 次后失败: 模拟错误
+2025-02-25 07:29:02,936 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (1/3): 模拟连接错误
+2025-02-25 07:29:03,044 [WARNING] src.core.telegram_listener - 函数 fail_then_succeed 失败，正在重试 (2/3): 模拟连接错误
+2025-02-25 07:29:03,248 [WARNING] src.core.telegram_listener - 函数 specific_exceptions 失败，正在重试 (1/2): 重试这个异常
+2025-02-25 07:29:03,392 [INFO] src.database.db_handler - 开始解析消息: 🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef1234567890abcdef12345678
+💰 市值: 100K
+Telegram: t.me/test...
+2025-02-25 07:29:03,661 [INFO] src.database.db_handler - 成功提取推广信息: 代币=TEST, 合约=0x1234567890abcdef1234567890abcdef12345678, 市值=100K
+2025-02-25 07:29:03,661 [INFO] src.database.db_handler - 开始解析消息: $NEWTOKEN - 下一个100倍币
+合约：0xabcdef1234567890abcdef1234567890abcdef12
+市值：2.5M
+官网: https://example.com...
+2025-02-25 07:29:03,665 [INFO] src.database.db_handler - 成功提取推广信息: 代币=NEWTOKEN, 合约=0xabcdef1234567890abcdef1234567890abcdef12, 市值=2.5M
+2025-02-25 07:29:03,665 [INFO] src.database.db_handler - 开始解析消息: 看好这个项目 ABC! 目前市值只有50K, 官方Twitter: twitter.com/abc_token...
+2025-02-25 07:29:03,668 [INFO] src.database.db_handler - 成功提取推广信息: 代币=ABC, 合约=None, 市值=50K
+2025-02-25 07:29:03,668 [INFO] src.database.db_handler - 开始解析消息: 重点关注：DEFI
+链：ETH
+合约地址：0x9876543210abcdef9876543210abcdef98765432
+当前市值：10M
+官方电报：t.me/defi_official...
+2025-02-25 07:29:03,671 [INFO] src.database.db_handler - 成功提取推广信息: 代币=DEFI, 合约=0x9876543210abcdef9876543210abcdef98765432, 市值=10M
+2025-02-25 07:29:03,673 [INFO] src.database.db_handler - 创建新代币: TEST
+2025-02-25 07:29:03,673 [ERROR] src.database.db_handler - 代币数据验证失败: 缺少链信息
+2025-02-25 07:29:03,702 [INFO] src.core.telegram_listener - 收到新消息 - 频道: test_channel, 链: SOL, 消息ID: 12345
+2025-02-25 07:29:03,703 [INFO] src.core.telegram_listener - 消息内容:
+--------------------------------------------------
+🚀 新币推荐 🚀
+
+🪙 代币: TEST
+📝 合约: 0x1234567890abcdef
+💰 市值: 100K...
+--------------------------------------------------
+2025-02-25 07:29:03,703 [INFO] src.core.telegram_listener - 成功更新 token 信息: TEST
+2025-02-25 07:29:03,704 [INFO] src.core.telegram_listener - 首次推荐时间: 2025-02-25 15:29:03
+2025-02-25 07:29:03,704 [INFO] src.core.telegram_listener - 当前市值: 10.00万
+2025-02-25 07:29:03,716 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:29:03,717 [INFO] src.core.telegram_listener - 已注册消息处理程序，监听频道: channel1, channel2
+2025-02-25 07:29:03,724 [INFO] src.core.telegram_listener - 客户端已成功连接
+2025-02-25 07:29:03,725 [INFO] src.core.telegram_listener - 已加载 2 个活跃频道
+2025-02-25 20:17:33,912 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 20:17:33,921 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 20:17:34,368 [ERROR] src.core.channel_discovery - 发现频道时出错: 'PeerUser' object has no attribute 'channel_id'
+2025-02-25 20:23:17,375 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 20:23:17,375 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 20:23:18,374 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 20:23:18,674 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 20:23:19,007 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 20:23:19,614 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6321
+2025-02-25 20:23:20,248 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 20:23:20,843 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 20:23:21,471 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5517
+2025-02-25 20:23:21,773 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 20:23:22,083 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 20:23:22,718 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 20:23:23,325 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 20:23:23,325 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 20:23:23,327 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 20:23:23,345 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 20:23:23,361 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 20:23:23,371 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 20:29:44,932 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 20:29:44,933 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 20:29:46,065 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6321
+2025-02-25 20:29:46,373 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 20:29:46,727 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 20:29:47,407 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 20:29:48,163 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 20:29:48,914 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 20:29:49,617 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5517
+2025-02-25 20:29:49,935 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 20:29:50,285 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 20:29:50,968 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 20:29:51,588 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 20:29:51,588 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 20:29:51,590 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 20:29:51,595 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 20:29:51,602 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 20:29:51,604 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 20:57:49,217 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 20:57:49,217 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 20:57:49,218 [INFO] __main__ - 开始发现频道...
+2025-02-25 20:57:49,218 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 20:57:50,075 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 20:57:50,404 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 20:57:51,030 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 20:57:51,696 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 20:57:52,410 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 20:57:53,113 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 20:57:53,831 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 20:57:54,243 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 20:57:54,580 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 20:57:55,231 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 20:57:56,015 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 20:57:56,015 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 20:57:56,016 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 20:57:56,021 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 20:57:56,022 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 20:57:56,025 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:03:52,709 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 21:03:52,710 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 21:03:52,710 [INFO] __main__ - 开始发现频道...
+2025-02-25 21:03:52,710 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 21:03:53,448 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 21:03:54,121 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 21:03:54,452 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 21:03:55,084 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 21:03:55,692 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 21:03:56,396 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 21:03:57,602 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 21:03:57,913 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 21:03:58,231 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 21:03:58,908 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 21:03:59,699 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 21:03:59,699 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 21:03:59,700 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 21:03:59,705 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 21:03:59,707 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 21:03:59,709 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:22:53,093 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 21:22:53,094 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 21:22:53,094 [INFO] __main__ - 开始发现频道...
+2025-02-25 21:22:53,094 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 21:22:53,679 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 21:22:54,176 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 21:22:54,418 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 21:22:54,985 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 21:22:55,489 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 21:22:56,007 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 21:22:56,576 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 21:22:56,863 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 21:22:57,170 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 21:22:57,921 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 21:22:58,431 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 21:22:58,431 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 21:22:58,432 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 21:22:58,437 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 21:22:58,439 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 21:22:58,440 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:24:30,144 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 21:24:30,145 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 21:24:30,145 [INFO] __main__ - 开始发现频道...
+2025-02-25 21:24:30,145 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 21:24:30,828 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 21:24:31,360 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 21:24:31,621 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 21:24:32,113 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 21:24:32,675 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 21:24:33,454 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 21:24:34,027 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 21:24:34,308 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 21:24:34,604 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 21:24:35,275 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 21:24:35,891 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 21:24:35,891 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 21:24:35,892 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 21:24:35,897 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 21:24:35,898 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 21:24:35,901 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:25:09,462 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 21:25:09,463 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 21:25:09,463 [INFO] __main__ - 开始发现频道...
+2025-02-25 21:25:09,463 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 21:25:10,139 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 21:25:11,029 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 21:25:11,432 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 21:25:12,110 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 21:25:12,708 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 21:25:13,228 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 21:25:13,719 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 21:25:13,959 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 21:25:14,193 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 21:25:14,717 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 21:25:15,231 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 21:25:15,231 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 21:25:15,232 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 21:25:15,237 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,239 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,241 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,243 [INFO] src.core.channel_discovery - 频道 ETH 社区监控 匹配链 ETH
+2025-02-25 21:25:15,259 [INFO] src.core.channel_discovery - 无法为频道 Shanks x Faster100x 黑客松项目监控 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,268 [INFO] src.core.channel_discovery - 无法为频道 Memeism 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,279 [INFO] src.core.channel_discovery - 频道 【官方】币安矿池质押中心🇨🇳 匹配链 BSC
+2025-02-25 21:25:15,288 [INFO] src.core.channel_discovery - 频道 币安中文官方BSC矿池合约推广🏆 匹配链 BSC
+2025-02-25 21:25:15,296 [INFO] src.core.channel_discovery - 无法为频道 Faster Call 确定链，设置为UNKNOWN
+2025-02-25 21:25:15,302 [INFO] src.core.channel_discovery - 无法为频道 Vbot官方群 确定链，设置为UNKNOWN
+2025-02-25 21:25:43,507 [INFO] __main__ - Telegram客户端初始化成功
+2025-02-25 21:25:43,508 [INFO] src.core.channel_discovery - 已设置 2 个排除频道
+2025-02-25 21:25:43,508 [INFO] __main__ - 开始发现频道...
+2025-02-25 21:25:43,508 [INFO] src.core.channel_discovery - 开始发现频道，最大数量: 200
+2025-02-25 21:25:44,518 [INFO] src.core.channel_discovery - 发现频道: 社区监控 (@MomentumTrackerCN) - 成员: 6319
+2025-02-25 21:25:44,778 [INFO] src.core.channel_discovery - 发现频道: 【官方】币安矿池质押中心🇨🇳 (@channel_2383506717) - 成员: 0
+2025-02-25 21:25:45,058 [INFO] src.core.channel_discovery - 发现频道: 币安中文官方BSC矿池合约推广🏆 (@channel_2317108666) - 成员: 0
+2025-02-25 21:25:45,618 [INFO] src.core.channel_discovery - 发现频道: $CPA Official Chat (@CPAofficialchat) - 成员: 716
+2025-02-25 21:25:46,158 [INFO] src.core.channel_discovery - 发现频道: Faster100x 筹码分析平台交流群 (@holdermap) - 成员: 2606
+2025-02-25 21:25:46,790 [INFO] src.core.channel_discovery - 发现频道: ETH 社区监控 (@ETH_Momentum_Tracker_CN) - 成员: 371
+2025-02-25 21:25:47,470 [INFO] src.core.channel_discovery - 发现频道: Faster 100x⚡️ (@Faster100x) - 成员: 5518
+2025-02-25 21:25:47,804 [INFO] src.core.channel_discovery - 发现频道: Faster Call (@channel_2286941784) - 成员: 0
+2025-02-25 21:25:48,165 [INFO] src.core.channel_discovery - 发现频道: Vbot官方群 (@channel_2439734761) - 成员: 0
+2025-02-25 21:25:48,856 [INFO] src.core.channel_discovery - 发现频道: Memeism (@memeismOG) - 成员: 119
+2025-02-25 21:25:49,446 [INFO] src.core.channel_discovery - 发现频道: Shanks x Faster100x 黑客松项目监控 (@faster100x_hackathon) - 成员: 224
+2025-02-25 21:25:49,446 [INFO] src.core.channel_discovery - 发现了 11 个频道
+2025-02-25 21:25:49,447 [INFO] src.core.channel_discovery - 频道 社区监控 匹配链 SOL
+2025-02-25 21:25:49,452 [INFO] src.core.channel_discovery - 无法为频道 Faster 100x⚡️ 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,453 [INFO] src.core.channel_discovery - 无法为频道 Faster100x 筹码分析平台交流群 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,455 [INFO] src.core.channel_discovery - 无法为频道 $CPA Official Chat 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,458 [INFO] src.core.channel_discovery - 频道 ETH 社区监控 匹配链 ETH
+2025-02-25 21:25:49,460 [INFO] src.core.channel_discovery - 无法为频道 Shanks x Faster100x 黑客松项目监控 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,462 [INFO] src.core.channel_discovery - 无法为频道 Memeism 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,464 [INFO] src.core.channel_discovery - 频道 【官方】币安矿池质押中心🇨🇳 匹配链 BSC
+2025-02-25 21:25:49,465 [INFO] src.core.channel_discovery - 频道 币安中文官方BSC矿池合约推广🏆 匹配链 BSC
+2025-02-25 21:25:49,467 [INFO] src.core.channel_discovery - 无法为频道 Faster Call 确定链，设置为UNKNOWN
+2025-02-25 21:25:49,469 [INFO] src.core.channel_discovery - 无法为频道 Vbot官方群 确定链，设置为UNKNOWN
