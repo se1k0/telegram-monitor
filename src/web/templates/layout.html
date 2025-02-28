@@ -6,41 +6,75 @@
     <title>{% block title %}Telegram 监控系统{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <nav class="navbar navbar-expand-lg navbar-dark sticky-top">
         <div class="container-fluid">
-            <a class="navbar-brand" href="/">Telegram 监控系统</a>
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-lightning-charge-fill me-2"></i>Telegram 监控系统
+            </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link active" href="/">首页</a>
+                        <a class="nav-link" href="/">
+                            <i class="bi bi-house-door me-1"></i>首页
+                        </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/channels">频道管理</a>
+                        <a class="nav-link" href="/channels">
+                            <i class="bi bi-broadcast me-1"></i>频道管理
+                        </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/tokens">代币列表</a>
+                        <a class="nav-link" href="/tokens">
+                            <i class="bi bi-coin me-1"></i>代币列表
+                        </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/statistics">统计数据</a>
+                        <a class="nav-link" href="/token_advanced">
+                            <i class="bi bi-search me-1"></i>代币高级列表
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/statistics">
+                            <i class="bi bi-bar-chart me-1"></i>统计数据
+                        </a>
                     </li>
                 </ul>
-                <form class="d-flex" method="GET" action="/tokens">
-                    <select class="form-select me-2" name="chain" id="chainSelector">
-                        <option value="ALL">全部链</option>
-                        <option value="SOL">Solana</option>
-                        <option value="ETH">Ethereum</option>
-                        <option value="BSC">BSC</option>
-                    </select>
-                    <input class="form-control me-2" type="search" placeholder="搜索代币..." name="search">
-                    <button class="btn btn-outline-light" type="submit">搜索</button>
-                </form>
+                <div class="d-flex align-items-center">
+                    <div class="theme-switch-wrapper me-3">
+                        <span class="theme-switch">
+                            <label class="theme-switch-label" for="themeSwitch">
+                                <i class="bi bi-sun-fill text-warning"></i>
+                            </label>
+                            <input type="checkbox" id="themeSwitch">
+                            <span class="slider round"></span>
+                            <label class="theme-switch-label" for="themeSwitch">
+                                <i class="bi bi-moon-fill text-light"></i>
+                            </label>
+                        </span>
+                    </div>
+                    <form class="d-flex" method="GET" action="/tokens">
+                        <select class="form-select me-2" name="chain" id="chainSelector">
+                            <option value="ALL">全部链</option>
+                            <option value="SOL">Solana</option>
+                            <option value="ETH">Ethereum</option>
+                            <option value="BSC">BSC</option>
+                        </select>
+                        <input class="form-control me-2" type="search" placeholder="搜索代币..." name="search">
+                        <button class="btn btn-outline-light" type="submit">
+                            <i class="bi bi-search"></i>
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
     </nav>
@@ -49,7 +83,7 @@
         {% if messages %}
             <div class="container mt-3">
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    <div class="alert alert-{{ category }} alert-dismissible show" role="alert">
                         {{ message|safe }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                     </div>
@@ -58,15 +92,56 @@
         {% endif %}
     {% endwith %}
 
-    {% block content %}{% endblock %}
+    <main>
+        {% block content %}
+        {% endblock %}
+    </main>
 
     <footer class="bg-dark text-white text-center p-3 mt-5">
-        <p class="mb-0">Telegram 监控系统 &copy; {{ year }}</p>
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6 mx-auto">
+                    <p>
+                        <i class="bi bi-lightning-charge-fill me-2"></i>
+                        Telegram 监控系统 &copy; {{ year }}
+                    </p>
+                    <div class="d-flex justify-content-center">
+                        <a href="#" class="text-white mx-2"><i class="bi bi-github"></i></a>
+                        <a href="#" class="text-white mx-2"><i class="bi bi-twitter"></i></a>
+                        <a href="#" class="text-white mx-2"><i class="bi bi-telegram"></i></a>
+                    </div>
+                </div>
+            </div>
+        </div>
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    
+    <script>
+        // 深色/浅色模式切换
+        const themeSwitch = document.getElementById('themeSwitch');
+        if (themeSwitch) {
+            // 检查本地存储的主题偏好
+            if (localStorage.getItem('theme') === 'dark') {
+                document.body.classList.add('dark-mode');
+                themeSwitch.checked = true;
+            }
+            
+            // 监听主题切换
+            themeSwitch.addEventListener('change', function() {
+                if (this.checked) {
+                    document.body.classList.add('dark-mode');
+                    localStorage.setItem('theme', 'dark');
+                } else {
+                    document.body.classList.remove('dark-mode');
+                    localStorage.setItem('theme', 'light');
+                }
+            });
+        }
+    </script>
+    
     {% block scripts %}{% endblock %}
 </body>
 </html> 

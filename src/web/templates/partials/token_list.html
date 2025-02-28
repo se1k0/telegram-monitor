@@ -13,7 +13,7 @@
         <tbody>
             {% if tokens %}
                 {% for token in tokens %}
-                <tr class="{% if token.is_profit %}table-success{% else %}table-danger{% endif %}">
+                <tr class="{% if token.is_profit %}table-profit{% else %}table-loss{% endif %}">
                     <td>
                         <div class="d-flex align-items-center">
                             {% if token.image_url %}

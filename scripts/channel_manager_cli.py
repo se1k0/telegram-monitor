@@ -86,10 +86,24 @@ async def add_channel(channel_username, chain_name):
             
         # 添加频道
         channel_name = channel_info.get('name', channel_username)
-        success = manager.add_channel(channel_username, channel_name, chain_name)
+        # 从channel_info中获取需要的信息
+        channel_id = channel_info.get('channel_id')
+        is_group = channel_info.get('is_group', False)
+        is_supergroup = channel_info.get('is_supergroup', False)
+        member_count = channel_info.get('member_count', 0)
+        
+        success = manager.add_channel(
+            channel_username=channel_username, 
+            channel_name=channel_name, 
+            chain=chain_name,
+            channel_id=channel_id,
+            is_group=is_group,
+            is_supergroup=is_supergroup,
+            member_count=member_count
+        )
         
         if success:
-            print(f"成功添加频道: {channel_username} ({channel_name}), 链: {chain_name}")
+            print(f"成功添加{'群组' if is_group else '频道'}: {channel_username} ({channel_name}), 链: {chain_name}")
         else:
             print(f"频道 '{channel_username}' 已存在")
             

@@ -2,7 +2,12 @@ import asyncio
 from telethon import TelegramClient, events
 import config.settings as config
 from src.database.models import init_db
-from src.database.db_handler import save_message, extract_promotion_info, save_telegram_message, save_token_info
+from src.database.db_handler import (
+    save_telegram_message, 
+    extract_promotion_info, 
+    save_token_info, 
+    process_batches
+)
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
@@ -71,8 +76,28 @@ class TelegramListener:
         self.api_id = os.getenv('TG_API_ID')
         self.api_hash = os.getenv('TG_API_HASH')
         
-        # 初始化客户端
-        self.client = TelegramClient('my_session', self.api_id, self.api_hash)
+        # 确保会话目录存在
+        session_dir = os.path.join(os.getcwd(), 'data', 'sessions')
+        os.makedirs(session_dir, exist_ok=True)
+        
+        # 生成唯一的会话名称，避免冲突
+        session_name = f'tg_session_{os.getpid()}_{int(time.time())}'
+        self.session_path = os.path.join(session_dir, session_name)
+        
+        # 设置Telethon的SQLite连接参数
+        self.connection_retries = 3
+        self.auto_reconnect = True
+        self.retry_delay = 1
+        
+        # 初始化客户端，添加SQLite连接参数
+        self.client = TelegramClient(
+            self.session_path,
+            self.api_id, 
+            self.api_hash,
+            connection_retries=self.connection_retries,
+            auto_reconnect=self.auto_reconnect,
+            retry_delay=self.retry_delay
+        )
         
         # 初始化频道管理器
         self.channel_manager = ChannelManager(self.client)
@@ -83,6 +108,9 @@ class TelegramListener:
         # 活跃的频道映射
         self.chain_map = {}
         
+        # 频道实体映射 - 频道ID到实体对象的映射
+        self.channel_entities = {}
+        
         # 事件处理器映射，用于动态添加和移除事件处理器
         self.event_handlers = {}
         
@@ -90,6 +118,9 @@ class TelegramListener:
         self.is_running = False
         self.last_error_time = None
         self.error_count = 0
+        
+        # 数据库批处理任务
+        self.batch_task = None
         
         # 自动发现频道配置
         self.auto_discovery_enabled = config.auto_channel_discovery if hasattr(config, 'auto_channel_discovery') else True
@@ -107,7 +138,7 @@ class TelegramListener:
                 logger.info("客户端已成功连接")
                 
             # 更新频道信息
-            self.chain_map = await self.channel_manager.update_channels(DEFAULT_CHANNELS)
+            self.chain_map, self.channel_entities = await self.channel_manager.update_channels(DEFAULT_CHANNELS)
             logger.info(f"已加载 {len(self.chain_map)} 个活跃频道")
             
             # 初始化频道发现器
@@ -123,25 +154,60 @@ class TelegramListener:
     
     @async_retry(max_retries=2, delay=1)
     async def register_handlers(self):
-        """注册所有活跃频道的消息处理程序，添加重试机制"""
+        """注册所有活跃频道和群组的消息处理程序，添加重试机制"""
         try:
             # 移除旧的处理程序
             for handler in list(self.event_handlers.values()):
                 self.client.remove_event_handler(handler)
             self.event_handlers.clear()
             
-            # 添加新的处理程序
-            channel_list = list(self.chain_map.keys())
-            if not channel_list:
-                logger.warning("没有活跃的频道可监听")
+            # 构建监听实体列表
+            chat_entities = []
+            
+            # 如果有channel_entities，使用实体进行监听 
+            if hasattr(self, 'channel_entities') and self.channel_entities:
+                chat_entities = list(self.channel_entities.values())
+                logger.info(f"将使用 {len(chat_entities)} 个频道/群组实体进行消息监听")
+            else:
+                # 向后兼容：尝试使用用户名列表
+                channel_list = list(self.chain_map.keys())
+                if channel_list:
+                    chat_entities = channel_list
+                    logger.info(f"将使用 {len(channel_list)} 个频道/群组用户名进行消息监听")
+            
+            if not chat_entities:
+                logger.warning("没有活跃的频道或群组可监听")
                 return False
                 
+            # 注册新消息处理程序
             handler = self.client.add_event_handler(
                 self.handle_new_message,
-                events.NewMessage(chats=channel_list)
+                events.NewMessage(chats=chat_entities)
             )
             self.event_handlers['new_message'] = handler
-            logger.info(f"已注册消息处理程序，监听频道: {', '.join(channel_list)}")
+            
+            # 日志记录监听的频道和群组
+            if hasattr(self, 'channel_entities') and self.channel_entities:
+                # 使用实体名称或ID记录日志
+                entity_names = []
+                for entity_id, entity in self.channel_entities.items():
+                    # 判断是否为群组
+                    is_group = False
+                    if hasattr(entity, 'broadcast') and not entity.broadcast:
+                        is_group = True
+                    
+                    if hasattr(entity, 'username') and entity.username:
+                        entity_names.append(f"@{entity.username}{'(群组)' if is_group else ''}")
+                    elif hasattr(entity, 'title'):
+                        entity_names.append(f"{entity.title}{'(群组)' if is_group else ''} (ID: {entity_id})")
+                    else:
+                        entity_names.append(f"ID: {entity_id}{'(群组)' if is_group else ''}")
+                        
+                logger.info(f"已注册消息处理程序，监听频道和群组: {', '.join(entity_names)}")
+            else:
+                # 向后兼容：使用用户名列表记录日志
+                logger.info(f"已注册消息处理程序，监听频道和群组: {', '.join(channel_list)}")
+                
             return True
         except Exception as e:
             logger.error(f"注册处理程序时出错: {str(e)}")
@@ -149,13 +215,73 @@ class TelegramListener:
             raise  # 让装饰器捕获异常并处理重试
     
     async def handle_new_message(self, event):
-        """处理新消息事件，增加错误处理和恢复机制"""
+        """处理新消息事件，支持频道和群组，增加错误处理和恢复机制"""
         start_time = time.time()
         message = event.message
-        channel = getattr(event.chat, 'username', 'unknown')
-        chain = self.chain_map.get(channel, 'UNKNOWN')
         
-        logger.info(f"收到新消息 - 频道: {channel}, 链: {chain}, 消息ID: {message.id}")
+        # 获取频道/群组标识符
+        channel_identifier = None
+        channel_id = None
+        
+        # 增强频道类型判断
+        is_group = False
+        is_supergroup = False
+        
+        # 尝试获取频道ID和类型
+        if hasattr(event.chat, 'id'):
+            channel_id = event.chat.id
+        
+        # 使用Telethon库的正确判断方式
+        from telethon.tl.types import Channel, Chat
+        
+        if isinstance(event.chat, Channel):
+            if event.chat.megagroup:
+                # 超级群组
+                is_supergroup = True
+                is_group = True
+            elif event.chat.broadcast:
+                # 普通频道
+                is_group = False
+                is_supergroup = False
+            else:
+                # 其他Channel类型
+                is_group = False
+        elif isinstance(event.chat, Chat):
+            # 普通群组
+            is_group = True
+            is_supergroup = False
+        
+        # 获取标识符（用户名或ID）
+        if hasattr(event.chat, 'username') and event.chat.username:
+            channel_identifier = event.chat.username
+        else:
+            # 如果没有用户名，则使用ID作为标识符
+            channel_identifier = f"id_{channel_id}" if channel_id else "unknown"
+            
+        # 获取链信息
+        chain = None
+        # 先尝试通过ID获取链信息
+        if channel_id and hasattr(self, 'channel_entities'):
+            # 如果ID在channel_entities中有对应的实体，获取它的链信息
+            entity_key = str(channel_id)
+            if entity_key in self.chain_map:
+                chain = self.chain_map[entity_key]
+                
+        # 如果通过ID没有找到，则尝试通过用户名获取
+        if not chain and channel_identifier in self.chain_map:
+            chain = self.chain_map[channel_identifier]
+            
+        # 如果都没找到，使用默认值
+        if not chain:
+            chain = 'UNKNOWN'
+        
+        channel_type = "普通频道"
+        if is_supergroup:
+            channel_type = "超级群组"
+        elif is_group:
+            channel_type = "普通群组"
+            
+        logger.info(f"收到新消息 - {channel_type}: {channel_identifier}, ID: {channel_id}, 链: {chain}, 消息ID: {message.id}")
         
         try:
             # 打印完整消息内容
@@ -178,7 +304,7 @@ class TelegramListener:
                     await asyncio.wait_for(download_task, timeout=60)  # 60秒超时
                     logger.info(f"保存了媒体文件: {media_path}")
                 except asyncio.TimeoutError:
-                    logger.warning(f"下载媒体文件超时: 频道={channel}, 消息ID={message.id}")
+                    logger.warning(f"下载媒体文件超时: {channel_type}={channel_identifier}, 消息ID={message.id}")
                     media_path = None
                 except Exception as e:
                     logger.error(f"下载媒体文件失败: {str(e)}")
@@ -190,7 +316,9 @@ class TelegramListener:
                 message_id=message.id,
                 date=message.date,
                 text=message.text,
-                media_path=media_path
+                media_path=media_path,
+                is_group=is_group,
+                is_supergroup=is_supergroup  # 添加超级群组标记
             )
             
             # 如果消息已存在，则不继续处理
@@ -233,8 +361,26 @@ class TelegramListener:
                         'twitter_url': getattr(promo, 'twitter_url', ''),
                         'website_url': getattr(promo, 'website_url', ''),
                         'latest_update': current_time,
-                        'first_update': current_time
+                        'first_update': current_time,
+                        'from_group': is_group,  # 添加是否来自群组的标记
+                        'channel_name': channel_identifier  # 添加channel_name字段
                     }
+                    
+                    # 添加情感分析相关字段
+                    if hasattr(promo, 'sentiment_score') and promo.sentiment_score is not None:
+                        token_data['sentiment_score'] = promo.sentiment_score
+                    
+                    if hasattr(promo, 'positive_words') and promo.positive_words:
+                        token_data['positive_words'] = ', '.join(promo.positive_words)
+                        
+                    if hasattr(promo, 'negative_words') and promo.negative_words:
+                        token_data['negative_words'] = ', '.join(promo.negative_words)
+                        
+                    if hasattr(promo, 'hype_score') and promo.hype_score is not None:
+                        token_data['hype_score'] = promo.hype_score
+                        
+                    if hasattr(promo, 'risk_level') and promo.risk_level:
+                        token_data['risk_level'] = promo.risk_level
                     
                     result = save_token_info(token_data)
                     if result:
@@ -321,28 +467,51 @@ class TelegramListener:
                 await self.client.connect()
                 
             if not await self.client.is_user_authorized():
-                logger.error("用户未登录，请先使用脚本登录")
-                return False
+                logger.info("用户未登录，开始登录流程...")
+                
+                try:
+                    # 提示用户输入手机号码
+                    phone = input("请输入您的手机号码 (包含国家代码，如 +86xxxxxxxxxx): ")
+                    await self.client.send_code_request(phone)
+                    
+                    # 提示用户输入验证码
+                    code = input("请输入您收到的验证码: ")
+                    await self.client.sign_in(phone, code)
+                    
+                    # 检查是否需要两步验证
+                    if not await self.client.is_user_authorized():
+                        # 可能需要两步验证密码
+                        password = input("请输入您的两步验证密码: ")
+                        await self.client.sign_in(password=password)
+                    
+                    # 登录成功
+                    me = await self.client.get_me()
+                    logger.info(f"登录成功! 已登录为: {me.first_name} (ID: {me.id})")
+                except Exception as e:
+                    logger.error(f"登录过程中出错: {str(e)}")
+                    return False
+                
+                # 再次检查是否已登录
+                if not await self.client.is_user_authorized():
+                    logger.error("登录失败，请检查凭据后重试")
+                    return False
                 
             # 设置频道
             await self.setup_channels()
             self.is_running = True
             
+            # 启动批处理任务
+            self.batch_task = asyncio.create_task(process_batches())
+            logger.info("数据库批处理任务已启动")
+            
             # 启动健康检查和自动发现任务
-            health_check_task = asyncio.create_task(self.health_check())
-            discovery_task = asyncio.create_task(self.discovery_loop())
+            self.health_check_task = asyncio.create_task(self.health_check())
+            self.discovery_task = asyncio.create_task(self.discovery_loop())
             
             logger.info("监听服务已启动")
             
-            # 进入无限循环
-            while self.is_running:
-                await asyncio.sleep(10)
-                
-            # 取消任务
-            health_check_task.cancel()
-            discovery_task.cancel()
-            
-            return True
+            # 返回self，而不是进入无限循环
+            return self
             
         except Exception as e:
             self.is_running = False
@@ -431,7 +600,14 @@ class TelegramListener:
                                 await asyncio.sleep(5)  # 等待一段时间
                                 
                                 # 重新创建客户端
-                                self.client = TelegramClient('my_session', self.api_id, self.api_hash)
+                                self.client = TelegramClient(
+                                    self.session_path,
+                                    self.api_id, 
+                                    self.api_hash,
+                                    connection_retries=self.connection_retries,
+                                    auto_reconnect=self.auto_reconnect,
+                                    retry_delay=self.retry_delay
+                                )
                                 await self.client.connect()
                                 await self.setup_channels()
                                 logger.info("客户端已成功重启和重新初始化")
@@ -480,6 +656,57 @@ class TelegramListener:
                 logger.error(f"健康检查时出错: {str(e)}")
                 logger.debug(traceback.format_exc())
 
+    async def stop(self):
+        """停止监听服务并释放资源"""
+        logger.info("正在停止Telegram监听服务...")
+        
+        # 设置运行状态为False，使各循环能够正常退出
+        self.is_running = False
+        
+        # 移除所有事件处理器
+        for handler in list(self.event_handlers.values()):
+            self.client.remove_event_handler(handler)
+        self.event_handlers.clear()
+        logger.info("已移除所有事件处理器")
+        
+        # 取消批处理任务
+        if self.batch_task and not self.batch_task.done():
+            self.batch_task.cancel()
+            try:
+                await self.batch_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("批处理任务已取消")
+            
+        # 取消健康检查和自动发现任务
+        for task_name, task in [('health_check_task', getattr(self, 'health_check_task', None)), 
+                               ('discovery_task', getattr(self, 'discovery_task', None))]:
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                logger.info(f"{task_name}已取消")
+        
+        # 断开与Telegram的连接
+        if self.client and self.client.is_connected():
+            await self.client.disconnect()
+            logger.info("已断开与Telegram的连接")
+        
+        # 清理会话文件
+        try:
+            session_files = [f"{self.session_path}.session", f"{self.session_path}.session-journal"]
+            for file in session_files:
+                if os.path.exists(file):
+                    os.remove(file)
+                    logger.info(f"已删除会话文件: {file}")
+        except Exception as e:
+            logger.warning(f"清理会话文件时出错: {str(e)}")
+        
+        logger.info("Telegram监听服务已完全停止")
+        return True
+
 # 设置日志格式
 def setup_logging():
     logging.basicConfig(
@@ -514,10 +741,17 @@ def run_listener():
     try:
         loop.run_until_complete(listener.start())
     except KeyboardInterrupt:
-        logger.info("监听器已停止")
+        logger.info("接收到键盘中断，正在优雅关闭...")
+        loop.run_until_complete(listener.stop())
+        logger.info("监听器已完全停止")
     except Exception as e:
         logger.error(f"监听器出错: {str(e)}")
         logger.debug(traceback.format_exc())
+        # 仍然尝试优雅关闭
+        try:
+            loop.run_until_complete(listener.stop())
+        except Exception as stop_error:
+            logger.error(f"停止监听器时出错: {str(stop_error)}")
     finally:
         # 确保循环关闭
         if not loop.is_closed():

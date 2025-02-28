@@ -134,7 +134,7 @@
             
             {% if token_history %}
             <div class="card mt-4">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">价格历史</h5>
                 </div>
                 <div class="card-body">
@@ -207,9 +207,10 @@
                 datasets: [{
                     label: '市值 ({{ token.chain }})',
                     data: chartData.values,
-                    borderColor: 'rgb(75, 192, 192)',
+                    borderColor: '#AA96DA',
+                    backgroundColor: 'rgba(170, 150, 218, 0.2)',
                     tension: 0.1,
-                    fill: false
+                    fill: true
                 }]
             },
             options: {
