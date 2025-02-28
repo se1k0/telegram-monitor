@@ -66,7 +66,15 @@ class TestChannelManager(unittest.TestCase):
     def test_add_channel(self):
         """测试添加频道功能"""
         # 添加测试频道
-        result = self.manager.add_channel('test_channel', 'Test Channel', 'SOL')
+        result = self.manager.add_channel(
+            channel_username='test_channel', 
+            channel_name='Test Channel', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         self.assertTrue(result)
         
         # 验证是否已添加到数据库
@@ -79,7 +87,15 @@ class TestChannelManager(unittest.TestCase):
         session.close()
         
         # 测试添加已存在的频道
-        result2 = self.manager.add_channel('test_channel', 'Test Channel', 'SOL')
+        result2 = self.manager.add_channel(
+            channel_username='test_channel', 
+            channel_name='Test Channel', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         self.assertFalse(result2)  # 应返回False表示频道已存在
         
         # 测试重新激活已停用的频道
@@ -89,7 +105,15 @@ class TestChannelManager(unittest.TestCase):
         session.commit()
         session.close()
         
-        result3 = self.manager.add_channel('test_channel', 'New Name', 'ETH')
+        result3 = self.manager.add_channel(
+            channel_username='test_channel', 
+            channel_name='New Name', 
+            chain='ETH',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         self.assertTrue(result3)  # 应返回True表示频道已重新激活
         
         session = self.Session()
@@ -102,7 +126,15 @@ class TestChannelManager(unittest.TestCase):
     def test_remove_channel(self):
         """测试移除频道功能"""
         # 先添加一个频道
-        self.manager.add_channel('test_channel', 'Test Channel', 'SOL')
+        self.manager.add_channel(
+            channel_username='test_channel', 
+            channel_name='Test Channel', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         
         # 移除该频道
         result = self.manager.remove_channel('test_channel')
@@ -122,9 +154,33 @@ class TestChannelManager(unittest.TestCase):
     def test_get_active_channels(self):
         """测试获取活跃频道功能"""
         # 添加两个活跃频道和一个非活跃频道
-        self.manager.add_channel('active_channel1', 'Active 1', 'SOL')
-        self.manager.add_channel('active_channel2', 'Active 2', 'ETH')
-        self.manager.add_channel('inactive_channel', 'Inactive', 'BSC')
+        self.manager.add_channel(
+            channel_username='active_channel1', 
+            channel_name='Active 1', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
+        self.manager.add_channel(
+            channel_username='active_channel2', 
+            channel_name='Active 2', 
+            chain='ETH',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
+        self.manager.add_channel(
+            channel_username='inactive_channel', 
+            channel_name='Inactive', 
+            chain='BSC',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         self.manager.remove_channel('inactive_channel')
         
         # 获取活跃频道
@@ -139,9 +195,33 @@ class TestChannelManager(unittest.TestCase):
     def test_get_all_channels(self):
         """测试获取所有频道功能"""
         # 添加两个活跃频道和一个非活跃频道
-        self.manager.add_channel('active_channel1', 'Active 1', 'SOL')
-        self.manager.add_channel('active_channel2', 'Active 2', 'ETH')
-        self.manager.add_channel('inactive_channel', 'Inactive', 'BSC')
+        self.manager.add_channel(
+            channel_username='active_channel1', 
+            channel_name='Active 1', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
+        self.manager.add_channel(
+            channel_username='active_channel2', 
+            channel_name='Active 2', 
+            chain='ETH',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
+        self.manager.add_channel(
+            channel_username='inactive_channel', 
+            channel_name='Inactive', 
+            chain='BSC',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         self.manager.remove_channel('inactive_channel')
         
         # 获取所有频道
@@ -161,8 +241,24 @@ class TestChannelManager(unittest.TestCase):
     def test_update_channels(self, mock_verify_channel):
         """测试更新频道状态功能"""
         # 添加一些测试频道
-        self.manager.add_channel('active_channel', 'Active', 'SOL')
-        self.manager.add_channel('another_channel', 'Another', 'ETH')
+        self.manager.add_channel(
+            channel_username='active_channel', 
+            channel_name='Active', 
+            chain='SOL',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
+        self.manager.add_channel(
+            channel_username='another_channel', 
+            channel_name='Another', 
+            chain='ETH',
+            channel_id=None,
+            is_group=False,
+            is_supergroup=False,
+            member_count=0
+        )
         
         # 设置模拟响应
         mock_entity = {

@@ -3,6 +3,7 @@ import sys
 import os
 from datetime import datetime
 from unittest.mock import patch, MagicMock
+import time
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -141,12 +142,26 @@ class TestDBHandler(unittest.TestCase):
             'telegram_url': 'https://t.me/test_group'
         }
         
-        # 调用函数
-        result = save_token_info(token_data)
+        # 使用重试机制调用函数
+        max_retries = 3
+        retry_delay = 0.5
         
-        # 验证结果和调用
-        self.assertTrue(result)
-        mock_session.add.assert_called_once()  # 应该调用add来添加新代币
+        for attempt in range(max_retries):
+            try:
+                # 调用函数
+                result = save_token_info(token_data)
+                
+                # 验证结果和调用
+                self.assertTrue(result)
+                mock_session.add.assert_called_once()  # 应该调用add来添加新代币
+                break
+            except Exception as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    # 如果是锁错误且未达到最大重试次数，等待后重试
+                    print(f"数据库锁定 (尝试 {attempt+1}/{max_retries}), 等待重试...")
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    raise
         
         # 测试无效数据
         invalid_data = {
@@ -157,12 +172,23 @@ class TestDBHandler(unittest.TestCase):
         # 重置mock
         mock_session.reset_mock()
         
-        # 调用函数
-        result = save_token_info(invalid_data)
-        
-        # 验证结果和调用
-        self.assertFalse(result)
-        mock_session.add.assert_not_called()  # 不应该调用add
+        # 使用重试机制调用函数
+        for attempt in range(max_retries):
+            try:
+                # 调用函数
+                result = save_token_info(invalid_data)
+                
+                # 验证结果和调用
+                self.assertFalse(result)
+                mock_session.add.assert_not_called()  # 不应该调用add
+                break
+            except Exception as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    # 如果是锁错误且未达到最大重试次数，等待后重试
+                    print(f"数据库锁定 (尝试 {attempt+1}/{max_retries}), 等待重试...")
+                    time.sleep(retry_delay * (attempt + 1))
+                else:
+                    raise
 
 if __name__ == '__main__':
     unittest.main() 

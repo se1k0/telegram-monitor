@@ -1,15 +1,16 @@
 import os
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
 # 修改BASE_DIR为项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# 配置文件路径
+CONFIG_FILE = BASE_DIR / 'config/config.json'
+
 # 加载环境变量（自动从项目根目录查找.env文件）
 load_dotenv(BASE_DIR / '.env')
-
-# 优化群组配置（建议改为环境变量读取）
-MONITOR_GROUPS = os.getenv('MONITOR_GROUPS', 'group_username1,group_username2').split(',')
 
 # 数据库配置
 DATABASE_URI = os.getenv('DATABASE_URI', f'sqlite:///{BASE_DIR}/data/telegram_data.db')
@@ -63,12 +64,32 @@ max_auto_channels = int(os.getenv('MAX_AUTO_CHANNELS', '10'))
 excluded_channels = os.getenv('EXCLUDED_CHANNELS', '').split(',')
 # 自动发现频道的链关键词（用于猜测频道所属的链）
 chain_keywords = {
-    'SOL': ['solana', 'sol', '索拉纳'],
-    'ETH': ['ethereum', 'eth', '以太坊'],
-    'BTC': ['bitcoin', 'btc', '比特币'],
-    'AVAX': ['avalanche', 'avax', '雪崩'],
-    'BSC': ['binance', 'bnb', 'bsc', '币安链'],
-    'MATIC': ['polygon', 'matic', '多边形'],
+    'SOL': ['solana', 'sol', 'Solana', 'SOL', '索拉纳'],
+    'ETH': ['ethereum', 'eth', 'Ethereum', 'ETH', '以太坊'],
+    'BTC': ['bitcoin', 'btc', 'Bitcoin', 'BTC', '比特币'],
+    'BCH': ['bitcoin cash', 'bch', 'Bitcoin Cash', 'BCH', '比特币现金'],
+    'AVAX': ['avalanche', 'avax', 'Avalanche', 'AVAX', '雪崩'],
+    'BSC': ['binance', 'bnb', 'bsc', 'Binance', 'BNB', 'BSC', '币安链', '币安'],
+    'MATIC': ['polygon', 'matic', 'Matic', 'MATIC', '多边形'],
+    'TRX': ['tron', 'trx', 'Tron', 'TRX', '波场'],
+    'TON': ['ton', 'Ton', 'TON', 'TON链'],
+    'ARB': ['arbitrum', 'arb', 'Arbitrum', 'ARB', 'Arbitrum链'],
+    'OP': ['optimism', 'op', 'Optimism', 'OP', 'Optimism链'],
+    'ZK': ['zksync', 'zks', 'ZKSync', 'ZK', 'ZKSync链'],
+    'BASE': ['base', 'Base', 'BASE', 'Base链'],
+    'LINE': ['line', 'Line', 'LINE', 'Line链'],
+    'KLAY': ['klaytn', 'klay', 'Klaytn', 'KLAY', 'Klaytn链'],
+    'FUSE': ['fuse', 'Fuse', 'FUSE', 'Fuse链'],
+    'CELO': ['celo', 'Celo', 'CELO', 'Celo链'],
+    'KCS': ['kucoin', 'kcs', 'KCS', 'KCS链'],
+    'KSM': ['kusama', 'ksm', 'Kusama', 'KSM', 'Kusama链'],
+    'DOT': ['polkadot', 'dot', 'Polkadot', 'DOT', '波卡'],
+    'ADA': ['cardano', 'ada', 'Cardano', 'ADA', '卡尔达诺'],
+    'XRP': ['ripple', 'xrp', 'Ripple', 'XRP', '瑞波'],
+    'LINK': ['chainlink', 'link', 'Chainlink', 'LINK', '链链'],
+    'XLM': ['stellar', 'xlm', 'Stellar', 'XLM', '恒星'],
+    'XMR': ['monero', 'xmr', 'Monero', 'XMR', '门罗'],
+    'LTC': ['litecoin', 'ltc', 'Litecoin', 'LTC', '莱特币'],
 }
 
 # 增强EnvConfig类
@@ -78,11 +99,6 @@ class EnvConfig:
         self.API_ID = int(os.getenv('TG_API_ID', 0))
         self.API_HASH = os.getenv('TG_API_HASH', '')
         
-        # 添加群组配置校验
-        self.MONITOR_GROUPS = [g.strip() for g in MONITOR_GROUPS if g.strip()]
-        if not self.MONITOR_GROUPS:
-            raise ValueError("至少需要配置一个监控群组")
-
         # 添加路径校验
         sensitive_words_path = BASE_DIR / 'config/sensitive_words.txt'
         if not sensitive_words_path.exists():
@@ -110,3 +126,60 @@ LOG_CONFIG['handlers']['console'] = {
     'formatter': 'standard'
 }
 LOG_CONFIG['loggers']['']['handlers'] = ['file', 'console']  # 同时输出到文件和终端
+
+# 加载配置函数
+def load_config(config_file=CONFIG_FILE):
+    """
+    从配置文件加载配置
+    
+    Args:
+        config_file: 配置文件路径，默认为CONFIG_FILE
+        
+    Returns:
+        dict: 配置字典
+    """
+    try:
+        if os.path.exists(config_file):
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            return config
+        else:
+            print(f"警告：配置文件 {config_file} 不存在，将使用默认配置")
+            # 创建默认配置
+            default_config = {
+                "telegram": {
+                    "api_id": env_config.API_ID,
+                    "api_hash": env_config.API_HASH
+                },
+                "database": {
+                    "uri": DATABASE_URI
+                },
+                "web_server": {
+                    "host": "0.0.0.0",
+                    "port": 5000,
+                    "debug": False
+                },
+                "discovery": {
+                    "enabled": env_config.AUTO_CHANNEL_DISCOVERY,
+                    "interval": env_config.DISCOVERY_INTERVAL,
+                    "min_members": env_config.MIN_CHANNEL_MEMBERS,
+                    "max_channels": env_config.MAX_AUTO_CHANNELS,
+                    "excluded_channels": env_config.EXCLUDED_CHANNELS
+                }
+            }
+            
+            # 确保配置目录存在
+            os.makedirs(os.path.dirname(config_file), exist_ok=True)
+            
+            # 写入默认配置文件
+            try:
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=4, ensure_ascii=False)
+                print(f"已创建默认配置文件: {config_file}")
+            except Exception as e:
+                print(f"创建默认配置文件时出错: {str(e)}，将继续使用内存中的默认配置")
+                
+            return default_config
+    except Exception as e:
+        print(f"加载配置文件时出错: {str(e)}")
+        raise

@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.database.models import (
-    Base, TelegramGroup, TelegramMessage, Message, 
+    Base, Message, 
     Token, PromotionChannel, HiddenToken, TelegramChannel,
     PromotionInfo, init_db
 )
@@ -51,6 +51,30 @@ class TestDatabaseModels(unittest.TestCase):
         self.assertEqual(db_channel.channel_name, 'Test Channel')
         self.assertEqual(db_channel.chain, 'ETH')
         self.assertTrue(db_channel.is_active)
+        self.assertFalse(db_channel.is_group)  # 默认应该不是群组
+
+        # 创建测试群组
+        group = TelegramChannel(
+            channel_id=123456789,
+            channel_name='Test Group',
+            chain='ETH',
+            is_active=True,
+            is_group=True,
+            member_count=100
+        )
+        
+        # 添加到会话并提交
+        self.session.add(group)
+        self.session.commit()
+        
+        # 从数据库中查询并验证
+        db_group = self.session.query(TelegramChannel).filter_by(channel_id=123456789).first()
+        self.assertIsNotNone(db_group)
+        self.assertEqual(db_group.channel_name, 'Test Group')
+        self.assertEqual(db_group.chain, 'ETH')
+        self.assertTrue(db_group.is_active)
+        self.assertTrue(db_group.is_group)
+        self.assertEqual(db_group.member_count, 100)
     
     def test_message(self):
         """测试Message模型"""

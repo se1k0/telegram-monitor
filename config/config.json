@@ -1,0 +1,24 @@
+{
+    "telegram": {
+        "api_id": 25716135,
+        "api_hash": "57eff7af509d6d56a7ee7f8226a3d1a1"
+    },
+    "database": {
+        "uri": "sqlite:///data/telegram_data.db"
+    },
+    "web_server": {
+        "host": "0.0.0.0",
+        "port": 5000,
+        "debug": false
+    },
+    "discovery": {
+        "enabled": true,
+        "interval": 3600,
+        "min_members": 0,
+        "max_channels": 200,
+        "excluded_channels": [
+            "my_test_channel",
+            "temporary_channel"
+        ]
+    }
+}

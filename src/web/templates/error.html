@@ -1,0 +1,48 @@
+{% extends 'layout.html' %}
+
+{% block title %}系统错误{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-8 mx-auto">
+            <div class="card border-danger">
+                <div class="card-header bg-danger text-white">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle-fill me-2"></i>系统错误</h5>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-danger">
+                        <h4 class="alert-heading">发生错误！</h4>
+                        <p>{{ error_message }}</p>
+                    </div>
+                    
+                    <p>可能的解决方法：</p>
+                    <ul>
+                        <li>刷新页面重试</li>
+                        <li>检查网络连接</li>
+                        <li>返回<a href="/" class="alert-link">首页</a></li>
+                        <li>联系系统管理员</li>
+                    </ul>
+                    
+                    {% if detailed_error and detailed_error|length > 0 %}
+                    <div class="mt-4">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#errorDetails">
+                            查看详细错误信息
+                        </button>
+                        <div class="collapse mt-2" id="errorDetails">
+                            <div class="card card-body">
+                                <pre class="text-danger mb-0">{{ detailed_error }}</pre>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="card-footer">
+                    <a href="/" class="btn btn-primary"><i class="bi bi-house me-1"></i>返回首页</a>
+                    <a href="javascript:history.back()" class="btn btn-secondary ms-2"><i class="bi bi-arrow-left me-1"></i>返回上一页</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

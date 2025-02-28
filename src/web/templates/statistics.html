@@ -9,7 +9,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-broadcast-pin mb-2" style="font-size: 2rem; color: #0d6efd;"></i>
+                    <i class="bi bi-broadcast-pin mb-2" style="font-size: 2rem; color: #424874;"></i>
                     <div class="stats-value">{{ active_channels_count }}</div>
                     <div class="stats-label">活跃频道</div>
                 </div>
@@ -18,7 +18,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-chat-left-text mb-2" style="font-size: 2rem; color: #198754;"></i>
+                    <i class="bi bi-chat-left-text mb-2" style="font-size: 2rem; color: #A6B1E1;"></i>
                     <div class="stats-value">{{ message_count }}</div>
                     <div class="stats-label">收集消息</div>
                 </div>
@@ -27,7 +27,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-currency-bitcoin mb-2" style="font-size: 2rem; color: #dc3545;"></i>
+                    <i class="bi bi-currency-bitcoin mb-2" style="font-size: 2rem; color: #AA96DA;"></i>
                     <div class="stats-value">{{ token_count }}</div>
                     <div class="stats-label">追踪代币</div>
                 </div>
@@ -36,7 +36,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-clock-history mb-2" style="font-size: 2rem; color: #6c757d;"></i>
+                    <i class="bi bi-clock-history mb-2" style="font-size: 2rem; color: #FCBAD3;"></i>
                     <div class="stats-value">{{ last_update }}</div>
                     <div class="stats-label">最后更新</div>
                 </div>
@@ -58,7 +58,7 @@
             </div>
             
             <div class="card mt-4">
-                <div class="card-header bg-success text-white">
+                <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">趋势分析</h5>
                 </div>
                 <div class="card-body">
@@ -141,12 +141,15 @@
             return;
         }
         
-        // 生成随机颜色
-        const colors = chartData.chains.map(() => {
-            const r = Math.floor(Math.random() * 200);
-            const g = Math.floor(Math.random() * 200);
-            const b = Math.floor(Math.random() * 200);
-            return `rgba(${r}, ${g}, ${b}, 0.7)`;
+        // 使用指定的高级感配色
+        const colors = [
+            '#F4EEFF', '#DCD6F7', '#A6B1E1', '#424874',  // 色彩组一
+            '#A8D8EA', '#AA96DA', '#FCBAD3', '#FFFFD2'   // 色彩组二
+        ];
+        
+        // 如果链数量超过颜色数量，循环使用颜色
+        const chartColors = chartData.chains.map((_, index) => {
+            return colors[index % colors.length];
         });
         
         new Chart(ctx, {
@@ -155,7 +158,7 @@
                 labels: chartData.chains,
                 datasets: [{
                     data: chartData.counts,
-                    backgroundColor: colors,
+                    backgroundColor: chartColors,
                     borderWidth: 1
                 }]
             },
