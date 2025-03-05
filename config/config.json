@@ -1,7 +1,7 @@
 {
     "telegram": {
-        "api_id": 25716135,
-        "api_hash": "57eff7af509d6d56a7ee7f8226a3d1a1"
+        "api_id": 0000000,
+        "api_hash": "00000000000000000000000000000000"
     },
     "database": {
         "uri": "sqlite:///data/telegram_data.db"
