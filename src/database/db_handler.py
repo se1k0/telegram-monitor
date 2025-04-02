@@ -1,20 +1,21 @@
 from sqlalchemy.orm import sessionmaker
 from contextlib import contextmanager
-from src.database.models import engine, Message, Token, PromotionChannel, HiddenToken, TelegramChannel
 import sqlite3
-from typing import Tuple, Optional, List, Dict, Any, Callable
-from datetime import datetime, timezone, timedelta
-from .models import PromotionInfo
+import asyncio
+import traceback
+import time
+import functools
 import json
 import os
 import re
-import traceback
 import inspect
-import asyncio
-import time
-import functools
+from typing import Tuple, Optional, List, Dict, Any, Callable
+from datetime import datetime, timezone, timedelta
+
 from sqlalchemy.pool import QueuePool
 from sqlalchemy import event
+from src.database.models import engine, Message, Token, TelegramChannel, TokensMark, PromotionChannel
+from .models import PromotionInfo
 
 # 添加日志支持
 try:
@@ -39,11 +40,19 @@ Session = sessionmaker(bind=engine)
 # 批处理消息队列
 message_batch = []
 token_batch = []
-MAX_BATCH_SIZE = 50
-BATCH_TIMEOUT = 10  # 秒
+
+# 从配置文件或环境变量中获取批处理设置
+try:
+    from config.settings import BATCH_SIZE, BATCH_INTERVAL
+    MAX_BATCH_SIZE = BATCH_SIZE if hasattr(BATCH_SIZE, '__int__') else 50
+    BATCH_TIMEOUT = BATCH_INTERVAL if hasattr(BATCH_INTERVAL, '__int__') else 10
+except (ImportError, AttributeError):
+    # 默认值
+    MAX_BATCH_SIZE = 50
+    BATCH_TIMEOUT = 10  # 秒
 
 # SQLite 连接设置
-SQLITE_BUSY_TIMEOUT = 30000  # 30秒, SQLite等待锁释放的时间
+SQLITE_BUSY_TIMEOUT = 60000  # 60秒, SQLite等待锁释放的时间
 SQLITE_RETRIES = 5  # 增加重试次数
 SQLITE_RETRY_DELAY = 1.0  # 重试间隔(秒)
 SQLITE_POOL_SIZE = 5  # 连接池大小
@@ -220,13 +229,88 @@ async def process_batches():
             if message_batch:
                 local_batch = message_batch.copy()
                 message_batch = []
-                await save_messages_batch(local_batch)
+                
+                # 使用事务处理批量消息
+                with session_scope() as session:
+                    for msg_data in local_batch:
+                        try:
+                            message = Message(
+                                chain=msg_data.get('chain'),
+                                message_id=msg_data.get('message_id'),
+                                date=msg_data.get('date'),
+                                text=msg_data.get('text'),
+                                media_path=msg_data.get('media_path'),
+                                channel_id=msg_data.get('channel_id')
+                            )
+                            session.add(message)
+                        except Exception as e:
+                            logger.error(f"处理消息批次时出错: {str(e)}")
+                            logger.debug(traceback.format_exc())
+                            continue
+                
                 logger.info(f"批量处理了 {len(local_batch)} 条消息")
                 
             if token_batch:
                 local_batch = token_batch.copy()
                 token_batch = []
-                save_tokens_batch(local_batch)
+                
+                # 使用事务处理批量代币信息
+                with session_scope() as session:
+                    for token_data in local_batch:
+                        try:
+                            # 验证代币数据
+                            is_valid, error_msg = validate_token_data(token_data)
+                            if not is_valid:
+                                logger.warning(f"无效的代币数据: {error_msg}, 数据: {token_data}")
+                                continue
+                                
+                            # 检查是否存在同一链上的同一合约地址
+                            existing_token = session.query(Token).filter(
+                                Token.chain == token_data.get('chain'),
+                                Token.contract == token_data.get('contract')
+                            ).first()
+                            
+                            if existing_token:
+                                # 更新现有记录
+                                if token_data.get('market_cap') and (not existing_token.market_cap or existing_token.market_cap < token_data.get('market_cap')):
+                                    # 保存当前市值到market_cap_1h字段
+                                    existing_token.market_cap_1h = existing_token.market_cap
+                                    existing_token.market_cap = token_data.get('market_cap')
+                                    existing_token.market_cap_formatted = token_data.get('market_cap_formatted')
+                                    
+                                existing_token.promotion_count += 1
+                                existing_token.latest_update = token_data.get('latest_update')
+                                
+                                # 更新其他字段
+                                for field in ['telegram_url', 'twitter_url', 'website_url']:
+                                    if token_data.get(field) and not getattr(existing_token, field):
+                                        setattr(existing_token, field, token_data.get(field))
+                            else:
+                                # 创建新记录
+                                token = Token(
+                                    chain=token_data.get('chain'),
+                                    token_symbol=token_data.get('token_symbol'),
+                                    contract=token_data.get('contract'),
+                                    message_id=token_data.get('message_id'),
+                                    market_cap=token_data.get('market_cap'),
+                                    market_cap_formatted=token_data.get('market_cap_formatted'),
+                                    first_market_cap=token_data.get('market_cap'),
+                                    promotion_count=token_data.get('promotion_count', 1),
+                                    likes_count=token_data.get('likes_count', 0),
+                                    telegram_url=token_data.get('telegram_url'),
+                                    twitter_url=token_data.get('twitter_url'),
+                                    website_url=token_data.get('website_url'),
+                                    latest_update=token_data.get('latest_update'),
+                                    first_update=token_data.get('first_update'),
+                                    from_group=token_data.get('from_group', False),
+                                    channel_id=token_data.get('channel_id')
+                                )
+                                session.add(token)
+                        except Exception as e:
+                            logger.error(f"处理代币批次时出错: {str(e)}")
+                            logger.debug(traceback.format_exc())
+                            continue
+                
                 logger.info(f"批量处理了 {len(local_batch)} 条代币信息")
                 
             await asyncio.sleep(BATCH_TIMEOUT)
@@ -312,8 +396,7 @@ async def save_messages_batch(messages: List[Dict]):
                 date=msg['date'],
                 text=msg.get('text'),
                 media_path=msg.get('media_path'),
-                is_group=msg.get('is_group', False),  # 添加is_group字段，默认为False
-                is_supergroup=msg.get('is_supergroup', False)  # 添加is_supergroup字段，默认为False
+                channel_id=msg.get('channel_id')  # 使用channel_id字段
             )
             message_objects.append(message)
         
@@ -350,8 +433,7 @@ async def save_messages_individually(messages: List[Dict]):
                 date=msg_data['date'],
                 text=msg_data['text'],
                 media_path=msg_data.get('media_path'),
-                is_group=msg_data.get('is_group', False),
-                is_supergroup=msg_data.get('is_supergroup', False)
+                channel_id=msg_data.get('channel_id')
             ):
                 successful += 1
         except Exception as individual_error:
@@ -366,8 +448,7 @@ def save_telegram_message(
     date: datetime,
     text: str,
     media_path: Optional[str] = None,
-    is_group: bool = False,
-    is_supergroup: bool = False
+    channel_id: Optional[int] = None
 ) -> bool:
     """保存Telegram消息到数据库
     
@@ -377,8 +458,7 @@ def save_telegram_message(
         date: 消息日期
         text: 消息文本
         media_path: 媒体文件路径
-        is_group: 是否来自群组
-        is_supergroup: 是否来自超级群组
+        channel_id: 频道或群组ID
         
     Returns:
         bool: 操作是否成功
@@ -392,8 +472,7 @@ def save_telegram_message(
             'date': date,
             'text': text,
             'media_path': media_path,
-            'is_group': is_group,
-            'is_supergroup': is_supergroup
+            'channel_id': channel_id
         })
         # 如果队列达到最大值，立即处理
         if len(message_batch) >= MAX_BATCH_SIZE:
@@ -418,8 +497,7 @@ def save_telegram_message(
                 date=date,
                 text=text,
                 media_path=media_path,
-                is_group=is_group,
-                is_supergroup=is_supergroup
+                channel_id=channel_id
             )
             session.add(new_message)
             return True
@@ -594,7 +672,31 @@ def save_token_info(token_data: Dict[str, Any]) -> bool:
     if 'contract' not in token_data or not token_data['contract']:
         logger.error("缺少合约地址，无法保存代币信息")
         return False
-        
+    
+    # 如果是Solana链的代币，获取持有者数量
+    if token_data.get('chain') == 'SOL':
+        try:
+            from ..api.das_api import get_token_holders_count
+            # 设置超时计时器
+            start_time = time.time()
+            
+            # 调用优化后的API获取持有者数量
+            holders_count = get_token_holders_count(token_data['contract'])
+            
+            if holders_count is not None:
+                token_data['holders_count'] = holders_count
+                logger.info(f"成功获取代币 {token_data.get('token_symbol')} 持有者数量: {holders_count}")
+            else:
+                logger.warning(f"无法获取代币 {token_data.get('token_symbol')} 持有者数量，可能是API错误或代币合约地址无效")
+                
+            # 检查API请求耗时
+            request_time = time.time() - start_time
+            if request_time > 0.5:  # 如果请求耗时超过0.5秒，记录日志
+                logger.warning(f"获取代币持有者数量耗时较长: {request_time:.2f}秒")
+        except Exception as e:
+            logger.error(f"获取代币持有者数量失败: {str(e)}")
+            # 出错不中断流程，继续保存其他信息
+    
     # 使用token_batch保存数据
     global token_batch
     token_batch.append(token_data)
@@ -674,6 +776,13 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None)
         # 清理消息文本，移除多余空格和特殊字符
         cleaned_text = re.sub(r'\s+', ' ', message_text)
         cleaned_text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', cleaned_text)  # 移除零宽字符
+        
+        # 先尝试从消息中提取链信息（如果未提供）
+        if not chain or chain == "UNKNOWN":
+            chain_from_message = extract_chain_from_message(message_text)
+            if chain_from_message:
+                logger.info(f"从消息中提取到链信息: {chain_from_message}")
+                chain = chain_from_message
         
         # 使用正则表达式提取代币符号
         token_symbol = None
@@ -904,13 +1013,133 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None)
             risk_level=risk_level
         )
         
-        logger.info(f"成功提取推广信息: 代币={token_symbol}, 合约={contract_address}, 市值={market_cap}")
+        logger.info(f"成功提取推广信息: 代币={token_symbol}, 合约={contract_address}, 市值={market_cap}, 链={chain}")
         return promotion_info
             
     except Exception as e:
         logger.error(f"解析推广信息出错: {str(e)}")
         logger.debug(traceback.format_exc())
         return None
+
+def extract_chain_from_message(message_text: str) -> Optional[str]:
+    """从消息文本中提取区块链信息
+    
+    Args:
+        message_text: 需要解析的消息文本
+        
+    Returns:
+        str: 提取到的链名称，未找到则返回None
+    """
+    # 清理消息文本，便于匹配
+    text = message_text.lower()
+    
+    # 定义不同链的关键词匹配规则
+    chain_patterns = {
+        'SOL': [r'\bsol\b', r'\bsolana\b', r'@solana', r'solanas', r'솔라나', r'索拉纳', 
+                r'solscan\.io', r'explorer\.solana\.com', r'solana_trojanbot', r'sol链'],
+        'ETH': [r'\beth\b', r'\bethereum\b', r'@ethereum', r'以太坊', r'이더리움', 
+                r'etherscan\.io', r'uniswap', r'sushiswap', r'eth链'],
+        'BSC': [r'\bbsc\b', r'\bbinance\b', r'\bbnb\b', r'币安链', r'바이낸스', 
+                r'bscscan\.com', r'pancakeswap', r'bsc链'],
+        'ARB': [r'\barb\b', r'\barbitrum\b', r'arbitrums', r'阿比特龙', r'아비트럼', 
+                r'arbiscan\.io', r'arb链'],
+        'BASE': [r'\bbase\b', r'basechain', r'coinbase', r'贝斯链', r'베이스', 
+                 r'basescan\.org', r'base链'],
+        'AVAX': [r'\bavax\b', r'\bavalanche\b', r'雪崩链', r'아발란체', 
+                 r'snowtrace\.io', r'traderjoe', r'avax链'],
+        'MATIC': [r'\bmatic\b', r'\bpolygon\b', r'波利冈', r'폴리곤', 
+                  r'polygonscan\.com', r'matic链'],
+        'OP': [r'\boptimism\b', r'\bop\b', r'乐观链', r'옵티미즘', 
+               r'optimistic\.etherscan\.io', r'op链']
+    }
+    
+    # 检查匹配
+    for chain, patterns in chain_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, text):
+                logger.debug(f"从消息中提取到链信息: {chain}, 匹配模式: {pattern}")
+                return chain
+    
+    # 处理中文环境
+    chinese_chains = {
+        'SOL': ['solana', 'sol', '索拉纳', '索兰纳'],
+        'ETH': ['ethereum', 'eth', '以太坊', '以太'],
+        'BSC': ['binance', 'bsc', 'bnb', '币安'],
+        'AVAX': ['avalanche', 'avax', '雪崩'],
+        'MATIC': ['polygon', 'matic', '波利冈']
+    }
+    
+    for chain, keywords in chinese_chains.items():
+        for keyword in keywords:
+            if keyword in text:
+                logger.debug(f"从中文环境提取到链信息: {chain}, 关键词: {keyword}")
+                return chain
+    
+    # 提取dexscreener URL并解析
+    # 处理格式: dexscreener.com/solana/xxx 或 dexscreener.com/ethereum/xxx等
+    dexscreener_match = re.search(r'(?:https?://)?(?:www\.)?dexscreener\.com/([a-zA-Z0-9]+)(?:/[^/\s]+)?', text)
+    if dexscreener_match:
+        chain_str = dexscreener_match.group(1).upper()
+        # 映射DEX Screener URL路径到链标识
+        dexscreener_map = {
+            'SOLANA': 'SOL',
+            'ETHEREUM': 'ETH',
+            'BSC': 'BSC',
+            'ARBITRUM': 'ARB',
+            'BASE': 'BASE',
+            'AVALANCHE': 'AVAX',
+            'POLYGON': 'MATIC',
+            'OPTIMISM': 'OP'
+        }
+        if chain_str in dexscreener_map:
+            logger.debug(f"从DEX Screener URL提取到链信息: {dexscreener_map[chain_str]}")
+            return dexscreener_map[chain_str]
+    
+    # 处理更复杂的dexscreener URL格式，例如完整的交易对地址URL
+    # 示例: dexscreener.com/solana/efmy21qz1qrrlpmis3neczrpbwhrxhnwyodss6nxf8q9DtNtJbA8JrVDCnoKsfhBFgDFzSkL5EX3mv6FubSBpump
+    complex_dexscreener = re.search(r'dexscreener\.com/([a-zA-Z0-9]+)/[a-zA-Z0-9]{10,}', text, re.IGNORECASE)
+    if complex_dexscreener:
+        chain_str = complex_dexscreener.group(1).upper()
+        dexscreener_map = {
+            'SOLANA': 'SOL',
+            'ETHEREUM': 'ETH',
+            'BSC': 'BSC',
+            'ARBITRUM': 'ARB',
+            'BASE': 'BASE',
+            'AVALANCHE': 'AVAX',
+            'POLYGON': 'MATIC',
+            'OPTIMISM': 'OP'
+        }
+        if chain_str in dexscreener_map:
+            logger.debug(f"从复杂的DEX Screener URL提取到链信息: {dexscreener_map[chain_str]}")
+            return dexscreener_map[chain_str]
+    
+    # 还可以从合约地址格式推断
+    if re.search(r'\b0x[0-9a-fA-F]{40}\b', text):
+        # 以太坊格式地址，不能确定是ETH/BSC/MATIC等，默认返回ETH
+        logger.debug("从合约地址格式推断可能是ETH链")
+        return 'ETH'
+        
+    if re.search(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b', text) and ('sol' in text or 'solana' in text):
+        # Solana Base58格式地址
+        logger.debug("从合约地址格式推断可能是SOL链")
+        return 'SOL'
+    
+    # 检查是否包含特定的机器人引用
+    if 'solana_trojanbot' in text:
+        return 'SOL'
+    
+    # 检查交易所特定关键字
+    if 'raydium' in text or 'orca.so' in text or 'jupiter' in text:
+        return 'SOL'
+    
+    if 'uniswap' in text or 'sushiswap' in text:
+        return 'ETH'
+    
+    if 'pancakeswap' in text or 'poocoin' in text:
+        return 'BSC'
+    
+    return None
 
 def extract_url_from_text(text: str, keyword: str = '') -> Optional[str]:
     """从文本中提取URL"""
@@ -1158,73 +1387,179 @@ def format_token_history(history: list) -> str:
 def update_token_info(conn, token_data):
     """更新或插入代币信息"""
     cursor = conn.cursor()
+    
     try:
-        # 标准化风险等级值
-        if 'risk_level' in token_data:
-            risk_level = token_data['risk_level']
-            # 确保风险等级是有效值
-            if risk_level not in ['low', 'medium', 'high', 'medium-high', 'low-medium', 'unknown']:
-                # 处理中文风险等级，统一转为英文
-                if risk_level == '低':
-                    token_data['risk_level'] = 'low'
-                elif risk_level == '中':
-                    token_data['risk_level'] = 'medium'
-                elif risk_level == '高':
-                    token_data['risk_level'] = 'high'
-                elif not risk_level:
-                    token_data['risk_level'] = 'unknown'
-                    
-        # 检查是否存在现有记录
+        # 验证代币数据
+        is_valid, error_msg = validate_token_data(token_data)
+        if not is_valid:
+            logger.error(f"无效的代币数据: {error_msg}")
+            return False
+            
+        # 先检查是否已有该代币的记录
         cursor.execute('''
-            SELECT first_update, first_market_cap, likes_count 
-            FROM tokens 
+            SELECT first_update, first_market_cap, likes_count, 
+                   spread_count, community_reach
+            FROM tokens
             WHERE chain = ? AND contract = ?
         ''', (token_data['chain'], token_data['contract']))
         existing = cursor.fetchone()
+        
+        # 使用SQLAlchemy session计算社群覆盖人数
+        token_symbol = token_data.get('token_symbol')
+        if token_symbol:
+            community_reach = calculate_community_reach(token_symbol)
+            token_data['community_reach'] = community_reach
+            logger.info(f"计算代币 {token_symbol} 的社群覆盖人数: {community_reach}")
+        else:
+            token_data['community_reach'] = 0
+        
+        # 根据群组成员数计算
+        channel_members = 0
+        
+        # 检查是否有channel_id并获取成员数
+        if token_data.get('channel_id'):
+            try:
+                cursor.execute('''
+                    SELECT member_count
+                    FROM telegram_channels
+                    WHERE channel_id = ?
+                ''', (token_data['channel_id'],))
+                
+                result = cursor.fetchone()
+                if result and result[0]:
+                    channel_members = result[0]
+            except Exception as e:
+                logger.warning(f"获取频道成员数时出错: {str(e)}")
         
         if existing:
             # 如果记录存在，保持原有的首次更新时间和首次市值
             token_data['first_update'] = existing[0]
             token_data['first_market_cap'] = existing[1]
             token_data['likes_count'] = existing[2]
-            print(f"更新现有代币: {token_data['token_symbol']}")
-            print(f"原始市值: {existing[1]}")
-            print(f"新的市值: {token_data['market_cap']}")
+            
+            # 更新代币传播次数，累加1
+            spread_count = existing[3] if existing[3] is not None else 0
+            token_data['spread_count'] = spread_count + 1
+            
+            logger.info(f"更新现有代币: {token_data['token_symbol']}, 市值变化: {existing[1]} -> {token_data['market_cap']}, 传播次数: {token_data['spread_count']}")
         else:
             # 如果是新记录，使用当前市值作为首次市值
             token_data['likes_count'] = 0
-            print(f"插入新代币: {token_data['token_symbol']}")
+            # 新代币的传播次数初始化为1
+            token_data['spread_count'] = 1
+            
+            logger.info(f"插入新代币: {token_data['token_symbol']}, 市值: {token_data['market_cap']}, 传播次数: 1")
         
-        # 更新或插入记录
+        # 确保数据中有spread_count和community_reach字段
+        if 'spread_count' not in token_data:
+            token_data['spread_count'] = 1
+        
+        # 为可能缺失的字段设置默认值
+        default_fields = {
+            'hype_score': 0,
+            'sentiment_score': 0,
+            'risk_level': 'UNKNOWN',
+            'from_group': False
+        }
+        
+        for field, default_value in default_fields.items():
+            if field not in token_data or token_data[field] is None:
+                token_data[field] = default_value
+        
+        # 事务处理
+        conn.execute("BEGIN TRANSACTION")
+        
+        # 保存代币标记数据到tokens_mark表
+        save_token_mark(conn, token_data)
+        
+        # 更新或插入记录，添加新字段
         cursor.execute('''
             INSERT OR REPLACE INTO tokens (
                 chain, token_symbol, contract, message_id,
                 market_cap, market_cap_formatted, first_market_cap,
                 promotion_count, likes_count, telegram_url, twitter_url,
                 website_url, latest_update, first_update, risk_level,
-                sentiment_score, hype_score
+                sentiment_score, hype_score, spread_count, community_reach,
+                from_group, channel_id
             ) VALUES (
                 :chain, :token_symbol, :contract, :message_id,
                 :market_cap, :market_cap_formatted, :first_market_cap,
                 :promotion_count, :likes_count, :telegram_url, :twitter_url,
                 :website_url, :latest_update, :first_update, :risk_level,
-                :sentiment_score, :hype_score
+                :sentiment_score, :hype_score, :spread_count, :community_reach,
+                :from_group, :channel_id
             )
         ''', token_data)
         
         conn.commit()
-        print(f"成功更新/插入代币: {token_data['token_symbol']}")
-        print(f"首次市值: {token_data['first_market_cap']}")
-        print(f"当前市值: {token_data['market_cap_formatted']}")
-        print(f"首次更新: {token_data['first_update']}")
-        print(f"最新更新: {token_data['latest_update']}")
+        return True
+    except Exception as e:
+        logger.error(f"更新代币信息时出错: {str(e)}")
+        logger.debug(traceback.format_exc())
+        
+        # 回滚事务
+        try:
+            conn.rollback()
+        except:
+            pass
+            
+        return False
+    finally:
+        # 确保游标关闭，防止资源泄露
+        try:
+            cursor.close()
+        except:
+            pass
+
+def save_token_mark(conn, token_data):
+    """
+    保存代币标记数据到tokens_mark表
+    
+    Args:
+        conn: 数据库连接
+        token_data: 代币信息数据
+    
+    Returns:
+        bool: 操作是否成功
+    """
+    cursor = conn.cursor()
+    try:
+        # 准备tokens_mark数据
+        mark_data = {
+            'chain': token_data['chain'],
+            'token_symbol': token_data['token_symbol'],
+            'contract': token_data['contract'],
+            'message_id': token_data['message_id'],
+            'market_cap': token_data['market_cap'],
+            'mention_time': datetime.now(),  # 当前时间
+            'channel_id': token_data.get('channel_id')
+        }
+        
+        # 插入记录
+        cursor.execute('''
+            INSERT INTO tokens_mark (
+                chain, token_symbol, contract, message_id,
+                market_cap, mention_time, channel_id
+            ) VALUES (
+                :chain, :token_symbol, :contract, :message_id,
+                :market_cap, :mention_time, :channel_id
+            )
+        ''', mark_data)
+        
+        logger.debug(f"成功保存代币标记数据: {mark_data['token_symbol']}, 记录时间: {mark_data['mention_time']}")
+        return True
         
     except Exception as e:
-        print(f"更新代币信息时出错: {str(e)}")
-        print(f"问题数据: {token_data}")
-        import traceback
-        traceback.print_exc()
-        conn.rollback()
+        logger.error(f"保存代币标记数据时出错: {str(e)}")
+        logger.debug(f"问题数据: {token_data}")
+        logger.debug(traceback.format_exc())
+        return False
+    finally:
+        # 确保游标关闭，防止资源泄露
+        try:
+            cursor.close()
+        except:
+            pass
 
 def get_db_performance_stats():
     """获取数据库性能统计信息
@@ -1277,17 +1612,178 @@ def reset_db_performance_stats():
 
 # 添加缺失的清理批处理任务函数
 async def cleanup_batch_tasks():
-    """
-    清理和关闭所有批处理数据库任务
+    """清理所有批处理任务，确保数据被保存"""
+    global message_batch, token_batch
     
-    在系统关闭时被调用，确保所有数据库操作正常结束
-    """
-    logger.info("正在清理数据库批处理任务...")
-    # 等待当前正在处理的批次完成
+    logger.info("正在清理批处理任务...")
+    
     try:
-        # 这里可以添加任何需要执行的清理逻辑
-        # 例如处理未完成的事务等
-        await asyncio.sleep(0.5)  # 给足够的时间让正在进行的操作完成
-        logger.info("数据库批处理任务清理完成")
+        # 处理剩余的消息批次
+        if message_batch:
+            local_batch = message_batch.copy()
+            message_batch = []
+            
+            logger.info(f"清理时处理 {len(local_batch)} 条剩余消息")
+            
+            # 使用事务处理批量消息
+            with session_scope() as session:
+                for msg_data in local_batch:
+                    try:
+                        message = Message(
+                            chain=msg_data.get('chain'),
+                            message_id=msg_data.get('message_id'),
+                            date=msg_data.get('date'),
+                            text=msg_data.get('text'),
+                            media_path=msg_data.get('media_path'),
+                            channel_id=msg_data.get('channel_id')
+                        )
+                        session.add(message)
+                    except Exception as e:
+                        logger.error(f"清理时处理消息出错: {str(e)}")
+                        continue
+        
+        # 处理剩余的代币批次
+        if token_batch:
+            local_batch = token_batch.copy()
+            token_batch = []
+            
+            logger.info(f"清理时处理 {len(local_batch)} 条剩余代币信息")
+            
+            # 使用事务处理批量代币信息
+            with session_scope() as session:
+                for token_data in local_batch:
+                    try:
+                        # 验证代币数据
+                        is_valid, error_msg = validate_token_data(token_data)
+                        if not is_valid:
+                            logger.warning(f"清理时发现无效的代币数据: {error_msg}")
+                            continue
+                            
+                        # 检查是否存在
+                        existing_token = session.query(Token).filter(
+                            Token.chain == token_data.get('chain'),
+                            Token.contract == token_data.get('contract')
+                        ).first()
+                        
+                        if existing_token:
+                            # 更新现有记录
+                            if token_data.get('market_cap') and (not existing_token.market_cap or existing_token.market_cap < token_data.get('market_cap')):
+                                # 保存当前市值到market_cap_1h字段
+                                existing_token.market_cap_1h = existing_token.market_cap
+                                existing_token.market_cap = token_data.get('market_cap')
+                                existing_token.market_cap_formatted = token_data.get('market_cap_formatted')
+                                
+                            existing_token.promotion_count += 1
+                            existing_token.latest_update = token_data.get('latest_update')
+                        else:
+                            # 创建新记录
+                            token = Token(
+                                chain=token_data.get('chain'),
+                                token_symbol=token_data.get('token_symbol'),
+                                contract=token_data.get('contract'),
+                                message_id=token_data.get('message_id'),
+                                market_cap=token_data.get('market_cap'),
+                                market_cap_formatted=token_data.get('market_cap_formatted'),
+                                first_market_cap=token_data.get('market_cap'),
+                                promotion_count=token_data.get('promotion_count', 1),
+                                likes_count=token_data.get('likes_count', 0),
+                                telegram_url=token_data.get('telegram_url'),
+                                twitter_url=token_data.get('twitter_url'),
+                                website_url=token_data.get('website_url'),
+                                latest_update=token_data.get('latest_update'),
+                                first_update=token_data.get('first_update'),
+                                from_group=token_data.get('from_group', False),
+                                channel_id=token_data.get('channel_id')
+                            )
+                            session.add(token)
+                    except Exception as e:
+                        logger.error(f"清理时处理代币信息出错: {str(e)}")
+                        continue
+    
+        logger.info("批处理任务清理完成")
+        return True
     except Exception as e:
-        logger.error(f"清理批处理任务时发生错误: {str(e)}")
+        logger.error(f"清理批处理任务时出错: {str(e)}")
+        logger.debug(traceback.format_exc())
+        return False
+
+def calculate_community_reach(token_symbol: str, session=None):
+    """计算代币的社群覆盖人数
+    
+    计算方式：
+    1. 根据token_symbol查询tokens_mark表中的所有条目
+    2. 统计查询结果中的唯一channel_id
+    3. 根据channel_id查询telegram_channels表中的member_count
+    4. 将member_count相加得到community_reach
+    
+    Args:
+        token_symbol: 代币符号
+        session: 数据库会话，如果为None则创建新会话
+        
+    Returns:
+        int: 计算得到的社群覆盖人数
+    """
+    # 使用缓存避免频繁计算相同的token
+    cache_key = f"community_reach_{token_symbol}"
+    if hasattr(calculate_community_reach, 'cache') and cache_key in calculate_community_reach.cache:
+        # 缓存有效期为5分钟
+        cache_time, value = calculate_community_reach.cache[cache_key]
+        if (datetime.now() - cache_time).total_seconds() < 300:  # 5分钟内
+            return value
+
+    # 初始化缓存字典(如果不存在)
+    if not hasattr(calculate_community_reach, 'cache'):
+        calculate_community_reach.cache = {}
+    
+    close_session = False
+    if session is None:
+        session = Session()
+        close_session = True
+    
+    try:
+        # 使用连接查询直接获取结果，减少数据库查询次数
+        from sqlalchemy import func, distinct
+        
+        # 一次查询获取所有相关频道和成员数量
+        query = session.query(
+            distinct(TokensMark.channel_id),
+            TelegramChannel.member_count
+        ).join(
+            TelegramChannel,
+            TokensMark.channel_id == TelegramChannel.channel_id,
+            isouter=True  # 使用外连接，包含没有匹配的记录
+        ).filter(
+            TokensMark.token_symbol == token_symbol,
+            TelegramChannel.is_active == True
+        )
+        
+        results = query.all()
+        
+        total_reach = 0
+        for _, member_count in results:
+            if member_count:
+                total_reach += member_count
+                
+        # 存入缓存
+        calculate_community_reach.cache[cache_key] = (datetime.now(), total_reach)
+        
+        # 限制缓存大小，防止内存泄漏
+        if len(calculate_community_reach.cache) > 1000:  # 最多缓存1000个token
+            # 删除最早的20%缓存
+            sorted_keys = sorted(
+                calculate_community_reach.cache.keys(),
+                key=lambda k: calculate_community_reach.cache[k][0]
+            )
+            for key in sorted_keys[:200]:  # 删除最早的200个
+                del calculate_community_reach.cache[key]
+        
+        # 返回总覆盖人数
+        return total_reach
+        
+    except Exception as e:
+        logger.error(f"计算代币 {token_symbol} 的社群覆盖人数时出错: {str(e)}")
+        logger.debug(traceback.format_exc())
+        return 0
+    finally:
+        if close_session and session:
+            session.close()

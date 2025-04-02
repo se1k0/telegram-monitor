@@ -62,13 +62,15 @@ def format_market_cap(value):
         if isinstance(value, str):
             value = parse_market_cap(value)
             
-        # 格式化显示
-        if value >= 100000000:  # 亿
-            return f"{value/100000000:.2f}亿"
-        elif value >= 10000:    # 万
-            return f"{value/10000:.2f}万"
-        return f"{value:.2f}"
+        # 格式化显示，使用符号而不是中文字
+        if value >= 1000000000:  # 十亿 (B)
+            return f"${value/1000000000:.2f}B"
+        elif value >= 1000000:   # 百万 (M)
+            return f"${value/1000000:.2f}M"
+        elif value >= 1000:      # 千 (K)
+            return f"${value/1000:.2f}K"
+        return f"${value:.2f}"
     except Exception as e:
         # 记录错误但返回默认值
         print(f"市值格式化错误: {value}, 错误: {str(e)}")
-        return "0.00" 
+        return "$0.00" 

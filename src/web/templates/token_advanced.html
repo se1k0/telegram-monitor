@@ -10,7 +10,7 @@
         border-radius: 3px;
     }
     .token-filter-card {
-        border-left: 4px solid #424874;
+        border-left: 4px solid var(--primary-color);
         padding: 15px;
     }
     .token-table th {
@@ -26,16 +26,16 @@
         font-weight: 500;
     }
     .risk-low {
-        background-color: #AA96DA;
-        color: #F4EEFF;
+        background-color: var(--alt-color-2);
+        color: var(--accent-color);
     }
     .risk-medium {
-        background-color: #FCBAD3;
-        color: #424874;
+        background-color: var(--alt-color-3);
+        color: var(--primary-color);
     }
     .risk-high {
-        background-color: #424874;
-        color: #F4EEFF;
+        background-color: var(--primary-color);
+        color: var(--accent-color);
     }
     .token-icon {
         width: 24px;
@@ -44,17 +44,38 @@
         display: inline-block;
         vertical-align: middle;
         margin-right: 0.5rem;
-        background-color: #F4EEFF;
+        background-color: var(--accent-color);
         text-align: center;
         line-height: 24px;
         font-weight: bold;
         font-size: 12px;
-        color: #424874;
+        color: var(--primary-color);
     }
     .token-table-container {
         overflow-x: auto;
         margin-bottom: 1rem;
     }
+    /* 情感得分进度条 */
+    .progress-bar-positive {
+        background-color: var(--success-color);
+    }
+    .progress-bar-neutral {
+        background-color: var(--warning-color);
+    }
+    .progress-bar-negative {
+        background-color: var(--danger-color);
+    }
+    /* 炒作指数进度条 */
+    .progress-bar-high-hype {
+        background-color: var(--danger-color);
+    }
+    .progress-bar-medium-hype {
+        background-color: var(--warning-color);
+    }
+    .progress-bar-low-hype {
+        background-color: var(--info-color);
+    }
+    /* 响应式设计 */
     @media (max-width: 768px) {
         .card {
             margin-bottom: 1rem;
@@ -223,9 +244,11 @@
                                     <td>
                                         {% if token.sentiment_info and token.sentiment_info.sentiment_score is not none %}
                                         <div class="progress sentiment-indicator">
-                                            <div class="progress-bar bg-{{ 'success' if token.sentiment_info.sentiment_score > 0.5 else 'warning' if token.sentiment_info.sentiment_score > 0 else 'danger' }}" 
+                                            {% set sentiment_class = 'progress-bar-positive' if token.sentiment_info.sentiment_score > 0.5 else 'progress-bar-neutral' if token.sentiment_info.sentiment_score > 0 else 'progress-bar-negative' %}
+                                            {% set sentiment_width = (token.sentiment_info.sentiment_score + 1) * 50 %}
+                                            <div class="progress-bar {{ sentiment_class }}" 
                                                  role="progressbar" 
-                                                 style="width: {{ (token.sentiment_info.sentiment_score + 1) * 50 }}%">
+                                                 style="width: {{ sentiment_width }}%">
                                             </div>
                                         </div>
                                         <small>{{ "%.2f"|format(token.sentiment_info.sentiment_score) }}</small>
@@ -236,9 +259,11 @@
                                     <td>
                                         {% if token.sentiment_info and token.sentiment_info.hype_score is not none %}
                                         <div class="progress sentiment-indicator">
-                                            <div class="progress-bar bg-{{ 'danger' if token.sentiment_info.hype_score > 0.6 else 'warning' if token.sentiment_info.hype_score > 0.3 else 'info' }}" 
+                                            {% set hype_class = 'progress-bar-high-hype' if token.sentiment_info.hype_score > 0.6 else 'progress-bar-medium-hype' if token.sentiment_info.hype_score > 0.3 else 'progress-bar-low-hype' %}
+                                            {% set hype_width = token.sentiment_info.hype_score * 100 %}
+                                            <div class="progress-bar {{ hype_class }}" 
                                                  role="progressbar" 
-                                                 style="width: {{ token.sentiment_info.hype_score * 100 }}%">
+                                                 style="width: {{ hype_width }}%">
                                             </div>
                                         </div>
                                         <small>{{ "%.2f"|format(token.sentiment_info.hype_score) }}</small>

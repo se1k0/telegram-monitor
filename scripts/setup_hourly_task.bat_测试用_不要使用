@@ -1,0 +1,91 @@
+@echo off
+REM 设置每小时自动更新代币数据的计划任务
+
+echo 设置每小时代币数据更新计划任务...
+
+REM 获取当前脚本所在目录
+set SCRIPT_DIR=%~dp0
+set PROJECT_ROOT=%SCRIPT_DIR%\..
+cd /d %PROJECT_ROOT%
+
+REM 设置Python解释器路径和脚本路径
+set PYTHON_PATH=python
+set SCRIPT_PATH=%PROJECT_ROOT%\scripts\hourly_update.py
+set LOG_PATH=%PROJECT_ROOT%\logs\hourly_update.log
+
+REM 创建任务的任务XML文件
+echo ^<?xml version="1.0" encoding="UTF-16"?^> > hourly_task.xml
+echo ^<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"^> >> hourly_task.xml
+echo   ^<RegistrationInfo^> >> hourly_task.xml
+echo     ^<Date^>%date%T%time%^</Date^> >> hourly_task.xml
+echo     ^<Author^>%USERNAME%^</Author^> >> hourly_task.xml
+echo     ^<Description^>每小时自动更新代币数据^</Description^> >> hourly_task.xml
+echo   ^</RegistrationInfo^> >> hourly_task.xml
+echo   ^<Triggers^> >> hourly_task.xml
+echo     ^<TimeTrigger^> >> hourly_task.xml
+echo       ^<Repetition^> >> hourly_task.xml
+echo         ^<Interval^>PT1H^</Interval^> >> hourly_task.xml
+echo         ^<StopAtDurationEnd^>false^</StopAtDurationEnd^> >> hourly_task.xml
+echo       ^</Repetition^> >> hourly_task.xml
+echo       ^<StartBoundary^>%date:~10,4%-%date:~4,2%-%date:~7,2%T%time:~0,2%:%time:~3,2%:00^</StartBoundary^> >> hourly_task.xml
+echo       ^<Enabled^>true^</Enabled^> >> hourly_task.xml
+echo     ^</TimeTrigger^> >> hourly_task.xml
+echo   ^</Triggers^> >> hourly_task.xml
+echo   ^<Principals^> >> hourly_task.xml
+echo     ^<Principal id="Author"^> >> hourly_task.xml
+echo       ^<UserId^>%USERDOMAIN%\%USERNAME%^</UserId^> >> hourly_task.xml
+echo       ^<LogonType^>InteractiveToken^</LogonType^> >> hourly_task.xml
+echo       ^<RunLevel^>LeastPrivilege^</RunLevel^> >> hourly_task.xml
+echo     ^</Principal^> >> hourly_task.xml
+echo   ^</Principals^> >> hourly_task.xml
+echo   ^<Settings^> >> hourly_task.xml
+echo     ^<MultipleInstancesPolicy^>IgnoreNew^</MultipleInstancesPolicy^> >> hourly_task.xml
+echo     ^<DisallowStartIfOnBatteries^>false^</DisallowStartIfOnBatteries^> >> hourly_task.xml
+echo     ^<StopIfGoingOnBatteries^>false^</StopIfGoingOnBatteries^> >> hourly_task.xml
+echo     ^<AllowHardTerminate^>true^</AllowHardTerminate^> >> hourly_task.xml
+echo     ^<StartWhenAvailable^>true^</StartWhenAvailable^> >> hourly_task.xml
+echo     ^<RunOnlyIfNetworkAvailable^>true^</RunOnlyIfNetworkAvailable^> >> hourly_task.xml
+echo     ^<IdleSettings^> >> hourly_task.xml
+echo       ^<StopOnIdleEnd^>false^</StopOnIdleEnd^> >> hourly_task.xml
+echo       ^<RestartOnIdle^>false^</RestartOnIdle^> >> hourly_task.xml
+echo     ^</IdleSettings^> >> hourly_task.xml
+echo     ^<AllowStartOnDemand^>true^</AllowStartOnDemand^> >> hourly_task.xml
+echo     ^<Enabled^>true^</Enabled^> >> hourly_task.xml
+echo     ^<Hidden^>false^</Hidden^> >> hourly_task.xml
+echo     ^<RunOnlyIfIdle^>false^</RunOnlyIfIdle^> >> hourly_task.xml
+echo     ^<DisallowStartOnRemoteAppSession^>false^</DisallowStartOnRemoteAppSession^> >> hourly_task.xml
+echo     ^<UseUnifiedSchedulingEngine^>true^</UseUnifiedSchedulingEngine^> >> hourly_task.xml
+echo     ^<WakeToRun^>false^</WakeToRun^> >> hourly_task.xml
+echo     ^<ExecutionTimeLimit^>PT1H^</ExecutionTimeLimit^> >> hourly_task.xml
+echo     ^<Priority^>7^</Priority^> >> hourly_task.xml
+echo   ^</Settings^> >> hourly_task.xml
+echo   ^<Actions Context="Author"^> >> hourly_task.xml
+echo     ^<Exec^> >> hourly_task.xml
+echo       ^<Command^>%PYTHON_PATH%^</Command^> >> hourly_task.xml
+echo       ^<Arguments^>%SCRIPT_PATH% --limit 500 ^>^> %LOG_PATH% 2^>^&1^</Arguments^> >> hourly_task.xml
+echo       ^<WorkingDirectory^>%PROJECT_ROOT%^</WorkingDirectory^> >> hourly_task.xml
+echo     ^</Exec^> >> hourly_task.xml
+echo   ^</Actions^> >> hourly_task.xml
+echo ^</Task^> >> hourly_task.xml
+
+REM 创建任务
+echo 正在创建计划任务...
+schtasks /create /tn "TelegramMonitor_HourlyUpdate" /xml hourly_task.xml
+
+REM 删除临时XML文件
+del hourly_task.xml
+
+REM 确认任务已创建
+schtasks /query /tn "TelegramMonitor_HourlyUpdate"
+
+echo.
+echo 计划任务设置完成!
+echo 任务名称: TelegramMonitor_HourlyUpdate
+echo 执行频率: 每小时一次
+echo 执行脚本: %SCRIPT_PATH%
+echo 日志文件: %LOG_PATH%
+echo.
+echo 您可以通过任务计划程序查看和管理该任务。
+echo 可以在日志文件中查看任务执行情况。
+echo.
+pause 

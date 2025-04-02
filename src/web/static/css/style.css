@@ -1,5 +1,5 @@
 :root {
-  /* 色彩组一: 高级感配色 */
+  /* 色彩组一: 高级感配色 - 保持主要配色方案 */
   --primary-color: #424874;
   --primary-light: #A6B1E1;
   --secondary-color: #DCD6F7;
@@ -11,7 +11,7 @@
   --alt-color-3: #FCBAD3;
   --alt-color-4: #FFFFD2;
   
-  /* 功能性颜色 - 使用已有颜色进行映射 */
+  /* 功能性颜色 - 使用高级配色方案进行映射 */
   --success-color: var(--alt-color-2);  /* 使用紫色代替绿色 */
   --warning-color: var(--alt-color-3);  /* 使用粉色代替橙色 */
   --danger-color: var(--primary-color);  /* 使用深蓝色代替红色 */
@@ -24,8 +24,8 @@
 }
 
 body {
-  font-family: 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background-color: var(--accent-color);
+  font-family: 'Inter', sans-serif;
+  background-color: #f5f5f5;
   color: var(--primary-color);
 }
 
@@ -261,6 +261,7 @@ footer a {
   transition: box-shadow 0.3s ease;
   display: flex;
   align-items: center;
+  background-color: var(--accent-color);
 }
 
 .status-card:hover {
@@ -271,6 +272,7 @@ footer a {
   font-size: 2rem;
   margin-right: 1rem;
   opacity: 0.8;
+  color: var(--primary-color);
 }
 
 .status-card .status-value {
@@ -479,6 +481,7 @@ footer a {
 .stats-card {
   text-align: center;
   padding: 1.5rem;
+  background-color: var(--accent-color);
 }
 
 .stats-card:hover {
@@ -495,6 +498,221 @@ footer a {
   font-size: 0.9rem;
   color: var(--primary-light);
   margin-top: 0.5rem;
+}
+
+/* 行高亮动画 */
+.highlight-row {
+  animation: highlight 2s ease-in-out;
+}
+
+@keyframes highlight {
+  0% {
+    background-color: rgba(166, 177, 225, 0.3);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* 自定义表格行样式 */
+.table-profit {
+  background-color: rgba(170, 150, 218, 0.2) !important; /* 使用alt-color-2的透明版本 */
+}
+
+.table-loss {
+  background-color: rgba(252, 186, 211, 0.2) !important; /* 使用alt-color-3的透明版本 */
+}
+
+/* 头部样式 */
+header {
+  padding: 15px;
+  background-color: var(--accent-color);
+  box-shadow: 0 2px 4px rgba(66, 72, 116, 0.05);
+  margin-bottom: 1.5rem;
+  border-radius: 8px;
+}
+
+.logo-text {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--primary-color);
+}
+
+/* 搜索区域 */
+.search-container {
+  background-color: var(--accent-color);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(66, 72, 116, 0.05);
+  padding: 15px;
+  margin-bottom: 1.5rem;
+}
+
+/* 代币行样式 */
+.token-row {
+  border: 1px solid var(--secondary-color);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  background-color: var(--accent-color);
+  box-shadow: var(--card-shadow);
+  transition: all 0.2s;
+  padding: 1rem 0.5rem;
+}
+
+.token-row:hover {
+  box-shadow: 0 4px 8px rgba(66, 72, 116, 0.1);
+}
+
+/* 代币图标 */
+.token-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.token-social-icon {
+  width: 24px;
+  height: 24px;
+  margin-right: 5px;
+  transition: transform 0.2s;
+}
+
+.token-social-icon:hover {
+  transform: scale(1.1);
+}
+
+/* 代币地址样式 */
+.token-address {
+  font-size: 0.8rem;
+  color: var(--primary-light);
+  cursor: pointer;
+}
+
+.token-address:hover {
+  color: var(--primary-color);
+}
+
+/* 统计标签和数值 */
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--primary-light);
+}
+
+.stat-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+/* 修改为传统的金融色彩表示 */
+.positive {
+    color: #1cb01c; /* 鲜明的绿色 */
+}
+.negative {
+    color: #e74c3c; /* 鲜明的红色 */
+}
+
+.point-btn {
+  cursor: pointer;
+  color: var(--primary-color);
+  transition: color 0.2s;
+}
+
+.point-btn:hover {
+  color: var(--primary-light);
+  text-decoration: underline;
+}
+
+/* 表头样式 */
+.table-header {
+  background-color: var(--primary-color);
+  color: var(--accent-color);
+  border-radius: 8px;
+  padding: 0.75rem 0;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+/* 响应式调整 */
+@media (max-width: 1200px) {
+  .stat-value {
+    font-size: 0.9rem;
+  }
+  
+  .stat-label {
+    font-size: 0.7rem;
+  }
+}
+
+@media (max-width: 992px) {
+  .token-row {
+    font-size: 0.9rem;
+    padding: 0.75rem 0.25rem;
+  }
+  
+  .token-icon {
+    width: 36px;
+    height: 36px;
+  }
+  
+  .token-social-icon {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .d-sm-none {
+    display: none;
+  }
+  
+  .col-sm-4 {
+    flex: 0 0 auto;
+    width: 33.33333%;
+  }
+}
+
+/* 加载动画 */
+.loading {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid rgba(66, 72, 116, 0.1);
+  border-radius: 50%;
+  border-top-color: var(--primary-color);
+  animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 提示框样式 */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1050;
+}
+
+.toast {
+  background-color: var(--accent-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(66, 72, 116, 0.15);
+  margin-bottom: 10px;
+  overflow: hidden;
+  max-width: 350px;
+}
+
+.toast-header {
+  padding: 0.5rem 0.75rem;
+  background-color: var(--secondary-color);
+  border-bottom: 1px solid var(--primary-light);
+}
+
+.toast-body {
+  padding: 0.75rem;
+  color: var(--primary-color);
 }
 
 /* 深色模式样式 */
@@ -661,25 +879,18 @@ input:checked + .slider:before {
   border-top-color: var(--primary-color);
 }
 
-/* 行高亮动画 */
-.highlight-row {
-  animation: highlight 2s ease-in-out;
+/* 统计数值颜色 */
+.stat-value {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--primary-color);
 }
 
-@keyframes highlight {
-  0% {
-    background-color: rgba(166, 177, 225, 0.3);
-  }
-  100% {
-    background-color: transparent;
-  }
+/* 价格变化颜色 */
+.positive-change {
+  color: #4caf50 !important; /* 绿色表示上涨 */
 }
 
-/* 自定义表格行样式 */
-.table-profit {
-  background-color: rgba(170, 150, 218, 0.2) !important; /* 使用alt-color-2的透明版本 */
-}
-
-.table-loss {
-  background-color: rgba(252, 186, 211, 0.2) !important; /* 使用alt-color-3的透明版本 */
+.negative-change {
+  color: #f44336 !important; /* 红色表示下跌 */
 } 

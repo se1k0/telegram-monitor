@@ -433,6 +433,32 @@ class ChannelManager:
                                     is_group = True
                                     is_supergroup = False
                                 
+                                # 获取频道/群组的成员数量
+                                current_member_count = 0
+                                try:
+                                    if is_group:
+                                        if is_supergroup:
+                                            # 超级群组
+                                            full_channel = await self.client(GetFullChannelRequest(channel=entity))
+                                            current_member_count = getattr(full_channel.full_chat, 'participants_count', 0)
+                                        else:
+                                            # 普通群组
+                                            full_chat = await self.client(GetFullChatRequest(chat_id=entity.id))
+                                            current_member_count = getattr(full_chat.full_chat, 'participants_count', 0)
+                                    else:
+                                        # 普通频道
+                                        full_channel = await self.client(GetFullChannelRequest(channel=entity))
+                                        current_member_count = getattr(full_channel.full_chat, 'participants_count', 0)
+                                    
+                                    # 更新频道成员数
+                                    if current_member_count > 0 and channel.member_count != current_member_count:
+                                        logger.info(f"更新频道 {channel_identifier} 的成员数: {channel.member_count} -> {current_member_count}")
+                                        channel.member_count = current_member_count
+                                        channel.last_updated = datetime.now()
+                                        session.commit()
+                                except Exception as e:
+                                    logger.warning(f"获取频道 {channel_identifier} 的成员数时出错: {str(e)}")
+                                
                                 # 如果频道类型有变化，更新数据库
                                 if channel.is_group != is_group or channel.is_supergroup != is_supergroup:
                                     logger.info(f"更新频道 {channel_identifier} 的类型信息: 群组={is_group}, 超级群组={is_supergroup}")

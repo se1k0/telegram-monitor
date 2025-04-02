@@ -6,6 +6,7 @@
                 <th>链</th>
                 <th>当前市值</th>
                 <th>涨跌幅</th>
+                <th>持有者数量</th>
                 <th>首次推荐</th>
                 <th>操作</th>
             </tr>
@@ -32,6 +33,13 @@
                     <td class="{% if token.change_pct_value and token.change_pct_value > 0 %}text-success{% elif token.change_pct_value and token.change_pct_value < 0 %}text-danger{% endif %}">
                         {{ token.change_percentage }}
                     </td>
+                    <td>
+                        {% if token.holders_count %}
+                            {{ token.holders_count }}
+                        {% else %}
+                            <span class="text-muted">未知</span>
+                        {% endif %}
+                    </td>
                     <td>{{ token.first_update_formatted }}</td>
                     <td>
                         <div class="btn-group">
@@ -50,7 +58,7 @@
                 {% endfor %}
             {% else %}
                 <tr>
-                    <td colspan="6" class="text-center">没有找到代币数据</td>
+                    <td colspan="7" class="text-center">没有找到代币数据</td>
                 </tr>
             {% endif %}
         </tbody>

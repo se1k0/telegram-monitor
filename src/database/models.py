@@ -20,6 +20,10 @@ from sqlalchemy import inspect, text
 
 import logging
 
+import platform
+
+from sqlalchemy.pool import QueuePool
+
 
 
 Base = declarative_base()
@@ -32,9 +36,15 @@ sqlite_connect_args = {
 
     'check_same_thread': False,
 
-    'timeout': 30  # 设置SQLite的连接超时时间为30秒
+    'timeout': 60  # 增加SQLite的连接超时时间至60秒，提高并发能力
 
 }
+
+
+
+# 检测操作系统环境
+
+is_windows = platform.system() == 'Windows'
 
 
 
@@ -48,7 +58,17 @@ if config.DATABASE_URI.startswith('sqlite:'):
 
         config.DATABASE_URI, 
 
-        connect_args=sqlite_connect_args
+        connect_args=sqlite_connect_args,
+
+        # 添加更多针对Windows环境的优化参数
+
+        echo=False,  # 禁用SQL日志，减少开销
+
+        poolclass=QueuePool if not is_windows else None,  # Windows下不使用连接池，避免锁问题
+
+        pool_pre_ping=True,  # 自动检测断开的连接
+
+        pool_recycle=3600    # 一小时后回收连接
 
     )
 
@@ -62,15 +82,31 @@ if config.DATABASE_URI.startswith('sqlite:'):
 
         cursor = dbapi_connection.cursor()
 
+        # 使用WAL模式（Windows中也适用）
+
         cursor.execute("PRAGMA journal_mode=WAL")
 
-        cursor.execute("PRAGMA synchronous=NORMAL")
+        # Windows环境下使用更保守的设置
 
-        cursor.execute("PRAGMA cache_size=-64000")
+        if is_windows:
+
+            cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡安全性和性能
+
+            cursor.execute("PRAGMA cache_size=-32000")   # 32MB缓存，减少内存使用
+
+        else:
+
+            cursor.execute("PRAGMA synchronous=NORMAL")
+
+            cursor.execute("PRAGMA cache_size=-64000")   # 约64MB缓存
 
         cursor.execute("PRAGMA foreign_keys=ON")
 
-        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA busy_timeout=60000")      # 增加至60秒，减少锁错误
+
+        cursor.execute("PRAGMA temp_store=MEMORY")       # 使用内存存储临时表
+
+        cursor.execute("PRAGMA mmap_size=268435456")     # 使用内存映射提高性能(256MB)
 
         cursor.close()
 
@@ -118,9 +154,7 @@ class Message(Base):
 
     media_path = Column(String(255))
 
-    is_group = Column(Boolean, default=False)  # 是否来自群组
-
-    is_supergroup = Column(Boolean, default=False)  # 是否来自超级群组
+    channel_id = Column(Integer)  # 添加channel_id字段，替代is_group和is_supergroup
 
     
 
@@ -152,6 +186,8 @@ class Token(Base):
 
     market_cap = Column(Float)
 
+    market_cap_1h = Column(Float)
+
     market_cap_formatted = Column(String(50))
 
     first_market_cap = Column(Float)
@@ -174,7 +210,7 @@ class Token(Base):
 
     from_group = Column(Boolean, default=False)  # 是否来自群组
 
-    channel_name = Column(String(255))  # 添加channel_name字段
+    channel_id = Column(Integer)  # 添加channel_id字段，用于替代channel_name
     
 
     # 增强字段 - 价格和市值趋势分析
@@ -189,7 +225,27 @@ class Token(Base):
 
     volume_24h = Column(Float)                # 24小时交易量
 
+    volume_1h = Column(Float)                 # 1小时交易量
+
     liquidity = Column(Float)                 # 流动性
+
+    holders_count = Column(Integer)           # 代币持有者数量
+
+    
+
+    # 新增字段 - 1小时交易数据
+
+    buys_1h = Column(Integer, default=0)      # 1小时买入交易数
+
+    sells_1h = Column(Integer, default=0)     # 1小时卖出交易数
+
+    
+
+    # 新增字段 - 代币传播统计
+
+    spread_count = Column(Integer, default=0)  # 代币传播次数（在电报群中被提及的总次数）
+
+    community_reach = Column(Integer, default=0)  # 代币社群覆盖人数（覆盖的总人数）
 
     
 
@@ -213,6 +269,26 @@ class Token(Base):
 
         UniqueConstraint('chain', 'contract', name='uq_chain_contract'),
 
+    )
+
+
+
+class TokensMark(Base):
+    """代币标记表，记录每次监听到代币信息的详细数据"""
+    __tablename__ = 'tokens_mark'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chain = Column(String(10), nullable=False)
+    token_symbol = Column(String(50))
+    contract = Column(String(255), nullable=False)
+    message_id = Column(Integer)
+    market_cap = Column(Float)
+    mention_time = Column(DateTime, nullable=False, default=datetime.now)
+    channel_id = Column(Integer)
+    
+    __table_args__ = (
+        Index('idx_tokens_mark_contract', 'chain', 'contract'),
+        Index('idx_tokens_mark_time', 'mention_time'),
     )
 
 
@@ -350,121 +426,95 @@ class PromotionInfo:
 
 
 def _check_and_add_columns():
-
     """检查表中是否存在所需列，如果不存在则添加"""
-
     logger = logging.getLogger(__name__)
-
     
-
     try:
-
+        # 确保数据目录存在
+        if config.DATABASE_URI.startswith('sqlite:///'):
+            file_path = config.DATABASE_URI.replace('sqlite:///', '')
+            # 获取绝对路径
+            file_path = os.path.abspath(file_path)
+            dir_name = os.path.dirname(file_path)
+            if dir_name and not os.path.exists(dir_name):
+                os.makedirs(dir_name, exist_ok=True)
+                logger.info(f"创建数据库目录: {dir_name}")
+                
         inspector = inspect(engine)
-
         connection = engine.connect()
-
         transaction = connection.begin()
-
         
-
         # 获取tokens表的现有列
-
         if 'tokens' in inspector.get_table_names():
-
             existing_columns = {col['name'] for col in inspector.get_columns('tokens')}
-
             
-
             # 定义需要检查的列及其类型
-
             columns_to_check = {
-
                 'price': 'FLOAT',
-
                 'first_price': 'FLOAT',
-
                 'price_change_24h': 'FLOAT',
-
                 'price_change_7d': 'FLOAT',
-
                 'volume_24h': 'FLOAT',
-
+                'volume_1h': 'FLOAT',  # 添加volume_1h字段检查
                 'liquidity': 'FLOAT',
-
                 'sentiment_score': 'FLOAT',
-
                 'positive_words': 'TEXT',
-
                 'negative_words': 'TEXT',
-
                 'is_trending': 'BOOLEAN',
-
                 'hype_score': 'FLOAT',
-
                 'risk_level': 'VARCHAR(20)',
-
                 'from_group': 'BOOLEAN',  # 添加from_group字段
-
-                'channel_name': 'VARCHAR(255)'  # 添加channel_name字段
-
+                'channel_id': 'INTEGER',  # 添加channel_id字段
+                'holders_count': 'INTEGER',  # 添加holders_count字段
+                'buys_1h': 'INTEGER',  # 添加buys_1h字段
+                'sells_1h': 'INTEGER',  # 添加sells_1h字段
+                'spread_count': 'INTEGER DEFAULT 0',  # 添加代币传播次数字段
+                'community_reach': 'INTEGER DEFAULT 0'  # 添加代币社群覆盖人数字段
             }
-
             
-
             # 检查并添加缺失的列
-
             for col_name, col_type in columns_to_check.items():
-
                 if col_name not in existing_columns:
-
                     # 使用原始SQL添加列，因为SQLAlchemy不直接支持添加列
-
                     alter_stmt = f"ALTER TABLE tokens ADD COLUMN {col_name} {col_type}"
-
                     connection.execute(text(alter_stmt))
-
                     logger.info(f"已添加列 {col_name} 到tokens表")
-
         
-
         # 检查messages表
-
         if 'messages' in inspector.get_table_names():
-
             existing_columns = {col['name'] for col in inspector.get_columns('messages')}
-
             
-
-            # 定义需要检查的列及其类型
-
+            # 定义需要检查的列及其类型 - channel_id 字段已替代 is_group 和 is_supergroup
             messages_columns_to_check = {
-
-                'is_group': 'BOOLEAN',  # 添加is_group字段
-
-                'is_supergroup': 'BOOLEAN'  # 添加is_supergroup字段
-
+                'channel_id': 'INTEGER'  # 确保存在 channel_id 字段
             }
-
             
-
             # 检查并添加缺失的列
-
             for col_name, col_type in messages_columns_to_check.items():
-
                 if col_name not in existing_columns:
-
                     # 使用原始SQL添加列
-
                     alter_stmt = f"ALTER TABLE messages ADD COLUMN {col_name} {col_type}"
-
                     connection.execute(text(alter_stmt))
-
                     logger.info(f"已添加列 {col_name} 到messages表")
-
         
-
+        # 检查tokens_mark表
+        if 'tokens_mark' in inspector.get_table_names():
+            existing_columns = {col['name'] for col in inspector.get_columns('tokens_mark')}
+            
+            # 定义需要检查的列及其类型
+            tokens_mark_columns_to_check = {
+                'channel_id': 'INTEGER'  # 确保存在 channel_id 字段
+            }
+            
+            # 检查并添加缺失的列
+            for col_name, col_type in tokens_mark_columns_to_check.items():
+                if col_name not in existing_columns:
+                    # 添加列
+                    alter_stmt = f"ALTER TABLE tokens_mark ADD COLUMN {col_name} {col_type}"
+                    connection.execute(text(alter_stmt))
+                    logger.info(f"已添加列 {col_name} 到tokens_mark表")
+        
         # 检查telegram_channels表
-
         if 'telegram_channels' in inspector.get_table_names():
             existing_columns = {col['name'] for col in inspector.get_columns('telegram_channels')}
             
@@ -472,7 +522,8 @@ def _check_and_add_columns():
             channels_columns_to_check = {
                 'channel_id': 'INTEGER',
                 'is_group': 'BOOLEAN DEFAULT 0',  # 添加is_group字段，默认为0 (False)
-                'is_supergroup': 'BOOLEAN DEFAULT 0'  # 添加is_supergroup字段，默认为0 (False)
+                'is_supergroup': 'BOOLEAN DEFAULT 0',  # 添加is_supergroup字段，默认为0 (False)
+                'member_count': 'INTEGER'  # 确保存在成员数量字段
             }
             
             # 检查并添加缺失的列
@@ -483,25 +534,15 @@ def _check_and_add_columns():
                     connection.execute(text(alter_stmt))
                     logger.info(f"已添加列 {col_name} 到telegram_channels表")
         
-
         transaction.commit()
-
         
-
     except Exception as e:
-
         logger.error(f"检查和添加列时出错: {str(e)}")
-
-        if transaction:
-
+        if 'transaction' in locals() and transaction:
             transaction.rollback()
-
         raise
-
     finally:
-
-        if connection:
-
+        if 'connection' in locals() and connection:
             connection.close()
 
 
@@ -511,7 +552,6 @@ def init_db():
     """初始化数据库和所需目录"""
 
     # 确保数据目录存在
-
     os.makedirs('./data', exist_ok=True)
 
     
@@ -524,11 +564,17 @@ def init_db():
 
         file_path = db_path.replace('sqlite:///', '')
 
+        # 获取绝对路径，处理相对路径问题
+        file_path = os.path.abspath(file_path)
+        
         dir_name = os.path.dirname(file_path)
 
         if dir_name and not os.path.exists(dir_name):
 
             os.makedirs(dir_name, exist_ok=True)
+            
+        print(f"数据库文件路径: {file_path}")
+        print(f"数据库目录: {dir_name}")
 
     
 

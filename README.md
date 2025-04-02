@@ -12,6 +12,216 @@
 - 支持同时监控频道和群组聊天
 - SQLite数据库性能优化，支持并发访问
 
+## 2025/04/01新增功能
+
+### 增强的DAS API功能
+
+- 优化了Digital Asset Standard (DAS) API模块，用于获取Solana代币账户和持有者信息
+- 新增了`get_token_holders_info`函数，获取代币前10大持有者及占比分析
+- 改进了API响应解析，更准确地处理DAS API的返回结构
+- 添加了更全面的错误处理和日志记录功能
+- 优化速率限制控制，防止API请求过频被拒绝
+
+使用示例：
+
+```python
+# 获取代币持有者详细信息
+from src.api.das_api import get_token_holders_info
+count, top_holders = get_token_holders_info("your_mint_address")
+
+# 输出前10大持有者信息
+for i, holder in enumerate(top_holders):
+    print(f"持有者 {i+1}: {holder['address']}")
+    print(f"持有数量: {holder['amount']}")
+    print(f"占比: {holder['percentage']}%")
+```
+
+### 每小时自动更新功能
+
+- 新增了每小时自动更新代币数据的功能，实现实时数据监控
+- 提供了Windows系统下的计划任务设置脚本，便于自动化部署
+- 智能处理API速率限制，优化请求序列，避免被识别为机器人
+- 实现了错误处理与重试机制，确保数据更新可靠性
+- 新增详细的日志记录，便于故障排查和性能监控
+
+使用示例：
+
+```bash
+# 手动执行更新脚本
+python scripts/hourly_update.py --limit 500
+
+# 设置计划任务（Windows系统）
+scripts/setup_hourly_task.bat
+```
+
+### 新增代币社群覆盖数据自动更新工具
+
+- 实现了代币社群覆盖人数(community_reach)的自动计算与更新
+- 基于电报频道和群组的成员数量动态计算覆盖范围
+- 支持单个代币或批量更新所有代币的社群覆盖数据
+- 命令行工具简单易用，支持参数自定义
+
+使用示例：
+
+```bash
+# 更新特定代币的社群覆盖人数
+python scripts/update_community_reach.py --token SOL
+
+# 更新所有代币的社群覆盖人数
+python scripts/update_community_reach.py
+```
+
+### 代币标记表结构优化
+
+- 新增了`tokens_mark`表专门记录代币被提及信息
+- 优化了表结构设计，提高查询效率
+- 自动创建和修复数据库结构，确保系统兼容性
+- 改进了索引设计，加速常用查询操作
+
+系统会自动检查并创建所需表结构，如需手动创建可执行：
+```bash
+python scripts/create_tokens_mark_table.py
+```
+
+### Web前端界面增强
+
+- 优化了主页的代币列表显示，添加了社群覆盖人数和传播次数的显示列
+- 新增了代币详情页中的市值变化图表，直观展示代币市值随时间的变化
+- 改进了消息详情页，增加了相关代币列表和媒体文件预览功能
+- 新增了代币在特定频道的提及详情页面，包含提及历史记录和市值变化图表
+- 优化了页面响应速度和用户交互体验
+- 增强了移动端适配，提供更好的移动设备访问体验
+
+### API功能扩展
+
+- 增强了token市场历史数据API，支持更灵活的时间范围查询和数据聚合
+- 优化了API响应结构，提供更规范和一致的数据格式
+- 增加了API缓存机制，减少重复请求，提高响应速度
+- 实现了代币详情数据的综合API，一次请求即可获取代币的所有相关信息
+- 添加了错误处理和参数验证，提高API稳定性和安全性
+
+使用示例：
+
+```
+# 获取代币市场历史数据
+GET /api/token_market_history/{chain}/{contract}
+
+# 返回示例
+{
+  "token_symbol": "SOL",
+  "contract": "So11111111111111111111111111111111111111112",
+  "history": [
+    {
+      "date": "2025-03-25T12:00:00",
+      "market_cap": 45000000000,
+      "volume_24h": 1500000000,
+      "buys_1h": 145,
+      "sells_1h": 120
+    },
+    ...
+  ]
+}
+```
+
+## 2025/03/27新增功能
+
+### 新增代币传播统计功能
+
+- 在数据库中新增了`spread_count`和`community_reach`字段，分别记录代币传播次数和社群覆盖人数
+- 代币传播次数：统计该代币在电报群共被提及的总次数
+- 代币社群覆盖人数：统计该代币在所有电报群覆盖的总人数
+- 智能处理重复统计问题：同一个群内多次提及同一代币时，不重复计算群成员数
+- 动态调整覆盖人数：当群组成员数量发生变化时，自动更新社群覆盖人数统计
+- 提供数据库升级脚本，自动处理历史数据的传播次数和覆盖人数统计
+
+**首次使用注意**：在使用此功能前，需要更新数据库结构：
+```bash
+# 添加代币传播统计相关字段并初始化历史数据
+python scripts/add_token_spread_columns.py
+```
+
+## 2025/03/25新增功能
+
+### 新增DEX Screener API模块
+
+- 实现了DEX Screener的所有API接口，用于获取代币和交易对信息
+- 支持获取最新代币档案和推广代币信息
+- 支持搜索交易对和查询代币流动池
+- 支持查询多个代币地址的交易对信息
+- 完整的错误处理和速率限制遵循
+- 提供单元测试和使用示例
+
+使用示例：
+
+```python
+# 搜索SOL/USDC交易对
+from src.api.dex_screener_api import search_pairs
+results = search_pairs("SOL/USDC")
+
+# 获取SOL代币的流动池
+from src.api.dex_screener_api import get_token_pools
+pools = get_token_pools("solana", "So11111111111111111111111111111111111111112")
+```
+
+更多详情请查看 `src/api/README.md`。
+
+### 新增代币1小时交易数据功能
+
+- 在数据库中新增了`buys_1h`和`sells_1h`字段，记录代币1小时内的买入卖出交易数
+- 通过DEX Screener API获取代币在所有交易对中的交易数据并汇总
+- 提供了独立更新交易数据和综合更新市场+交易数据的多种方式
+- 支持单个代币更新、批量更新和全量更新
+- 新增命令行工具`update_txn_data.py`方便定期更新交易数据
+
+**首次使用注意**：在使用此功能前，需要更新数据库结构：
+```bash
+# 自动修复数据库结构（添加新列）
+python repair_database.py
+```
+
+使用示例：
+
+```bash
+# 更新单个代币的交易数据
+python scripts/update_txn_data.py token SOL So11111111111111111111111111111111111111112
+
+# 更新所有代币的交易数据
+python scripts/update_txn_data.py all --limit 100
+```
+
+更多详情请查看 `documentation/txn_data_update.md`。
+
+### 统一的代币数据更新工具
+
+为了提高代币数据更新的便捷性和效率，我们整合了原有的多个更新脚本，创建了一个统一的代币数据更新工具：
+
+- 集成了市场数据更新、交易数据更新和交易量数据更新功能
+- 支持单个代币、批量代币和全量代币的更新
+- 支持选择性更新特定类型的数据
+- 支持定时任务和循环执行，便于监控数据变化
+- 自动检查并修复数据库结构
+
+使用示例：
+
+```bash
+# 更新单个代币的全部数据
+python scripts/token_data_updater.py token SOL So11111111111111111111111111111111111111112
+
+# 仅更新特定代币的市场数据
+python scripts/token_data_updater.py token ETH 0x1f9840a85d5af5bf1d1762f925bdaddc4201f984 --type market
+
+# 更新多个代币的全部数据
+python scripts/token_data_updater.py symbols SOL ETH BTC
+
+# 更新所有代币数据（最多100个）
+python scripts/token_data_updater.py all --limit 100
+
+# 使用循环执行功能监控数据，每30分钟更新一次，连续执行12小时
+python scripts/token_data_updater.py all --limit 50 --repeat 24 --interval 30
+```
+
+详细使用说明请查看 `scripts/README_TOKEN_UPDATER.md`。
+
 ## 2025/03/01新增功能
 
 ### 更新了WEB前端页面
@@ -319,3 +529,12 @@ session.bulk_save_objects(objects, return_defaults=False)
 - SQLAlchemy 2.0.20+
 - Flask 2.3.3+
 - 其他依赖见 requirements.txt
+
+### 外部API集成
+
+本项目集成了多个外部API，用于获取和分析加密货币数据：
+
+- **DEX Screener API**: 提供DEX交易对、代币信息和市场数据
+- **DAS API**: 提供Solana代币账户和持有者信息
+
+详细API文档和使用方法请参考[src/api/README.md](src/api/README.md)文件。

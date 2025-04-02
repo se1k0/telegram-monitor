@@ -2,6 +2,24 @@
 
 {% block title %}统计数据{% endblock %}
 
+{% block head_extra %}
+<style>
+    .stats-icon {
+        font-size: 2rem;
+    }
+    .stats-card {
+        transition: transform 0.2s ease;
+    }
+    .stats-card:hover {
+        transform: translateY(-5px);
+    }
+    .chart-container {
+        position: relative;
+        height: 300px;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container mt-4">
     <!-- 统计卡片区域 -->
@@ -9,7 +27,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-broadcast-pin mb-2" style="font-size: 2rem; color: #424874;"></i>
+                    <i class="bi bi-broadcast-pin mb-2 stats-icon" style="color: var(--primary-color);"></i>
                     <div class="stats-value">{{ active_channels_count }}</div>
                     <div class="stats-label">活跃频道</div>
                 </div>
@@ -18,7 +36,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-chat-left-text mb-2" style="font-size: 2rem; color: #A6B1E1;"></i>
+                    <i class="bi bi-chat-left-text mb-2 stats-icon" style="color: var(--primary-light);"></i>
                     <div class="stats-value">{{ message_count }}</div>
                     <div class="stats-label">收集消息</div>
                 </div>
@@ -27,7 +45,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-currency-bitcoin mb-2" style="font-size: 2rem; color: #AA96DA;"></i>
+                    <i class="bi bi-currency-bitcoin mb-2 stats-icon" style="color: var(--alt-color-2);"></i>
                     <div class="stats-value">{{ token_count }}</div>
                     <div class="stats-label">追踪代币</div>
                 </div>
@@ -36,7 +54,7 @@
         <div class="col-md-3">
             <div class="card stats-card bg-light">
                 <div class="card-body text-center">
-                    <i class="bi bi-clock-history mb-2" style="font-size: 2rem; color: #FCBAD3;"></i>
+                    <i class="bi bi-clock-history mb-2 stats-icon" style="color: var(--alt-color-3);"></i>
                     <div class="stats-value">{{ last_update }}</div>
                     <div class="stats-label">最后更新</div>
                 </div>
@@ -141,10 +159,21 @@
             return;
         }
         
-        // 使用指定的高级感配色
+        // 获取CSS变量值作为图表颜色
+        const getComputedStyle = window.getComputedStyle(document.documentElement);
+        const primaryColor = getComputedStyle.getPropertyValue('--primary-color').trim();
+        const primaryLight = getComputedStyle.getPropertyValue('--primary-light').trim();
+        const secondaryColor = getComputedStyle.getPropertyValue('--secondary-color').trim();
+        const accentColor = getComputedStyle.getPropertyValue('--accent-color').trim();
+        const altColor1 = getComputedStyle.getPropertyValue('--alt-color-1').trim();
+        const altColor2 = getComputedStyle.getPropertyValue('--alt-color-2').trim();
+        const altColor3 = getComputedStyle.getPropertyValue('--alt-color-3').trim();
+        const altColor4 = getComputedStyle.getPropertyValue('--alt-color-4').trim();
+        
+        // 使用应用配色方案
         const colors = [
-            '#F4EEFF', '#DCD6F7', '#A6B1E1', '#424874',  // 色彩组一
-            '#A8D8EA', '#AA96DA', '#FCBAD3', '#FFFFD2'   // 色彩组二
+            primaryColor, primaryLight, secondaryColor, accentColor,
+            altColor1, altColor2, altColor3, altColor4
         ];
         
         // 如果链数量超过颜色数量，循环使用颜色

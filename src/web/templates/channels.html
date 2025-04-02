@@ -2,42 +2,91 @@
 
 {% block title %}频道管理{% endblock %}
 
+{% block head_extra %}
+<style>
+.channel-header {
+    background-color: var(--alt-color-2) !important; 
+    color: var(--accent-color);
+}
+.update-button {
+    color: var(--primary-color); 
+    font-weight: 500;
+}
+.chain-badge {
+    background-color: var(--alt-color-2); 
+    color: var(--accent-color);
+}
+.status-badge-active {
+    background-color: var(--alt-color-2); 
+    color: var(--accent-color);
+}
+.status-badge-inactive {
+    background-color: var(--secondary-color); 
+    color: var(--primary-color);
+}
+.table td {
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+.badge {
+    font-size: 0.85em;
+    font-weight: 500;
+    padding: 0.4em 0.6em;
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="container mt-4">
+<div class="container-fluid mt-4">
     <div class="row">
-        <div class="col-md-8">
+        <div class="col-md-10">
             <div class="card">
-                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">频道列表</h5>
-                    <a href="/channels/update" class="btn btn-sm btn-light">更新频道状态</a>
+                <div class="card-header bg-secondary d-flex justify-content-between align-items-center channel-header">
+                    <h5 class="mb-0"><strong>频道列表</strong></h5>
+                    <a href="/channels/update" class="btn btn-sm btn-light update-button">更新频道状态</a>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-striped table-hover mb-0">
                             <thead>
                                 <tr>
-                                    <th>ID</th>
-                                    <th>频道名称</th>
-                                    <th>用户名</th>
-                                    <th>链</th>
-                                    <th>状态</th>
-                                    <th>操作</th>
+                                    <th style="width: 12%">Channel ID</th>
+                                    <th style="width: 20%">频道名称</th>
+                                    <th style="width: 12%">频道用户名</th>
+                                    <th style="width: 8%">群人数</th>
+                                    <th style="width: 8%">链</th>
+                                    <th style="width: 12%">加入社群</th>
+                                    <th style="width: 8%">状态</th>
+                                    <th style="width: 15%">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for channel in channels %}
                                 <tr>
-                                    <td>{{ channel.id }}</td>
+                                    <td>{{ channel.channel_id }}</td>
                                     <td>{{ channel.channel_name }}</td>
                                     <td>{{ channel.channel_username }}</td>
+                                    <td>{{ channel.member_count or 0 }}</td>
                                     <td>
-                                        <span class="badge bg-primary">{{ channel.chain }}</span>
+                                        <span class="badge chain-badge">{{ channel.chain }}</span>
+                                    </td>
+                                    <td>
+                                        {% if channel.channel_username %}
+                                        <a href="https://t.me/{{ channel.channel_username }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                                            <i class="bi bi-telegram"></i> 加入
+                                        </a>
+                                        {% else %}
+                                        <small class="text-muted">暂无邀请链接</small>
+                                        {% endif %}
                                     </td>
                                     <td>
                                         {% if channel.is_active %}
-                                        <span class="badge bg-secondary">活跃</span>
+                                        <span class="badge status-badge-active">活跃</span>
                                         {% else %}
-                                        <span class="badge bg-secondary opacity-50">未活跃</span>
+                                        <span class="badge status-badge-inactive">未活跃</span>
                                         {% endif %}
                                     </td>
                                     <td>
@@ -62,21 +111,25 @@
             </div>
         </div>
         
-        <div class="col-md-4">
+        <div class="col-md-2">
             <div class="card">
                 <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">添加新频道</h5>
                 </div>
                 <div class="card-body">
-                    <form action="/channels/add" method="POST">
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <strong>该功能暂未开放</strong>
+                    </div>
+                    <form action="/channels/add" method="POST" onsubmit="return false;">
                         <div class="mb-3">
                             <label for="channel_username" class="form-label">频道用户名</label>
-                            <input type="text" class="form-control" id="channel_username" name="channel_username" required>
+                            <input type="text" class="form-control" id="channel_username" name="channel_username" disabled>
                             <div class="form-text">输入不带@的频道用户名</div>
                         </div>
                         <div class="mb-3">
                             <label for="chain" class="form-label">关联的链</label>
-                            <select class="form-select" id="chain" name="chain" required>
+                            <select class="form-select" id="chain" name="chain" disabled>
                                 <option value="SOL">Solana</option>
                                 <option value="ETH">Ethereum</option>
                                 <option value="BSC">BSC</option>
@@ -84,7 +137,7 @@
                                 <option value="OTHER">其他</option>
                             </select>
                         </div>
-                        <button type="submit" class="btn btn-primary">添加频道</button>
+                        <button type="button" class="btn btn-primary" onclick="alert('该功能暂未开放')">添加频道</button>
                     </form>
                 </div>
             </div>

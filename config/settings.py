@@ -62,6 +62,13 @@ min_channel_members = int(os.getenv('MIN_CHANNEL_MEMBERS', '500'))
 max_auto_channels = int(os.getenv('MAX_AUTO_CHANNELS', '10'))
 # 排除的频道列表（不会自动添加的频道）
 excluded_channels = os.getenv('EXCLUDED_CHANNELS', '').split(',')
+
+# 代币数据更新配置
+token_update_limit = int(os.getenv('TOKEN_UPDATE_LIMIT', '500'))
+token_update_min_delay = float(os.getenv('TOKEN_UPDATE_MIN_DELAY', '0.5'))
+token_update_max_delay = float(os.getenv('TOKEN_UPDATE_MAX_DELAY', '2.0'))
+token_update_batch_size = int(os.getenv('TOKEN_UPDATE_BATCH_SIZE', '50'))
+
 # 自动发现频道的链关键词（用于猜测频道所属的链）
 chain_keywords = {
     'SOL': ['solana', 'sol', 'Solana', 'SOL', '索拉纳'],
@@ -116,6 +123,12 @@ class EnvConfig:
         self.MAX_AUTO_CHANNELS = max_auto_channels
         self.EXCLUDED_CHANNELS = [ch.strip() for ch in excluded_channels if ch.strip()]
         self.CHAIN_KEYWORDS = chain_keywords
+        
+        # 代币数据更新配置
+        self.TOKEN_UPDATE_LIMIT = token_update_limit
+        self.TOKEN_UPDATE_MIN_DELAY = token_update_min_delay
+        self.TOKEN_UPDATE_MAX_DELAY = token_update_max_delay
+        self.TOKEN_UPDATE_BATCH_SIZE = token_update_batch_size
 
 # 实例化配置对象便于引用
 env_config = EnvConfig()
@@ -165,6 +178,12 @@ def load_config(config_file=CONFIG_FILE):
                     "min_members": env_config.MIN_CHANNEL_MEMBERS,
                     "max_channels": env_config.MAX_AUTO_CHANNELS,
                     "excluded_channels": env_config.EXCLUDED_CHANNELS
+                },
+                "token_update": {
+                    "limit": env_config.TOKEN_UPDATE_LIMIT,
+                    "min_delay": env_config.TOKEN_UPDATE_MIN_DELAY,
+                    "max_delay": env_config.TOKEN_UPDATE_MAX_DELAY,
+                    "batch_size": env_config.TOKEN_UPDATE_BATCH_SIZE
                 }
             }
             

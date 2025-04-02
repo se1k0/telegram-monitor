@@ -28,6 +28,9 @@ from src.database.db_handler import cleanup_batch_tasks
 from src.web.web_app import start_web_server
 from src.utils.error_handler import ErrorMonitor, monitor_errors
 from config.settings import load_config, CONFIG_FILE
+# 导入调度器和代币更新器
+from src.utils.scheduler import scheduler
+from src.api.token_updater import hourly_update
 
 # 设置日志
 logger = get_logger(__name__)
@@ -81,6 +84,23 @@ def setup(config_file: str = CONFIG_FILE) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"数据库结构检查失败: {str(e)}")
             logger.warning("如果应用无法启动，请尝试运行: python scripts/repair_database.py")
+        
+        # 创建tokens_mark表
+        try:
+            from scripts.create_tokens_mark_table import create_tokens_mark_table, check_tokens_mark_table
+            logger.info("检查tokens_mark表...")
+            if not check_tokens_mark_table():
+                logger.info("创建tokens_mark表...")
+                if create_tokens_mark_table():
+                    logger.info("tokens_mark表创建成功")
+                else:
+                    logger.warning("tokens_mark表创建失败")
+            else:
+                logger.info("tokens_mark表已存在")
+        except Exception as e:
+            logger.warning(f"检查或创建tokens_mark表时出错: {str(e)}")
+            import traceback
+            logger.debug(traceback.format_exc())
         
         # 创建错误监控器
         global error_monitor
@@ -220,6 +240,39 @@ def start_web_interface(config: Dict[str, Any]) -> None:
             logger.error(f"使用基本配置启动Web界面也失败: {str(e2)}")
 
 
+async def start_scheduler(config: Dict[str, Any]) -> None:
+    """
+    启动调度器和定时任务
+    
+    Args:
+        config: 配置字典
+    """
+    try:
+        logger.info("正在启动调度器...")
+        
+        # 启动调度器
+        await scheduler.start()
+        
+        # 获取代币更新配置
+        token_update_config = config.get('token_update', {})
+        token_limit = token_update_config.get('limit', 500)
+        
+        # 注册每小时整点执行的代币更新任务
+        logger.info("注册每小时整点代币数据更新任务...")
+        scheduler.schedule_hourly_task(
+            'hourly_token_update',
+            hourly_update,
+            args=(token_limit,)
+        )
+        
+        logger.info(f"代币数据更新任务已注册，每小时整点执行，限制更新数量: {token_limit}")
+        
+    except Exception as e:
+        logger.error(f"启动调度器和定时任务失败: {str(e)}")
+        import traceback
+        logger.debug(traceback.format_exc())
+
+
 async def shutdown() -> None:
     """
     优雅关闭程序
@@ -228,6 +281,14 @@ async def shutdown() -> None:
     
     # 设置关闭事件
     shutdown_event.set()
+    
+    # 关闭调度器
+    logger.info("正在关闭调度器...")
+    try:
+        await scheduler.stop()
+        logger.info("调度器已关闭")
+    except Exception as e:
+        logger.error(f"关闭调度器时出错: {str(e)}")
     
     # 关闭Telegram监听器
     global telegram_listener
@@ -366,6 +427,10 @@ async def main_async() -> None:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
             logger.debug("已设置Unix下的信号处理")
+        
+        # 启动调度器和定时任务
+        logger.info("启动调度器和定时任务...")
+        await start_scheduler(config)
         
         # 无条件启动Web界面，先启动Web服务，防止Telegram监听器阻塞
         logger.info(f"开始启动web服务")

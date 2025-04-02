@@ -1,0 +1,103 @@
+{% extends 'layout.html' %}
+
+{% block title %}消息详情 #{{ message.message_id }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0 text-warning">消息详情 #{{ message.message_id }}</h5>
+            <div>
+                <span class="badge bg-light text-dark me-2">{{ message.chain }}</span>
+                <a href="javascript:history.back()" class="btn btn-sm btn-light">
+                    <i class="bi bi-arrow-left"></i> 返回
+                </a>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <h6 class="border-bottom pb-2">消息信息</h6>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>消息ID:</span>
+                        <span class="fw-bold">{{ message.message_id }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>日期:</span>
+                        <span>{{ message.date.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>来源类型:</span>
+                        <span>{% if channel and channel.is_group %}群组{% elif channel and channel.is_supergroup %}超级群组{% else %}频道{% endif %}</span>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    {% if channel %}
+                    <h6 class="border-bottom pb-2">频道/群组信息</h6>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>名称:</span>
+                        <span class="fw-bold">{{ channel.channel_name }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>ID:</span>
+                        <span>{{ channel.channel_id }}</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span>成员数:</span>
+                        <span>{{ channel.member_count if channel.member_count else '未知' }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            {% if tokens %}
+            <h6 class="border-bottom pb-2 mb-3">相关代币</h6>
+            <div class="table-responsive mb-4">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th>代币符号</th>
+                            <th>链</th>
+                            <th>合约地址</th>
+                            <th>市值</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for token in tokens %}
+                        <tr>
+                            <td>{{ token.token_symbol }}</td>
+                            <td><span class="badge bg-primary">{{ token.chain }}</span></td>
+                            <td class="text-truncate" style="max-width: 150px;" title="{{ token.contract }}">
+                                {{ token.contract[:10] }}...{{ token.contract[-4:] }}
+                            </td>
+                            <td>{{ token.market_cap_formatted }}</td>
+                            <td>
+                                <div class="btn-group">
+                                    {% if token.dexscreener_url %}
+                                    <a href="{{ token.dexscreener_url }}" target="_blank" class="btn btn-sm btn-outline-info">
+                                        <i class="bi bi-graph-up"></i> 交易
+                                    </a>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            
+            <h6 class="border-bottom pb-2 mb-3">消息内容</h6>
+            <pre class="message-text p-3 bg-light rounded">{{ message.text }}</pre>
+            
+            {% if message.media_path %}
+            <div class="text-center mt-4">
+                <h6 class="border-bottom pb-2 mb-3">媒体文件</h6>
+                <img src="/media/{{ message.media_path }}" class="img-fluid rounded message-image" alt="媒体内容">
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %} 

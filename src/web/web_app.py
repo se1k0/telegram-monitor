@@ -5,20 +5,21 @@ import time
 import os
 import multiprocessing
 from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_from_directory, abort
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_from_directory, abort, session
 from flask_cors import CORS
 from sqlalchemy import create_engine, func, desc, and_, or_
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
+from src.database.models import engine, Token, Message, TelegramChannel, TokensMark
+from src.core.channel_manager import ChannelManager
+import config.settings as config
+import urllib.parse
 
 # 在开发环境中修改路径
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.database.models import Token, Message, TelegramChannel
 from src.database.db_handler import extract_promotion_info
-from src.core.channel_manager import ChannelManager
-import config.settings as config
 
 # 加载环境变量
 load_dotenv()
@@ -69,20 +70,23 @@ def format_market_cap(value):
     """格式化市值显示"""
     try:
         if value is None:
-            return "0.00"
+            return "$0.00"
         if isinstance(value, str):
             try:
                 value = float(value.replace(',', ''))
             except:
-                return "0.00"
-        if value >= 100000000:  # 亿
-            return f"{value/100000000:.2f}亿"
-        elif value >= 10000:    # 万
-            return f"{value/10000:.2f}万"
-        return f"{value:.2f}"
+                return "$0.00"
+        # 格式化显示，使用符号而不是中文字
+        if value >= 1000000000:  # 十亿 (B)
+            return f"${value/1000000000:.2f}B"
+        elif value >= 1000000:   # 百万 (M)
+            return f"${value/1000000:.2f}M"
+        elif value >= 1000:      # 千 (K)
+            return f"${value/1000:.2f}K"
+        return f"${value:.2f}"
     except Exception as e:
         logger.error(f"市值格式化错误: {value}, 错误: {str(e)}")
-        return "0.00"
+        return "$0.00"
 
 
 def get_db_connection():
@@ -160,1031 +164,248 @@ def index():
     # 从数据库获取系统统计和最近代币
     session = Session()
     try:
-        # 获取系统统计数据
-        stats = get_system_stats()
+        # 获取查询参数
+        chain_filter = request.args.get('chain', 'all')
+        search_query = request.args.get('search', '')
         
-        # 获取最近的代币
-        recent_tokens = session.query(Token).order_by(Token.latest_update.desc()).limit(10).all()
+        # 构建查询
+        query = session.query(Token)
+        
+        # 应用筛选条件
+        if chain_filter and chain_filter.lower() != 'all':
+            query = query.filter(Token.chain == chain_filter)
+            
+        # 应用搜索条件
+        if search_query:
+            # 在代币符号、合约地址和名称中搜索
+            query = query.filter(
+                or_(
+                    Token.token_symbol.ilike(f"%{search_query}%"),
+                    Token.contract.ilike(f"%{search_query}%")
+                )
+            )
+        
+        # 获取最近的代币，限制20个
+        recent_tokens = query.order_by(Token.latest_update.desc()).limit(20).all()
+        
+        # 获取所有可用的Chain
+        available_chains = [r[0] for r in session.query(Token.chain).distinct().all()]
         
         # 处理代币数据
         tokens = []
         for token in recent_tokens:
+            # 检查token是否为None
+            if token is None:
+                logger.warning("发现None类型的token对象，已跳过")
+                continue
+                
+            # 处理token对象，提取需要的字段
             token_dict = {
                 'id': token.id,
                 'chain': token.chain,
-                'symbol': token.token_symbol,
                 'token_symbol': token.token_symbol,
-                'name': token.token_symbol,
                 'contract': token.contract,
-                'channel_name': token.channel_name,
-                'first_seen': token.first_update if token.first_update else '未知',
-                'last_seen': token.latest_update if token.latest_update else '未知',
-                'mentions': token.promotion_count if token.promotion_count else 0,
-                'mentions_percentage': min(token.promotion_count * 5 if token.promotion_count else 0, 100),
-                'sentiment_score': token.sentiment_score if token.sentiment_score is not None else 0,
-                'hype_score': token.hype_score if token.hype_score is not None else 0,
-                'price_change': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else 0,
-                'risk_level': token.risk_level,
-                'sentiment_class': 'success' if token.sentiment_score and token.sentiment_score > 0.2 else 
-                                  ('warning' if token.sentiment_score and token.sentiment_score > -0.2 else 'danger'),
-                'is_trending': token.is_trending,
-                'dexscreener_url': get_dexscreener_url(token.chain, token.contract),
+                'first_update': token.first_update,
                 'latest_update': token.latest_update,
-                'formatted_time': token.latest_update if token.latest_update else '未知',
-                'market_cap_formatted': format_market_cap(token.market_cap),
-                'first_market_cap_formatted': format_market_cap(token.first_market_cap),
-                'image_url': None,  # 添加默认image_url字段
-                'trending_score': token.hype_score if token.hype_score is not None else 0,  # 添加trending_score字段，使用hype_score作为替代
-                'mentions_count': token.promotion_count if token.promotion_count else 0,  # 添加mentions_count字段
-                # 添加price_info嵌套对象
-                'price_info': {
-                    'current_price': token.price if token.price else None,
-                    'current_price_formatted': f"${token.price:.8f}" if token.price else "未知",
-                    'price_change_24h': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else None,
-                    'price_change_24h_formatted': f"{((token.price / token.first_price) - 1) * 100:.2f}%" if token.price and token.first_price and token.first_price > 0 else "未知"
-                },
-                # 添加sentiment_info嵌套对象
-                'sentiment_info': {
-                    'sentiment_score': token.sentiment_score if token.sentiment_score is not None else None,
-                    'hype_score': token.hype_score if token.hype_score is not None else None
-                },
-                # 添加格式化的时间字段
-                'first_update_formatted': token.first_update if token.first_update else '未知',
-                'last_update_formatted': token.latest_update if token.latest_update else '未知'
+                'image_url': getattr(token, 'image_url', None),
+                'market_cap': format_market_cap(token.market_cap),
+                'liquidity': token.liquidity,
+                'dexscreener_url': token.dexscreener_url,
+                'telegram_url': token.telegram_url,
+                'twitter_url': token.twitter_url,
+                'website_url': token.website_url,
+                'holders_count': token.holders_count or '未知',
+                'buys_1h': token.buys_1h or 0,
+                'sells_1h': token.sells_1h or 0,
+                'volume_1h': format_market_cap(token.volume_1h) if token.volume_1h else 0,
+                'spread_count': f"{token.spread_count or 0}次",
+                'community_reach': f"{token.community_reach or 0}人"
             }
             
             # 计算涨跌幅
-            if token.first_market_cap and token.first_market_cap > 0:
-                change_pct = ((token.market_cap or 0) - token.first_market_cap) / token.first_market_cap * 100
-                token_dict['change_percentage'] = f"{change_pct:+.2f}%"
-                token_dict['change_pct_value'] = change_pct
-                token_dict['is_profit'] = change_pct >= 0
-            else:
-                token_dict['change_percentage'] = "N/A"
-                token_dict['change_pct_value'] = None
+            try:
+                # 使用Token.market_cap和Token.market_cap_1h直接计算涨跌幅
+                if token.market_cap_1h and token.market_cap_1h > 0:
+                    # 使用一小时前的市值和当前市值计算涨跌幅
+                    change_pct = ((token.market_cap or 0) - token.market_cap_1h) / token.market_cap_1h * 100
+                    token_dict['change_percentage'] = f"{change_pct:+.2f}%"
+                    token_dict['change_pct_value'] = change_pct
+                    token_dict['is_profit'] = change_pct >= 0
+                else:
+                    # 如果没有一小时前的市值记录，退回到使用first_market_cap
+                    if token.first_market_cap and token.first_market_cap > 0:
+                        change_pct = ((token.market_cap or 0) - token.first_market_cap) / token.first_market_cap * 100
+                        token_dict['change_percentage'] = f"{change_pct:+.2f}%"
+                        token_dict['change_pct_value'] = change_pct
+                        token_dict['is_profit'] = change_pct >= 0
+                    else:
+                        token_dict['change_percentage'] = "0%"
+                        token_dict['change_pct_value'] = 0
+                        token_dict['is_profit'] = True
+            except Exception as e:
+                logger.error(f"计算代币 {token.chain}/{token.contract} 涨跌幅时出错: {str(e)}")
+                # 出错时使用默认值
+                token_dict['change_percentage'] = "0%"
+                token_dict['change_pct_value'] = 0
                 token_dict['is_profit'] = True
                 
-            # 添加情感分析颜色
-            if token.sentiment_score is not None:
-                if token.sentiment_score > 0.3:
-                    token_dict['sentiment_color'] = 'green'
-                elif token.sentiment_score > 0:
-                    token_dict['sentiment_color'] = 'lightgreen'
-                elif token.sentiment_score < -0.3:
-                    token_dict['sentiment_color'] = 'red'
-                elif token.sentiment_score < 0:
-                    token_dict['sentiment_color'] = 'pink'
-                else:
-                    token_dict['sentiment_color'] = 'gray'
-            else:
-                token_dict['sentiment_color'] = 'gray'
-                
-            # 添加风险等级颜色
-            risk_colors = {
-                'high': 'red',
-                'medium-high': 'orange',
-                'medium': 'yellow',
-                'low-medium': 'lightgreen',
-                'low': 'green',
-                'unknown': 'gray'
-            }
-            token_dict['risk_color'] = risk_colors.get(token.risk_level, 'gray')
-            
             tokens.append(token_dict)
-            
-        # 获取活跃频道数量
-        channel_count = session.query(TelegramChannel).filter_by(is_active=True).count()
         
-        return render_template('index.html',
+        # 使用system_stats填充上下文
+        stats = get_system_stats()
+        
+        return render_template('index.html', 
                                tokens=tokens,
                                stats=stats,
-                               channel_count=channel_count,
+                               chain_filter=chain_filter,
+                               search_query=search_query,
+                               available_chains=available_chains,
                                year=datetime.now().year)
-    
     except Exception as e:
-        logger.error(f"处理首页请求时出错: {str(e)}")
+        logger.error(f"首页请求处理错误: {str(e)}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         return handle_error(f"处理首页请求时出错: {str(e)}")
     finally:
         session.close()
 
 
-@app.route('/tokens')
-def tokens_page():
-    """代币列表页面"""
+@app.route('/channels')
+def channels():
+    """社群信息页面，显示所有频道和群组信息"""
     try:
-        # 获取分页、筛选和搜索参数
-        page = request.args.get('page', 1, type=int)
-        chain_filter = request.args.get('chain', 'ALL')
-        search_query = request.args.get('search', '')
-        sort_order = request.args.get('sort', 'recent')
-        
-        # 每页显示的记录数
-        PER_PAGE = 20
-        
         session = Session()
         
-        # 构建查询
-        query = session.query(Token)
+        # 获取所有频道信息
+        channels = session.query(TelegramChannel).order_by(TelegramChannel.chain).all()
         
-        # 添加链筛选条件
-        if chain_filter != 'ALL':
-            query = query.filter(Token.chain == chain_filter)
-        
-        # 添加搜索条件
-        if search_query:
-            search_param = f"%{search_query}%"
-            query = query.filter((Token.contract.like(search_param)) | 
-                                 (Token.token_symbol.like(search_param)))
-        
-        # 添加排序
-        if sort_order == 'profit':
-            # 按涨幅排序（降序）
-            query = query.order_by(
-                func.coalesce(
-                    (Token.market_cap - Token.first_market_cap) / 
-                    func.nullif(Token.first_market_cap, 0),
-                    0
-                ).desc()
-            )
-        elif sort_order == 'loss':
-            # 按跌幅排序（升序）
-            query = query.order_by(
-                func.coalesce(
-                    (Token.market_cap - Token.first_market_cap) / 
-                    func.nullif(Token.first_market_cap, 0),
-                    0
-                ).asc()
-            )
-        else:  # 默认按最近更新排序
-            query = query.order_by(Token.latest_update.desc())
-        
-        # 获取总记录数
-        total_count = query.count()
-        
-        # 分页
-        tokens_query = query.limit(PER_PAGE).offset((page - 1) * PER_PAGE)
-        
-        # 创建一个简单的分页对象
-        pagination = {
-            'page': page,
-            'per_page': PER_PAGE,
-            'total': total_count,
-            'pages': (total_count + PER_PAGE - 1) // PER_PAGE,
-            'has_prev': page > 1,
-            'has_next': page < ((total_count + PER_PAGE - 1) // PER_PAGE),
-            'prev_num': page - 1,
-            'next_num': page + 1,
-            'iter_pages': lambda: range(1, ((total_count + PER_PAGE - 1) // PER_PAGE) + 1)
-        }
-        
-        # 处理代币数据
-        tokens = []
-        for token in tokens_query:
-            token_dict = {
-                'id': token.id,
-                'chain': token.chain,
-                'symbol': token.token_symbol,
-                'token_symbol': token.token_symbol,
-                'name': token.token_symbol,
-                'contract': token.contract,
-                'channel_name': token.channel_name,
-                'first_seen': token.first_update if token.first_update else '未知',
-                'last_seen': token.latest_update if token.latest_update else '未知',
-                'mentions': token.promotion_count if token.promotion_count else 0,
-                'mentions_percentage': min(token.promotion_count * 5 if token.promotion_count else 0, 100),
-                'sentiment_score': token.sentiment_score if token.sentiment_score is not None else 0,
-                'hype_score': token.hype_score if token.hype_score is not None else 0,
-                'price_change': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else 0,
-                'risk_level': token.risk_level if token.risk_level else 'unknown',
-                'sentiment_class': 'success' if token.sentiment_score and token.sentiment_score > 0.2 else 
-                                  ('warning' if token.sentiment_score and token.sentiment_score > -0.2 else 'danger'),
-                'is_trending': token.is_trending,
-                'dexscreener_url': get_dexscreener_url(token.chain, token.contract),
-                'latest_update': token.latest_update,
-                'formatted_time': token.latest_update if token.latest_update else '未知',
-                'market_cap_formatted': format_market_cap(token.market_cap),
-                'first_market_cap_formatted': format_market_cap(token.first_market_cap),
-                'image_url': None,  # 添加默认image_url字段
-                'trending_score': token.hype_score if token.hype_score is not None else 0,  # 添加trending_score字段，使用hype_score作为替代
-                'mentions_count': token.promotion_count if token.promotion_count else 0,  # 添加mentions_count字段
-                # 添加price_info嵌套对象
-                'price_info': {
-                    'current_price': token.price if token.price else None,
-                    'current_price_formatted': f"${token.price:.8f}" if token.price else "未知",
-                    'price_change_24h': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else None,
-                    'price_change_24h_formatted': f"{((token.price / token.first_price) - 1) * 100:.2f}%" if token.price and token.first_price and token.first_price > 0 else "未知"
-                },
-                # 添加sentiment_info嵌套对象
-                'sentiment_info': {
-                    'sentiment_score': token.sentiment_score if token.sentiment_score is not None else None,
-                    'hype_score': token.hype_score if token.hype_score is not None else None
-                },
-                # 添加格式化的时间字段
-                'first_update_formatted': token.first_update if token.first_update else '未知',
-                'last_update_formatted': token.latest_update if token.latest_update else '未知'
-            }
-            
-            # 计算涨跌幅
-            if token.first_market_cap and token.first_market_cap > 0:
-                change_pct = ((token.market_cap or 0) - token.first_market_cap) / token.first_market_cap * 100
-                token_dict['change_percentage'] = f"{change_pct:+.2f}%"
-                token_dict['change_pct_value'] = change_pct
-                token_dict['is_profit'] = change_pct >= 0
-            else:
-                token_dict['change_percentage'] = "N/A"
-                token_dict['change_pct_value'] = None
-                token_dict['is_profit'] = True
-            
-            tokens.append(token_dict)
-        
-        return render_template('tokens.html', 
-                               tokens=tokens,
-                               pagination=pagination,
-                               chain_filter=chain_filter,
-                               search_query=search_query,
-                               sort_order=sort_order,
-                               year=datetime.now().year,
-                               get_dexscreener_url=get_dexscreener_url)
-                               
-    except Exception as e:
-        logger.error(f"处理代币列表请求时出错: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return handle_error(f"处理代币列表请求时出错: {str(e)}")
-    finally:
-        session.close()
-
-
-@app.route('/token/<chain>/<contract>')
-def token_detail(chain, contract):
-    """代币详情页面"""
-    session = Session()
-    try:
-        # 获取代币信息
-        token = session.query(Token).filter_by(chain=chain, contract=contract).first()
-        if not token:
-            flash(f"未找到代币: {chain}/{contract}", "error")
-            return redirect(url_for('tokens_page'))
-            
-        # 处理代币数据
-        token_dict = {
-            'id': token.id,
-            'chain': token.chain,
-            'symbol': token.token_symbol,
-            'token_symbol': token.token_symbol,
-            'name': token.token_symbol,
-            'contract': token.contract,
-            'channel_name': token.channel_name,
-            'first_seen': token.first_update if token.first_update else '未知',
-            'last_seen': token.latest_update if token.latest_update else '未知',
-            'mentions': token.promotion_count if token.promotion_count else 0,
-            'mentions_percentage': min(token.promotion_count * 5 if token.promotion_count else 0, 100),
-            'sentiment_score': token.sentiment_score if token.sentiment_score is not None else 0,
-            'hype_score': token.hype_score if token.hype_score is not None else 0,
-            'price_change': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else 0,
-            'risk_level': token.risk_level,
-            'sentiment_class': 'success' if token.sentiment_score and token.sentiment_score > 0.2 else 
-                                  ('warning' if token.sentiment_score and token.sentiment_score > -0.2 else 'danger'),
-            'is_trending': token.is_trending,
-            'dexscreener_url': get_dexscreener_url(token.chain, token.contract),
-            'latest_update': token.latest_update,
-            'formatted_time': token.latest_update if token.latest_update else '未知',
-            'market_cap': token.market_cap,
-            'market_cap_formatted': format_market_cap(token.market_cap),
-            'first_market_cap': token.first_market_cap,
-            'first_market_cap_formatted': format_market_cap(token.first_market_cap),
-            'promotion_count': token.promotion_count,
-            'likes_count': token.likes_count or 0,
-            'telegram_url': token.telegram_url,
-            'twitter_url': token.twitter_url,
-            'website_url': token.website_url,
-            'first_update': token.first_update,
-            'first_price': token.first_price,
-            'price_change_24h': token.price_change_24h,
-            'price_change_7d': token.price_change_7d,
-            'volume_24h': token.volume_24h,
-            'liquidity': token.liquidity,
-            'positive_words': token.positive_words.split(',') if token.positive_words else [],
-            'negative_words': token.negative_words.split(',') if token.negative_words else [],
-            'hype_text': token.hype_text if token.hype_text else "未知",
-            'hype_color': token.hype_color if token.hype_color else "gray",
-            'hype_value': token.hype_value if token.hype_value else "N/A",
-            'risk_text': token.risk_text if token.risk_text else "未知风险",
-            'risk_color': token.risk_color if token.risk_color else "gray",
-            'image_url': None,  # 添加默认image_url字段
-            'trending_score': token.hype_score if token.hype_score is not None else 0,  # 添加trending_score字段，使用hype_score作为替代
-            'mentions_count': token.promotion_count if token.promotion_count else 0,  # 添加mentions_count字段
-            # 添加price_info嵌套对象
-            'price_info': {
-                'current_price': token.price if token.price else None,
-                'current_price_formatted': f"${token.price:.8f}" if token.price else "未知",
-                'price_change_24h': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else None,
-                'price_change_24h_formatted': f"{((token.price / token.first_price) - 1) * 100:.2f}%" if token.price and token.first_price and token.first_price > 0 else "未知"
-            },
-            # 添加sentiment_info嵌套对象
-            'sentiment_info': {
-                'sentiment_score': token.sentiment_score if token.sentiment_score is not None else None,
-                'hype_score': token.hype_score if token.hype_score is not None else None
-            },
-            # 添加格式化的时间字段
-            'first_update_formatted': token.first_update if token.first_update else '未知',
-            'last_update_formatted': token.latest_update if token.latest_update else '未知'
-        }
-        
-        # 计算涨跌幅
-        if token.first_market_cap and token.first_market_cap > 0:
-            change_pct = ((token.market_cap or 0) - token.first_market_cap) / token.first_market_cap * 100
-            token_dict['change_percentage'] = f"{change_pct:+.2f}%"
-            token_dict['change_pct_value'] = change_pct
-            token_dict['is_profit'] = change_pct >= 0
-        else:
-            token_dict['change_percentage'] = "N/A"
-            token_dict['change_pct_value'] = None
-            token_dict['is_profit'] = True
-            
-        # 价格涨跌幅处理
-        if token.price and token.first_price and token.first_price > 0:
-            price_change = ((token.price - token.first_price) / token.first_price) * 100
-            token_dict['price_change_total'] = f"{price_change:+.2f}%"
-            token_dict['price_change_value'] = price_change
-            token_dict['is_price_up'] = price_change >= 0
-        else:
-            token_dict['price_change_total'] = "N/A"
-            token_dict['price_change_value'] = None
-            token_dict['is_price_up'] = True
-            
-        # 处理情感分析字段
-        if token.sentiment_score is not None:
-            if token.sentiment_score > 0.5:
-                token_dict['sentiment_text'] = "非常积极"
-                token_dict['sentiment_color'] = "green"
-            elif token.sentiment_score > 0.1:
-                token_dict['sentiment_text'] = "积极"
-                token_dict['sentiment_color'] = "lightgreen"
-            elif token.sentiment_score < -0.5:
-                token_dict['sentiment_text'] = "非常消极"
-                token_dict['sentiment_color'] = "red"
-            elif token.sentiment_score < -0.1:
-                token_dict['sentiment_text'] = "消极"
-                token_dict['sentiment_color'] = "pink"
-            else:
-                token_dict['sentiment_text'] = "中性"
-                token_dict['sentiment_color'] = "gray"
-            
-            # 转换为百分比显示
-            token_dict['sentiment_pct'] = f"{token.sentiment_score * 100:.1f}%"
-        else:
-            token_dict['sentiment_text'] = "未知"
-            token_dict['sentiment_color'] = "gray"
-            token_dict['sentiment_pct'] = "N/A"
-            
-        # 处理炒作评分
-        if token.hype_score is not None:
-            if token.hype_score > 4:
-                token_dict['hype_text'] = "极高炒作"
-                token_dict['hype_color'] = "red"
-            elif token.hype_score > 3:
-                token_dict['hype_text'] = "高炒作"
-                token_dict['hype_color'] = "orange"
-            elif token.hype_score > 2:
-                token_dict['hype_text'] = "中等炒作"
-                token_dict['hype_color'] = "yellow"
-            elif token.hype_score > 1:
-                token_dict['hype_text'] = "低炒作"
-                token_dict['hype_color'] = "lightgreen"
-            else:
-                token_dict['hype_text'] = "几乎无炒作"
-                token_dict['hype_color'] = "green"
-            
-            # 格式化显示
-            token_dict['hype_value'] = f"{token.hype_score:.1f}/5"
-        else:
-            token_dict['hype_text'] = "未知"
-            token_dict['hype_color'] = "gray"
-            token_dict['hype_value'] = "N/A"
-            
-        # 处理风险等级
-        risk_map = {
-            'high': {"text": "高风险", "color": "red"},
-            'medium-high': {"text": "中高风险", "color": "orange"},
-            'medium': {"text": "中风险", "color": "yellow"},
-            'low-medium': {"text": "低中风险", "color": "lightgreen"},
-            'low': {"text": "低风险", "color": "green"},
-            'unknown': {"text": "未知风险", "color": "gray"}
-        }
-        risk_info = risk_map.get(token.risk_level, risk_map['unknown'])
-        token_dict['risk_text'] = risk_info['text']
-        token_dict['risk_color'] = risk_info['color']
-        
-        # 获取原始消息
-        original_message = session.query(Message).filter_by(chain=chain, message_id=token.message_id).first()
-        
-        # 获取相关代币（同一个链的其他代币）
-        related_tokens_query = session.query(Token).filter(
-            Token.chain == chain,
-            Token.contract != contract
-        ).order_by(Token.latest_update.desc()).limit(5)
-        
-        related_tokens = []
-        for related in related_tokens_query:
-            related_dict = {
-                'chain': related.chain,
-                'token_symbol': related.token_symbol,
-                'contract': related.contract,
-                'market_cap': related.market_cap,
-                'market_cap_formatted': format_market_cap(related.market_cap),
-                'first_market_cap': related.first_market_cap,
-                'sentiment_score': related.sentiment_score,
-                'risk_level': related.risk_level
-            }
-            
-            # 计算涨跌幅
-            if related.first_market_cap and related.first_market_cap > 0:
-                change_pct = ((related.market_cap or 0) - related.first_market_cap) / related.first_market_cap * 100
-                related_dict['change_percentage'] = f"{change_pct:+.2f}%"
-                related_dict['is_profit'] = change_pct >= 0
-            else:
-                related_dict['change_percentage'] = "N/A"
-                related_dict['is_profit'] = True
-                
-            # 风险等级颜色
-            related_dict['risk_color'] = risk_map.get(related.risk_level, risk_map['unknown'])['color']
-                
-            related_tokens.append(related_dict)
-            
-        # 获取历史消息，用于分析趋势和情感变化
-        history_messages = session.query(Message).filter(
-            Message.chain == chain,
-            Message.text.like(f"%{token.token_symbol}%")
-        ).order_by(Message.date.desc()).limit(10).all()
-        
-        # 获取价格历史数据用于图表显示
-        price_history = []
-        if token.price is not None or token.market_cap is not None:
-            # 这里可以从其他表或API获取历史数据
-            # 示例数据结构
-            price_history = [
-                {"date": token.first_update, "price": token.first_price, "market_cap": token.first_market_cap},
-                {"date": token.latest_update, "price": token.price, "market_cap": token.market_cap}
-            ]
-            
-        return render_template('token_detail.html',
-                              token=token_dict,
-                              original_message=original_message,
-                              related_tokens=related_tokens,
-                              history_messages=history_messages,
-                              price_history=json.dumps(price_history),
-                              positive_words=token.positive_words.split(',') if token.positive_words else [],
-                              negative_words=token.negative_words.split(',') if token.negative_words else [],
-                              year=datetime.now().year)
-                              
-    except Exception as e:
-        logger.error(f"处理代币详情页面请求时出错: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return handle_error(f"处理代币详情页面请求时出错: {str(e)}")
-    finally:
-        session.close()
-
-
-@app.route('/channels')
-def channels_page():
-    """频道管理页面"""
-    try:
-        # 获取所有频道
-        channel_manager = ChannelManager()
-        channels = channel_manager.get_all_channels()
-        
-        # 计算活跃频道数
-        active_channels = [c for c in channels if c.is_active]
+        # 获取活跃频道数量
+        active_channels_count = session.query(TelegramChannel).filter_by(is_active=True).count()
         
         # 获取最后更新时间
-        last_update = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        last_update = session.query(Token.latest_update).order_by(Token.latest_update.desc()).first()
+        last_update = last_update[0] if last_update else "未知"
         
-        return render_template('channels.html',
-                               channels=channels,
-                               active_channels_count=len(active_channels),
-                               last_update=last_update,
-                               year=datetime.now().year)
-    
-    except Exception as e:
-        logger.error(f"处理频道页面请求时出错: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return handle_error(f"处理频道页面请求时出错: {str(e)}")
-
-
-@app.route('/channels/add', methods=['POST'])
-def add_channel():
-    """添加新频道"""
-    try:
-        channel_username = request.form.get('channel_username')
-        chain = request.form.get('chain')
-        
-        if not channel_username or not chain:
-            flash('频道用户名和链类型不能为空', 'danger')
-            return redirect(url_for('channels_page'))
-        
-        # 添加频道
-        channel_manager = ChannelManager()
-        success = channel_manager.add_channel(
-            channel_username=channel_username, 
-            channel_name=channel_username, 
-            chain=chain,
-            channel_id=None,  # Web界面添加时没有ID信息
-            is_group=False,   # Web界面添加时默认为普通频道
-            is_supergroup=False,  # Web界面添加时默认为非超级群组
-            member_count=0    # Web界面添加时不知道成员数
+        # 渲染模板
+        return render_template(
+            'channels.html',
+            channels=channels,
+            active_channels_count=active_channels_count,
+            last_update=last_update,
+            year=datetime.now().year
         )
         
-        if success:
-            flash(f'成功添加频道: {channel_username}', 'success')
-        else:
-            flash(f'频道已存在: {channel_username}', 'warning')
-            
-        return redirect(url_for('channels_page'))
-    
     except Exception as e:
-        logger.error(f"添加频道时出错: {str(e)}")
-        flash(f'添加频道时出错: {str(e)}', 'danger')
-        return redirect(url_for('channels_page'))
-
-
-@app.route('/channels/remove/<channel_username>')
-def remove_channel(channel_username):
-    """移除频道"""
-    try:
-        # 移除频道
-        channel_manager = ChannelManager()
-        success = channel_manager.remove_channel(channel_username)
-        
-        if success:
-            flash(f'成功移除频道: {channel_username}', 'success')
-        else:
-            flash(f'移除频道失败: {channel_username}', 'danger')
-            
-        return redirect(url_for('channels_page'))
-    
-    except Exception as e:
-        logger.error(f"移除频道时出错: {str(e)}")
-        flash(f'移除频道时出错: {str(e)}', 'danger')
-        return redirect(url_for('channels_page'))
-
-
-@app.route('/channels/activate/<channel_username>')
-def activate_channel(channel_username):
-    """激活频道"""
-    try:
-        session = Session()
-        channel = session.query(TelegramChannel).filter_by(channel_username=channel_username).first()
-        
-        if channel:
-            channel.is_active = True
-            session.commit()
-            flash(f'成功激活频道: {channel_username}', 'success')
-        else:
-            flash(f'频道不存在: {channel_username}', 'danger')
-            
-        return redirect(url_for('channels_page'))
-    
-    except Exception as e:
-        logger.error(f"激活频道时出错: {str(e)}")
-        flash(f'激活频道时出错: {str(e)}', 'danger')
-        return redirect(url_for('channels_page'))
+        logger.error(f"社群信息页面请求处理错误: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return handle_error(f"处理社群信息页面请求时出错: {str(e)}")
     finally:
         session.close()
-
-
-@app.route('/channels/update')
-def update_channels():
-    """更新所有频道状态"""
-    try:
-        # 显示详细的指导信息
-        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'scripts/channel_manager_cli.py'))
-        command = f"python {script_path} update"
-        
-        flash('频道状态更新需要在命令行执行以下命令:', 'info')
-        flash(f'<code>{command}</code>', 'info')
-        flash('这是因为更新过程需要与Telegram API交互，需要完整的认证信息', 'info')
-        
-        return redirect(url_for('channels_page'))
-    
-    except Exception as e:
-        logger.error(f"更新频道时出错: {str(e)}")
-        flash(f'更新频道时出错: {str(e)}', 'danger')
-        return redirect(url_for('channels_page'))
-
-
-@app.route('/api/like', methods=['POST'])
-def like_token():
-    """代币点赞API"""
-    try:
-        data = request.get_json()
-        chain = data.get('chain')
-        contract = data.get('contract')
-        
-        if not chain or not contract:
-            return jsonify({'success': False, 'error': '缺少参数'}), 400
-        
-        session = Session()
-        
-        # 获取代币
-        token = session.query(Token).filter_by(chain=chain, contract=contract).first()
-        
-        if not token:
-            return jsonify({'success': False, 'error': '未找到代币'}), 404
-        
-        # 更新点赞数
-        token.likes_count = (token.likes_count or 0) + 1
-        session.commit()
-        
-        return jsonify({
-            'success': True, 
-            'likes_count': token.likes_count
-        })
-            
-    except Exception as e:
-        logger.error(f"处理点赞时出错: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-    finally:
-        session.close()
-
-
-@app.route('/media/<path:path>')
-def send_media(path):
-    """提供媒体文件"""
-    try:
-        media_dir = os.path.abspath('./media')
-        file_path = os.path.join(media_dir, path)
-        
-        # 检查文件是否存在
-        if not os.path.exists(file_path):
-            logger.warning(f"请求的媒体文件不存在: {file_path}")
-            # 返回一个默认的图像或者404
-            return send_from_directory(
-                os.path.join(app.static_folder, 'img'), 
-                'image-not-found.png', 
-                as_attachment=False
-            )
-            
-        return send_from_directory(media_dir, path)
-    except Exception as e:
-        logger.error(f"提供媒体文件时出错: {str(e)}")
-        abort(404)
 
 
 @app.route('/statistics')
-def statistics_page():
-    """统计页面"""
-    session = None
+def statistics():
+    """统计分析页面，显示系统统计数据和图表"""
     try:
+        session = Session()
+        
         # 获取系统统计数据
         stats = get_system_stats()
         
-        # 获取每条链的代币数量
-        session = Session()
-        chain_stats = session.query(Token.chain, func.count(Token.id)).group_by(Token.chain).all()
-        chain_data = {chain: count for chain, count in chain_stats}
+        # 获取代币分布数据
+        chain_counts = session.query(Token.chain, func.count(Token.id)).group_by(Token.chain).all()
         
         # 准备图表数据
         chart_data = {
-            'chains': list(chain_data.keys()) or [],
-            'counts': list(chain_data.values()) or []
+            'chains': [chain for chain, _ in chain_counts],
+            'counts': [count for _, count in chain_counts]
         }
         
-        return render_template('statistics.html',
-                               chart_data=chart_data,
-                               year=datetime.now().year,
-                               **stats)
-    
-    except Exception as e:
-        logger.error(f"处理统计页面请求时出错: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return handle_error(f"处理统计页面请求时出错: {str(e)}")
-    finally:
-        if session:
-            session.close()
-
-
-# 添加API端点用于实时数据获取
-@app.route('/api/token_trends')
-def token_trends():
-    """返回代币趋势数据，用于图表显示"""
-    session = Session()
-    try:
-        # 获取最近7天的数据
-        days = request.args.get('days', 7, type=int)
-        limit = request.args.get('limit', 10, type=int)
-        
-        # 计算开始日期
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        # 获取具有价格变化和市值变化的代币
-        tokens = session.query(Token).filter(
-            Token.price.isnot(None),
-            Token.first_price.isnot(None),
-            Token.market_cap.isnot(None)
-        ).order_by(Token.latest_update.desc()).limit(limit).all()
-        
-        result = []
-        for token in tokens:
-            # 计算价格变化
-            price_change = 0
-            if token.price and token.first_price and token.first_price > 0:
-                price_change = ((token.price - token.first_price) / token.first_price) * 100
-                
-            # 计算市值变化
-            mcap_change = 0
-            if token.market_cap and token.first_market_cap and token.first_market_cap > 0:
-                mcap_change = ((token.market_cap - token.first_market_cap) / token.first_market_cap) * 100
-                
-            result.append({
-                'chain': token.chain,
-                'token_symbol': token.token_symbol,
-                'contract': token.contract,
-                'price': token.price,
-                'first_price': token.first_price,
-                'price_change': price_change,
-                'market_cap': token.market_cap,
-                'first_market_cap': token.first_market_cap,
-                'market_cap_change': mcap_change,
-                'sentiment_score': token.sentiment_score,
-                'risk_level': token.risk_level,
-                'first_update': token.first_update,
-                'latest_update': token.latest_update
-            })
-            
-        return jsonify(result)
+        # 渲染模板
+        return render_template(
+            'statistics.html',
+            active_channels_count=stats['active_channels_count'],
+            message_count=stats['message_count'],
+            token_count=stats['token_count'],
+            last_update=stats['last_update'],
+            channels=stats['channels'],
+            chart_data=chart_data,
+            year=datetime.now().year
+        )
         
     except Exception as e:
-        logger.error(f"获取代币趋势数据时出错: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
-
-@app.route('/api/sentiment_stats')
-def sentiment_stats():
-    """返回情感分析统计数据"""
-    session = Session()
-    try:
-        # 获取情感分析分布
-        total_tokens = session.query(func.count(Token.id)).scalar()
-        
-        # 统计情感分布
-        very_positive = session.query(func.count(Token.id)).filter(Token.sentiment_score > 0.5).scalar()
-        positive = session.query(func.count(Token.id)).filter(and_(Token.sentiment_score <= 0.5, Token.sentiment_score > 0.1)).scalar()
-        neutral = session.query(func.count(Token.id)).filter(and_(Token.sentiment_score <= 0.1, Token.sentiment_score >= -0.1)).scalar()
-        negative = session.query(func.count(Token.id)).filter(and_(Token.sentiment_score < -0.1, Token.sentiment_score >= -0.5)).scalar()
-        very_negative = session.query(func.count(Token.id)).filter(Token.sentiment_score < -0.5).scalar()
-        
-        # 统计按链的情感平均值
-        sentiment_by_chain = session.query(
-            Token.chain,
-            func.avg(Token.sentiment_score).label('avg_sentiment'),
-            func.count(Token.id).label('count')
-        ).filter(Token.sentiment_score.isnot(None)).group_by(Token.chain).all()
-        
-        chain_sentiment = {}
-        for chain, avg_score, count in sentiment_by_chain:
-            chain_sentiment[chain] = {
-                'avg_score': float(avg_score) if avg_score is not None else 0,
-                'count': count
-            }
-            
-        # 统计风险分布
-        risk_stats = {
-            'high': session.query(func.count(Token.id)).filter(Token.risk_level == 'high').scalar(),
-            'medium-high': session.query(func.count(Token.id)).filter(Token.risk_level == 'medium-high').scalar(),
-            'medium': session.query(func.count(Token.id)).filter(Token.risk_level == 'medium').scalar(),
-            'low-medium': session.query(func.count(Token.id)).filter(Token.risk_level == 'low-medium').scalar(),
-            'low': session.query(func.count(Token.id)).filter(Token.risk_level == 'low').scalar(),
-            'unknown': session.query(func.count(Token.id)).filter(or_(Token.risk_level == 'unknown', Token.risk_level.is_(None))).scalar()
-        }
-        
-        return jsonify({
-            'total_tokens': total_tokens,
-            'sentiment_distribution': {
-                'very_positive': very_positive,
-                'positive': positive,
-                'neutral': neutral,
-                'negative': negative,
-                'very_negative': very_negative
-            },
-            'chain_sentiment': chain_sentiment,
-            'risk_distribution': risk_stats
-        })
-        
-    except Exception as e:
-        logger.error(f"获取情感统计数据时出错: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
-
-
-@app.route('/token_advanced')
-def token_advanced():
-    """代币高级列表页面"""
-    try:
-        # 获取分页参数
-        page = request.args.get('page', 1, type=int)
-        PER_PAGE = 20
-        
-        # 获取所有过滤条件
-        filters = {
-            'contract': request.args.get('contract', ''),
-            'symbol': request.args.get('symbol', ''),
-            'channel': request.args.get('channel', ''),
-            'trending': request.args.get('trending', ''),
-            'date_from': request.args.get('date_from', ''),
-            'date_to': request.args.get('date_to', ''),
-            'sentiment_min': request.args.get('sentiment_min', ''),
-            'sentiment_max': request.args.get('sentiment_max', ''),
-            'hype_min': request.args.get('hype_min', ''),
-            'hype_max': request.args.get('hype_max', ''),
-            'risk_level': request.args.get('risk_level', ''),
-            'chain': request.args.get('chain', ''),
-            'sort': request.args.get('sort', 'latest_update')
-        }
-        
-        # 创建查询
-        session = Session()
-        query = session.query(Token)
-        
-        # 应用过滤条件
-        if filters['contract']:
-            query = query.filter(Token.contract.like(f"%{filters['contract']}%"))
-        
-        if filters['symbol']:
-            query = query.filter(Token.token_symbol.like(f"%{filters['symbol']}%"))
-            
-        if filters['channel']:
-            query = query.filter(Token.channel_name.like(f"%{filters['channel']}%"))
-            
-        if filters['trending'] == '1':
-            query = query.filter(Token.is_trending == True)
-        elif filters['trending'] == '0':
-            query = query.filter(Token.is_trending == False)
-            
-        if filters['date_from']:
-            try:
-                date_from = datetime.strptime(filters['date_from'], '%Y-%m-%d')
-                query = query.filter(func.datetime(Token.first_update) >= date_from)
-            except ValueError:
-                pass
-                
-        if filters['date_to']:
-            try:
-                date_to = datetime.strptime(filters['date_to'], '%Y-%m-%d')
-                date_to = date_to.replace(hour=23, minute=59, second=59)
-                query = query.filter(func.datetime(Token.latest_update) <= date_to)
-            except ValueError:
-                pass
-                
-        if filters['sentiment_min'] and filters['sentiment_min'].replace('.', '', 1).replace('-', '', 1).isdigit():
-            sentiment_min = float(filters['sentiment_min'])
-            query = query.filter(Token.sentiment_score >= sentiment_min)
-            
-        if filters['sentiment_max'] and filters['sentiment_max'].replace('.', '', 1).replace('-', '', 1).isdigit():
-            sentiment_max = float(filters['sentiment_max'])
-            query = query.filter(Token.sentiment_score <= sentiment_max)
-            
-        if filters['hype_min'] and filters['hype_min'].replace('.', '', 1).isdigit():
-            hype_min = float(filters['hype_min'])
-            query = query.filter(Token.hype_score >= hype_min)
-            
-        if filters['hype_max'] and filters['hype_max'].replace('.', '', 1).isdigit():
-            hype_max = float(filters['hype_max'])
-            query = query.filter(Token.hype_score <= hype_max)
-            
-        if filters['risk_level']:
-            query = query.filter(Token.risk_level == filters['risk_level'])
-            
-        if filters['chain']:
-            query = query.filter(Token.chain == filters['chain'])
-            
-        # 应用排序
-        if filters['sort'] == 'sentiment':
-            query = query.order_by(Token.sentiment_score.desc())
-        elif filters['sort'] == 'hype':
-            query = query.order_by(Token.hype_score.desc())
-        elif filters['sort'] == 'risk':
-            query = query.order_by(Token.risk_level)
-        else:  # 默认按最近更新排序
-            query = query.order_by(Token.latest_update.desc())
-            
-        # 获取总记录数
-        total_count = query.count()
-        
-        # 分页
-        tokens_query = query.limit(PER_PAGE).offset((page - 1) * PER_PAGE)
-        
-        # 创建分页对象
-        pagination = {
-            'page': page,
-            'per_page': PER_PAGE,
-            'total': total_count,
-            'pages': (total_count + PER_PAGE - 1) // PER_PAGE,
-            'has_prev': page > 1,
-            'has_next': page < ((total_count + PER_PAGE - 1) // PER_PAGE),
-            'prev_num': page - 1,
-            'next_num': page + 1,
-            'iter_pages': lambda: range(1, ((total_count + PER_PAGE - 1) // PER_PAGE) + 1)
-        }
-        
-        # 处理代币数据
-        tokens = []
-        for token in tokens_query:
-            token_dict = {
-                'id': token.id,
-                'chain': token.chain,
-                'symbol': token.token_symbol,
-                'token_symbol': token.token_symbol,
-                'name': token.token_symbol,
-                'contract': token.contract,
-                'channel_name': token.channel_name,
-                'first_seen': token.first_update if token.first_update else '未知',
-                'last_seen': token.latest_update if token.latest_update else '未知',
-                'mentions': token.promotion_count if token.promotion_count else 0,
-                'mentions_percentage': min(token.promotion_count * 5 if token.promotion_count else 0, 100),
-                'sentiment_score': token.sentiment_score if token.sentiment_score is not None else 0,
-                'hype_score': token.hype_score if token.hype_score is not None else 0,
-                'price_change': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else 0,
-                'risk_level': token.risk_level if token.risk_level else 'unknown',
-                'is_trending': token.is_trending,
-                'dexscreener_url': get_dexscreener_url(token.chain, token.contract),
-                'latest_update': token.latest_update,
-                'formatted_time': token.latest_update if token.latest_update else '未知',
-                'market_cap_formatted': format_market_cap(token.market_cap),
-                'first_market_cap_formatted': format_market_cap(token.first_market_cap),
-                'image_url': None,  # 添加默认image_url字段
-                'trending_score': token.hype_score if token.hype_score is not None else 0,  # 添加trending_score字段，使用hype_score作为替代
-                'mentions_count': token.promotion_count if token.promotion_count else 0,  # 添加mentions_count字段
-                # 添加price_info嵌套对象
-                'price_info': {
-                    'current_price': token.price if token.price else None,
-                    'current_price_formatted': f"${token.price:.8f}" if token.price else "未知",
-                    'price_change_24h': ((token.price / token.first_price) - 1) * 100 if token.price and token.first_price and token.first_price > 0 else None,
-                    'price_change_24h_formatted': f"{((token.price / token.first_price) - 1) * 100:.2f}%" if token.price and token.first_price and token.first_price > 0 else "未知"
-                },
-                # 添加sentiment_info嵌套对象
-                'sentiment_info': {
-                    'sentiment_score': token.sentiment_score if token.sentiment_score is not None else None,
-                    'hype_score': token.hype_score if token.hype_score is not None else None
-                },
-                # 添加格式化的时间字段
-                'first_update_formatted': token.first_update if token.first_update else '未知',
-                'last_update_formatted': token.latest_update if token.latest_update else '未知'
-            }
-            
-            # 处理情绪评分的颜色渐变
-            sentiment = token_dict['sentiment_score']
-            if sentiment >= 0:
-                # 正面情绪，从中性灰色到绿色的渐变
-                intensity = min(sentiment * 2, 1)  # 将0-0.5映射到0-1
-                token_dict['sentiment_color_start'] = f'rgb(200, 200, 200)'
-                token_dict['sentiment_color_end'] = f'rgb({int(200 - 200 * intensity)}, 255, {int(200 - 100 * intensity)})'
-            else:
-                # 负面情绪，从中性灰色到红色的渐变
-                intensity = min(abs(sentiment * 2), 1)  # 将0-0.5映射到0-1
-                token_dict['sentiment_color_start'] = f'rgb(200, 200, 200)'
-                token_dict['sentiment_color_end'] = f'rgb(255, {int(200 - 200 * intensity)}, {int(200 - 200 * intensity)})'
-            
-            # 添加情感评分类
-            token_dict['sentiment_class'] = 'success' if sentiment > 0.2 else ('warning' if sentiment > -0.2 else 'danger')
-            
-            # 风险等级样式类
-            risk_level = token.risk_level
-            if risk_level in ['low', '低']:
-                token_dict['risk_class'] = 'risk-low'
-            elif risk_level in ['medium', 'medium-high', 'low-medium', '中']:
-                token_dict['risk_class'] = 'risk-medium'
-            elif risk_level in ['high', '高']:
-                token_dict['risk_class'] = 'risk-high'
-            else:
-                token_dict['risk_class'] = ''
-            
-            tokens.append(token_dict)
-        
-        # 为分页URL准备过滤器字典
-        filter_params = {k: v for k, v in filters.items() if v}
-        
-        return render_template('token_advanced.html', 
-                               tokens=tokens,
-                               pagination=pagination,
-                               filters=filters,
-                               filter_params=filter_params)
-    except Exception as e:
-        logger.error(f"加载代币高级列表页面时出错: {str(e)}")
+        logger.error(f"统计分析页面请求处理错误: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        return handle_error(f"加载代币高级列表页面时出错: {str(e)}")
+        return handle_error(f"处理统计分析页面请求时出错: {str(e)}")
     finally:
-        if 'session' in locals():
-            session.close()
+        session.close()
+
+
+@app.route('/token/mention_details/<int:channel_id>/<chain>/<contract>')
+def token_mention_details(channel_id, chain, contract):
+    """显示特定频道中代币的提及详情"""
+    try:
+        # 保存当前URL到session，用于导航
+        current_url = request.url
+        # 检查是否是从消息详情页来的
+        is_from_message = False
+        referer = request.headers.get('Referer', '')
+        if referer and '/message/' in referer:
+            is_from_message = True
+            session['last_message_detail_url'] = referer
+        
+        db_session = Session()
+        
+        # 获取频道信息
+        channel = db_session.query(TelegramChannel).filter(TelegramChannel.channel_id == channel_id).first()
+        
+        # 获取代币信息
+        token = db_session.query(Token).filter(
+            Token.chain == chain.upper(),
+            Token.contract == contract
+        ).first()
+        
+        if not token:
+            return handle_error(f"未找到代币: {chain}/{contract}")
+            
+        # 查询该频道中代币的提及记录
+        mentions = db_session.query(
+            TokensMark
+        ).filter(
+            TokensMark.chain == chain.upper(),
+            TokensMark.contract == contract,
+            TokensMark.channel_id == channel_id
+        ).order_by(TokensMark.mention_time.desc()).all()
+        
+        # 转换为字典列表
+        mention_data = []
+        for mention in mentions:
+            mention_data.append({
+                'id': mention.id,
+                'chain': mention.chain,
+                'token_symbol': mention.token_symbol,
+                'market_cap': mention.market_cap,
+                'market_cap_formatted': format_market_cap(mention.market_cap),
+                'mention_time': mention.mention_time,
+                'message_id': mention.message_id
+            })
+        
+        # 渲染模板
+        return render_template(
+            'token_mention_details.html',
+            token=token,
+            channel=channel,
+            mentions=mention_data,
+            is_from_message=is_from_message
+        )
+        
+    except Exception as e:
+        logger.error(f"获取代币提及详情失败: {str(e)}")
+        return handle_error(str(e))
+    finally:
+        db_session.close()
 
 
 def start_web_server(host='0.0.0.0', port=5000, debug=False):
@@ -1264,6 +485,236 @@ def page_not_found(e):
 def internal_server_error(e):
     """处理500错误"""
     return handle_error("服务器内部错误，请稍后再试", 500)
+
+
+@app.route('/api/token_market_history/<chain>/<contract>')
+def api_token_market_history(chain, contract):
+    """获取代币市值历史和频道统计数据的API"""
+    try:
+        logger.info(f"正在获取代币市值历史数据: {chain}/{contract}")
+        session = Session()
+        
+        # 查询tokens_mark数据
+        history_query = session.query(
+            TokensMark.id,
+            TokensMark.chain,
+            TokensMark.token_symbol,
+            TokensMark.contract,
+            TokensMark.market_cap,
+            TokensMark.mention_time,
+            TokensMark.channel_id,
+            TelegramChannel.channel_name,
+            TelegramChannel.member_count
+        ).outerjoin(
+            TelegramChannel, 
+            TokensMark.channel_id == TelegramChannel.channel_id
+        ).filter(
+            TokensMark.chain == chain.upper(),
+            TokensMark.contract == contract
+        ).order_by(TokensMark.mention_time.asc())
+        
+        history_records = history_query.all()
+        logger.info(f"查询到 {len(history_records)} 条历史记录")
+        
+        # 转换为JSON可序列化对象
+        history_data = []
+        channel_stats = {}  # 用于聚合每个频道的数据
+        
+        for record in history_records:
+            try:
+                # 创建历史记录
+                history_item = {
+                    'id': record.id,
+                    'chain': record.chain,
+                    'token_symbol': record.token_symbol,
+                    'contract': record.contract,
+                    'market_cap': record.market_cap,
+                    'mention_time': record.mention_time.isoformat() if record.mention_time else None,
+                    'channel_id': record.channel_id,
+                    'channel_name': record.channel_name,
+                    'member_count': record.member_count
+                }
+                history_data.append(history_item)
+                
+                # 聚合频道统计数据
+                if record.channel_id:
+                    if record.channel_id not in channel_stats:
+                        channel_stats[record.channel_id] = {
+                            'channel_id': record.channel_id,
+                            'channel_name': record.channel_name,
+                            'mention_count': 1,
+                            'first_mention_time': record.mention_time.isoformat() if record.mention_time else None,
+                            'first_market_cap': record.market_cap,
+                            'member_count': record.member_count
+                        }
+                    else:
+                        # 增加提及次数
+                        channel_stats[record.channel_id]['mention_count'] += 1
+                        
+                        # 检查并更新最早提及时间
+                        if record.mention_time and channel_stats[record.channel_id]['first_mention_time']:
+                            current_first_time = datetime.fromisoformat(channel_stats[record.channel_id]['first_mention_time'])
+                            if record.mention_time < current_first_time:
+                                channel_stats[record.channel_id]['first_mention_time'] = record.mention_time.isoformat()
+                                channel_stats[record.channel_id]['first_market_cap'] = record.market_cap
+            except Exception as record_error:
+                logger.error(f"处理记录 {record.id if hasattr(record, 'id') else '未知'} 失败: {str(record_error)}")
+                continue
+        
+        # 将频道统计字典转换为列表
+        channel_stats_list = list(channel_stats.values())
+        logger.info(f"生成了 {len(channel_stats_list)} 条频道统计数据")
+        
+        # 检查数据是否为空
+        if not history_data:
+            logger.warning(f"未找到代币 {chain}/{contract} 的市值历史数据")
+        
+        if not channel_stats_list:
+            logger.warning(f"未找到代币 {chain}/{contract} 的频道统计数据")
+            
+        return jsonify({
+            'success': True,
+            'history': history_data,
+            'channel_stats': channel_stats_list
+        })
+        
+    except Exception as e:
+        logger.error(f"获取代币市值历史数据失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+    finally:
+        session.close()
+
+
+@app.route('/message/<chain>/<int:message_id>')
+def message_detail(chain, message_id):
+    """显示特定消息的详情页面"""
+    try:
+        db_session = Session()
+        
+        # 获取当前URL并保存到session
+        current_url = request.url
+        session['last_message_detail_url'] = current_url
+        
+        # 查询消息
+        message = db_session.query(Message).filter(
+            Message.chain == chain.upper(),
+            Message.message_id == message_id
+        ).first()
+        
+        if not message:
+            return handle_error(f"未找到消息: {chain}/{message_id}")
+            
+        # 获取与消息相关的频道信息
+        channel = None
+        # 直接使用message.channel_id获取频道信息
+        if message.channel_id:
+            channel = db_session.query(TelegramChannel).filter(
+                TelegramChannel.channel_id == message.channel_id
+            ).first()
+        
+        # 如果没有找到channel，尝试通过TokensMark查找
+        if not channel:
+            token_mark = db_session.query(TokensMark).filter(
+                TokensMark.chain == chain.upper(),
+                TokensMark.message_id == message_id
+            ).first()
+            
+            if token_mark and token_mark.channel_id:
+                channel = db_session.query(TelegramChannel).filter(
+                    TelegramChannel.channel_id == token_mark.channel_id
+                ).first()
+        
+        # 查找相关代币
+        tokens = db_session.query(Token).filter(
+            Token.chain == chain.upper(),
+            Token.message_id == message_id
+        ).all()
+        
+        tokens_data = []
+        for token in tokens:
+            tokens_data.append({
+                'id': token.id,
+                'chain': token.chain,
+                'token_symbol': token.token_symbol,
+                'contract': token.contract,
+                'market_cap': token.market_cap,
+                'market_cap_formatted': token.market_cap_formatted,
+                'dexscreener_url': token.dexscreener_url or get_dexscreener_url(token.chain, token.contract)
+            })
+        
+        # 渲染模板
+        return render_template(
+            'message_detail.html',
+            message=message,
+            channel=channel,
+            tokens=tokens_data,
+            has_tokens=len(tokens_data) > 0
+        )
+        
+    except Exception as e:
+        logger.error(f"获取消息详情失败: {str(e)}")
+        return handle_error(str(e))
+    finally:
+        db_session.close()
+
+
+@app.route('/media/<path:filename>')
+def serve_media(filename):
+    """提供媒体文件服务"""
+    try:
+        # 创建媒体目录的绝对路径
+        media_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../media'))
+        
+        # 如果路径以media/开头，则移除此前缀以避免路径重复
+        if filename.startswith('media/'):
+            filename = filename[6:]  # 移除"media/"前缀
+            
+        logger.info(f"尝试提供媒体文件: {filename}，从目录: {media_dir}")
+        
+        # 将所有路径分隔符标准化为操作系统风格
+        norm_filename = os.path.normpath(filename)
+        
+        # 检查文件是否存在，如果不存在，尝试添加常见的图片/视频扩展名
+        file_path = os.path.join(media_dir, norm_filename)
+        if os.path.exists(file_path):
+            # 将路径分解为目录和文件名部分
+            subdir, base_filename = os.path.split(norm_filename)
+            full_dir = os.path.join(media_dir, subdir)
+            logger.info(f"找到原始文件: {base_filename}，从目录: {full_dir}")
+            return send_from_directory(full_dir, base_filename)
+            
+        # 文件不存在，尝试添加扩展名
+        dirname, basename = os.path.split(norm_filename)
+        
+        # 尝试常见的图片/视频扩展名
+        for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm']:
+            test_filename = basename + ext
+            if dirname:
+                test_filepath = os.path.join(media_dir, dirname, test_filename)
+                subdir = dirname
+            else:
+                test_filepath = os.path.join(media_dir, test_filename)
+                subdir = ''
+                
+            logger.info(f"尝试查找文件: {test_filepath}")
+            
+            if os.path.exists(test_filepath):
+                full_dir = os.path.join(media_dir, subdir)
+                logger.info(f"找到媒体文件: {test_filename}，从目录: {full_dir}")
+                return send_from_directory(full_dir, test_filename)
+        
+        # 如果所有尝试都失败，记录并返回错误
+        logger.warning(f"找不到媒体文件: {norm_filename}，已尝试所有常见扩展名")
+        return handle_error("无法找到所请求的媒体文件", 404)
+    
+    except Exception as e:
+        logger.error(f"提供媒体文件时出错: {str(e)}")
+        return handle_error("无法加载所请求的媒体文件", 404)
 
 
 if __name__ == '__main__':
