@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 import json
 import time
 import os
@@ -7,19 +6,15 @@ import multiprocessing
 from datetime import datetime, timezone, timedelta
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_from_directory, abort, session
 from flask_cors import CORS
-from sqlalchemy import create_engine, func, desc, and_, or_
-from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
-from src.database.models import engine, Token, Message, TelegramChannel, TokensMark
-from src.core.channel_manager import ChannelManager
-import config.settings as config
-import urllib.parse
+from src.database.models import Token, Message, TelegramChannel, TokensMark
 
 # 在开发环境中修改路径
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.database.db_handler import extract_promotion_info
+import config.settings as config
 
 # 加载环境变量
 load_dotenv()
@@ -40,9 +35,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 创建数据库会话
-engine = create_engine(config.DATABASE_URI)
-Session = sessionmaker(bind=engine)
+# 创建数据库引擎和会话
+# 使用数据库工厂获取适配器
+try:
+    logger.info("在Web应用程序中使用Supabase适配器")
+    from src.database.db_factory import get_db_adapter
+    db_adapter = get_db_adapter()
+except Exception as e:
+    logger.error(f"初始化数据库连接时出错: {str(e)}")
+    import traceback
+    logger.error(traceback.format_exc())
 
 def handle_error(error_message, status_code=500):
     """通用错误处理函数，返回友好的错误页面"""
@@ -91,7 +93,9 @@ def format_market_cap(value):
 
 def get_db_connection():
     """创建数据库连接"""
-    return sqlite3.connect(os.path.join('./data', 'telegram_messages.db'))
+    from src.database.db_factory import get_db_adapter
+    logger.info("使用Supabase适配器创建数据库连接")
+    return get_db_adapter()
 
 
 def get_dexscreener_url(chain: str, contract: str) -> str:
@@ -112,7 +116,6 @@ app.jinja_env.globals.update(
 
 def get_system_stats():
     """获取系统统计数据"""
-    session = None
     default_stats = {
         'active_channels_count': 0,
         'message_count': 0,
@@ -122,23 +125,40 @@ def get_system_stats():
     }
     
     try:
-        session = Session()
+        # 使用Supabase适配器
+        from src.database.db_factory import get_db_adapter
+        from src.core.channel_manager import ChannelManager
+        db_adapter = get_db_adapter()
         
-        # 获取活跃频道数
-        active_channels_count = session.query(TelegramChannel).filter_by(is_active=True).count()
+        # 使用ChannelManager获取活跃频道
+        channel_manager = ChannelManager()
+        channels = channel_manager.get_active_channels()
+        active_channels_count = len(channels) if channels else 0
         
-        # 获取消息数
-        message_count = session.query(Message).count()
-        
-        # 获取代币数
-        token_count = session.query(Token).count()
-        
-        # 获取最后更新时间
-        last_update = session.query(Token.latest_update).order_by(Token.latest_update.desc()).first()
-        last_update = last_update[0] if last_update else "未知"
-        
-        # 获取活跃频道列表
-        channels = session.query(TelegramChannel).filter_by(is_active=True).all()
+        # 使用Supabase适配器获取消息和代币数量
+        try:
+            # 获取代币数量
+            from supabase import create_client
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_KEY
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 获取代币数量
+            tokens_count_response = supabase.table('tokens').select('id', count='exact').execute()
+            token_count = tokens_count_response.count if hasattr(tokens_count_response, 'count') else 0
+            
+            # 获取消息数量
+            messages_count_response = supabase.table('messages').select('id', count='exact').execute()
+            message_count = messages_count_response.count if hasattr(messages_count_response, 'count') else 0
+            
+            # 获取最后更新时间
+            last_update_response = supabase.table('tokens').select('latest_update').order('id', desc=True).limit(1).execute()
+            last_update = last_update_response.data[0]['latest_update'] if hasattr(last_update_response, 'data') and last_update_response.data else "未知"
+        except Exception as e:
+            logger.error(f"获取Supabase数据统计时出错: {str(e)}")
+            token_count = 0
+            message_count = 0
+            last_update = "未知"
         
         return {
             'active_channels_count': active_channels_count,
@@ -153,174 +173,235 @@ def get_system_stats():
         logger.error(traceback.format_exc())
         # 返回默认值以防止页面崩溃
         return default_stats
-    finally:
-        if session:
-            session.close()
 
 
 @app.route('/')
 def index():
     """首页"""
-    # 从数据库获取系统统计和最近代币
-    session = Session()
     try:
         # 获取查询参数
         chain_filter = request.args.get('chain', 'all')
         search_query = request.args.get('search', '')
         
-        # 构建查询
-        query = session.query(Token)
-        
-        # 应用筛选条件
-        if chain_filter and chain_filter.lower() != 'all':
-            query = query.filter(Token.chain == chain_filter)
+        # 使用Supabase适配器获取代币数据
+        logger.info("使用Supabase获取首页数据")
+        try:
+            from supabase import create_client
+            # 不要重新导入config模块，直接使用全局config
             
-        # 应用搜索条件
-        if search_query:
-            # 在代币符号、合约地址和名称中搜索
-            query = query.filter(
-                or_(
-                    Token.token_symbol.ilike(f"%{search_query}%"),
-                    Token.contract.ilike(f"%{search_query}%")
-                )
-            )
-        
-        # 获取最近的代币，限制20个
-        recent_tokens = query.order_by(Token.latest_update.desc()).limit(20).all()
-        
-        # 获取所有可用的Chain
-        available_chains = [r[0] for r in session.query(Token.chain).distinct().all()]
-        
-        # 处理代币数据
-        tokens = []
-        for token in recent_tokens:
-            # 检查token是否为None
-            if token is None:
-                logger.warning("发现None类型的token对象，已跳过")
-                continue
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_KEY
+            
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+                return handle_error("数据库配置不完整", 500)
+            
+            # 创建 Supabase 客户端
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 构建查询
+            query = supabase.table('tokens').select('*')
+            
+            # 应用筛选条件
+            if chain_filter and chain_filter.lower() != 'all':
+                query = query.eq('chain', chain_filter)
                 
-            # 处理token对象，提取需要的字段
-            token_dict = {
-                'id': token.id,
-                'chain': token.chain,
-                'token_symbol': token.token_symbol,
-                'contract': token.contract,
-                'first_update': token.first_update,
-                'latest_update': token.latest_update,
-                'image_url': getattr(token, 'image_url', None),
-                'market_cap': format_market_cap(token.market_cap),
-                'liquidity': token.liquidity,
-                'dexscreener_url': token.dexscreener_url,
-                'telegram_url': token.telegram_url,
-                'twitter_url': token.twitter_url,
-                'website_url': token.website_url,
-                'holders_count': token.holders_count or '未知',
-                'buys_1h': token.buys_1h or 0,
-                'sells_1h': token.sells_1h or 0,
-                'volume_1h': format_market_cap(token.volume_1h) if token.volume_1h else 0,
-                'spread_count': f"{token.spread_count or 0}次",
-                'community_reach': f"{token.community_reach or 0}人"
-            }
+            # 应用搜索条件（有限支持）
+            if search_query:
+                query = query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
             
-            # 计算涨跌幅
-            try:
-                # 使用Token.market_cap和Token.market_cap_1h直接计算涨跌幅
-                if token.market_cap_1h and token.market_cap_1h > 0:
-                    # 使用一小时前的市值和当前市值计算涨跌幅
-                    change_pct = ((token.market_cap or 0) - token.market_cap_1h) / token.market_cap_1h * 100
-                    token_dict['change_percentage'] = f"{change_pct:+.2f}%"
-                    token_dict['change_pct_value'] = change_pct
-                    token_dict['is_profit'] = change_pct >= 0
-                else:
-                    # 如果没有一小时前的市值记录，退回到使用first_market_cap
-                    if token.first_market_cap and token.first_market_cap > 0:
-                        change_pct = ((token.market_cap or 0) - token.first_market_cap) / token.first_market_cap * 100
+            # 获取最近更新的代币并限制数量
+            query = query.order('latest_update', desc=True).limit(20)
+            
+            # 执行查询
+            response = query.execute()
+            
+            if not hasattr(response, 'data'):
+                logger.error("Supabase查询未返回data字段")
+                return handle_error("查询数据失败", 500)
+            
+            # 获取可用的链
+            chains_response = supabase.table('tokens').select('chain').execute()
+            available_chains = []
+            if hasattr(chains_response, 'data'):
+                # 提取唯一的链名称
+                chain_values = [item.get('chain') for item in chains_response.data if item.get('chain')]
+                available_chains = list(set(chain_values))
+            else:
+                available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
+            
+            # 处理代币数据
+            tokens = []
+            for token in response.data:
+                # 检查token是否为None
+                if token is None:
+                    logger.warning("发现None类型的token对象，已跳过")
+                    continue
+                    
+                # 处理token对象，提取需要的字段
+                token_dict = {
+                    'id': token.get('id'),
+                    'chain': token.get('chain'),
+                    'token_symbol': token.get('token_symbol'),
+                    'contract': token.get('contract'),
+                    'first_update': token.get('first_update'),
+                    'latest_update': token.get('latest_update'),
+                    'image_url': token.get('image_url'),
+                    'market_cap': format_market_cap(token.get('market_cap')),
+                    'liquidity': token.get('liquidity'),
+                    'dexscreener_url': token.get('dexscreener_url') or get_dexscreener_url(token.get('chain'), token.get('contract')),
+                    'telegram_url': token.get('telegram_url'),
+                    'twitter_url': token.get('twitter_url'),
+                    'website_url': token.get('website_url'),
+                    'holders_count': token.get('holders_count') or '未知',
+                    'buys_1h': token.get('buys_1h') or 0,
+                    'sells_1h': token.get('sells_1h') or 0,
+                    'volume_1h': format_market_cap(token.get('volume_1h')) if token.get('volume_1h') else 0,
+                    'spread_count': f"{token.get('spread_count') or 0}次",
+                    'community_reach': f"{token.get('community_reach') or 0}人"
+                }
+                
+                # 计算涨跌幅
+                try:
+                    # 使用Token.market_cap和Token.market_cap_1h直接计算涨跌幅
+                    market_cap_1h = token.get('market_cap_1h')
+                    if market_cap_1h and float(market_cap_1h) > 0:
+                        # 使用一小时前的市值和当前市值计算涨跌幅
+                        current_market_cap = token.get('market_cap') or 0
+                        change_pct = (float(current_market_cap) - float(market_cap_1h)) / float(market_cap_1h) * 100
                         token_dict['change_percentage'] = f"{change_pct:+.2f}%"
                         token_dict['change_pct_value'] = change_pct
-                        token_dict['is_profit'] = change_pct >= 0
+                        
+                        # 从字符串转换成 CSS 类
+                        if change_pct > 0:
+                            token_dict['change_class'] = 'positive-change'
+                        elif change_pct < 0:
+                            token_dict['change_class'] = 'negative-change'
+                        else:
+                            token_dict['change_class'] = 'neutral-change'
                     else:
-                        token_dict['change_percentage'] = "0%"
+                        token_dict['change_percentage'] = '0.00%'
+                        token_dict['change_class'] = 'neutral-change'
                         token_dict['change_pct_value'] = 0
-                        token_dict['is_profit'] = True
-            except Exception as e:
-                logger.error(f"计算代币 {token.chain}/{token.contract} 涨跌幅时出错: {str(e)}")
-                # 出错时使用默认值
-                token_dict['change_percentage'] = "0%"
-                token_dict['change_pct_value'] = 0
-                token_dict['is_profit'] = True
+                except Exception as e:
+                    logger.error(f"计算涨跌幅时出错: {token.get('token_symbol')}, {str(e)}")
+                    token_dict['change_percentage'] = '0.00%'
+                    token_dict['change_class'] = 'neutral-change'
+                    token_dict['change_pct_value'] = 0
                 
-            tokens.append(token_dict)
-        
-        # 使用system_stats填充上下文
-        stats = get_system_stats()
-        
-        return render_template('index.html', 
-                               tokens=tokens,
-                               stats=stats,
-                               chain_filter=chain_filter,
-                               search_query=search_query,
-                               available_chains=available_chains,
-                               year=datetime.now().year)
+                tokens.append(token_dict)
+            
+            # 获取系统统计数据
+            system_stats = get_system_stats()
+            
+            # 渲染模板
+            return render_template('index.html', 
+                                tokens=tokens,
+                                available_chains=available_chains,
+                                selected_chain=chain_filter,
+                                search_query=search_query,
+                                system_stats=system_stats,
+                                year=datetime.now().year)
+                                
+        except Exception as e:
+            logger.error(f"使用Supabase获取数据时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return handle_error(f"获取数据失败: {str(e)}", 500)
+            
     except Exception as e:
-        logger.error(f"首页请求处理错误: {str(e)}")
+        logger.error(f"首页渲染时出错: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        return handle_error(f"处理首页请求时出错: {str(e)}")
-    finally:
-        session.close()
+        return handle_error(f"页面加载出错: {str(e)}", 500)
 
 
 @app.route('/channels')
 def channels():
     """社群信息页面，显示所有频道和群组信息"""
     try:
-        session = Session()
+        # 使用 ChannelManager 获取数据
+        from src.core.channel_manager import ChannelManager
+        channel_manager = ChannelManager()
         
-        # 获取所有频道信息
-        channels = session.query(TelegramChannel).order_by(TelegramChannel.chain).all()
+        # 获取所有频道
+        all_channels = channel_manager.get_all_channels()
         
         # 获取活跃频道数量
-        active_channels_count = session.query(TelegramChannel).filter_by(is_active=True).count()
+        active_channels = channel_manager.get_active_channels()
+        active_channels_count = len(active_channels) if active_channels else 0
         
-        # 获取最后更新时间
-        last_update = session.query(Token.latest_update).order_by(Token.latest_update.desc()).first()
-        last_update = last_update[0] if last_update else "未知"
+        # 最后更新时间使用当前时间
+        last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # 渲染模板
         return render_template(
             'channels.html',
-            channels=channels,
+            channels=all_channels,
             active_channels_count=active_channels_count,
             last_update=last_update,
             year=datetime.now().year
         )
-        
     except Exception as e:
         logger.error(f"社群信息页面请求处理错误: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return handle_error(f"处理社群信息页面请求时出错: {str(e)}")
-    finally:
-        session.close()
 
 
 @app.route('/statistics')
 def statistics():
     """统计分析页面，显示系统统计数据和图表"""
     try:
-        session = Session()
-        
-        # 获取系统统计数据
+        # 获取系统统计数据，处理已经在 get_system_stats 函数中完成
         stats = get_system_stats()
         
-        # 获取代币分布数据
-        chain_counts = session.query(Token.chain, func.count(Token.id)).group_by(Token.chain).all()
-        
-        # 准备图表数据
-        chart_data = {
-            'chains': [chain for chain, _ in chain_counts],
-            'counts': [count for _, count in chain_counts]
-        }
+        # 从Supabase获取代币分布数据
+        try:
+            from supabase import create_client
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_KEY
+            
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+                raise ValueError("数据库配置不完整")
+                
+            # 创建Supabase客户端
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 使用原生SQL查询获取代币分布
+            # 修改：不再使用exec_sql函数，改用Supabase SDK原生方法
+            # 获取所有代币记录
+            tokens_response = supabase.table('tokens').select('chain').execute()
+            
+            if hasattr(tokens_response, 'data') and tokens_response.data:
+                # 手动计数每个链的代币数量
+                chain_counts = {}
+                for token in tokens_response.data:
+                    chain = token.get('chain')
+                    if chain:
+                        chain_counts[chain] = chain_counts.get(chain, 0) + 1
+                
+                chains = list(chain_counts.keys())
+                counts = [chain_counts[chain] for chain in chains]
+                
+                chart_data = {
+                    'chains': chains,
+                    'counts': counts
+                }
+            else:
+                # 没有数据时使用默认值
+                chart_data = {
+                    'chains': ['ETH', 'BSC', 'SOL'],  # 默认支持的链
+                    'counts': [0, 0, 0]  # 暂时没有数据
+                }
+        except Exception as e:
+            logger.error(f"获取链分布数据失败: {str(e)}")
+            # 使用默认数据
+            chart_data = {
+                'chains': ['ETH', 'BSC', 'SOL'],  # 默认支持的链
+                'counts': [0, 0, 0]  # 暂时没有数据
+            }
         
         # 渲染模板
         return render_template(
@@ -333,14 +414,11 @@ def statistics():
             chart_data=chart_data,
             year=datetime.now().year
         )
-        
     except Exception as e:
         logger.error(f"统计分析页面请求处理错误: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return handle_error(f"处理统计分析页面请求时出错: {str(e)}")
-    finally:
-        session.close()
 
 
 @app.route('/token/mention_details/<int:channel_id>/<chain>/<contract>')
@@ -355,41 +433,55 @@ def token_mention_details(channel_id, chain, contract):
         if referer and '/message/' in referer:
             is_from_message = True
             session['last_message_detail_url'] = referer
+            
+        # 使用Supabase获取数据
+        from supabase import create_client
         
-        db_session = Session()
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
+            return handle_error("数据库配置不完整", 500)
+            
+        # 创建Supabase客户端
+        supabase = create_client(supabase_url, supabase_key)
         
         # 获取频道信息
-        channel = db_session.query(TelegramChannel).filter(TelegramChannel.channel_id == channel_id).first()
+        channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', channel_id).limit(1).execute()
+        channel = channel_response.data[0] if hasattr(channel_response, 'data') and channel_response.data else None
         
+        if not channel:
+            return handle_error(f"未找到频道: ID {channel_id}")
+            
         # 获取代币信息
-        token = db_session.query(Token).filter(
-            Token.chain == chain.upper(),
-            Token.contract == contract
-        ).first()
+        token_response = supabase.table('tokens').select('*').eq('chain', chain.upper()).eq('contract', contract).limit(1).execute()
+        token = token_response.data[0] if hasattr(token_response, 'data') and token_response.data else None
         
         if not token:
             return handle_error(f"未找到代币: {chain}/{contract}")
             
         # 查询该频道中代币的提及记录
-        mentions = db_session.query(
-            TokensMark
-        ).filter(
-            TokensMark.chain == chain.upper(),
-            TokensMark.contract == contract,
-            TokensMark.channel_id == channel_id
-        ).order_by(TokensMark.mention_time.desc()).all()
+        mentions_response = supabase.table('tokens_mark').select('*')\
+            .eq('chain', chain.upper())\
+            .eq('contract', contract)\
+            .eq('channel_id', channel_id)\
+            .order('mention_time', desc=True)\
+            .execute()
+            
+        mentions = mentions_response.data if hasattr(mentions_response, 'data') else []
         
         # 转换为字典列表
         mention_data = []
         for mention in mentions:
             mention_data.append({
-                'id': mention.id,
-                'chain': mention.chain,
-                'token_symbol': mention.token_symbol,
-                'market_cap': mention.market_cap,
-                'market_cap_formatted': format_market_cap(mention.market_cap),
-                'mention_time': mention.mention_time,
-                'message_id': mention.message_id
+                'id': mention.get('id'),
+                'chain': mention.get('chain'),
+                'token_symbol': mention.get('token_symbol'),
+                'market_cap': mention.get('market_cap'),
+                'market_cap_formatted': format_market_cap(mention.get('market_cap')),
+                'mention_time': mention.get('mention_time'),
+                'message_id': mention.get('message_id')
             })
         
         # 渲染模板
@@ -400,12 +492,12 @@ def token_mention_details(channel_id, chain, contract):
             mentions=mention_data,
             is_from_message=is_from_message
         )
-        
+                
     except Exception as e:
         logger.error(f"获取代币提及详情失败: {str(e)}")
-        return handle_error(str(e))
-    finally:
-        db_session.close()
+        import traceback
+        logger.error(traceback.format_exc())
+        return handle_error(f"获取代币提及详情失败: {str(e)}")
 
 
 def start_web_server(host='0.0.0.0', port=5000, debug=False):
@@ -413,66 +505,126 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
     启动Web服务器
     
     Args:
-        host: 主机地址，默认为0.0.0.0
-        port: 端口号，默认为5000
-        debug: 是否开启调试模式
-    
+        host: 主机地址
+        port: 端口号
+        debug: 是否启用调试模式
+        
     Returns:
-        multiprocessing.Process: Web服务器进程对象
+        Web服务器进程或线程
     """
     try:
-        # 确保参数合法
-        if not host:
-            logger.warning("主机地址为空，使用默认值0.0.0.0")
-            host = '0.0.0.0'
-            
-        if not isinstance(port, int) or port <= 0:
-            logger.warning(f"端口号无效: {port}，使用默认值5000")
-            port = 5000
-            
-        # 确保必要的目录存在
-        os.makedirs('./logs', exist_ok=True)
-        os.makedirs('./data', exist_ok=True)
-        os.makedirs('./media', exist_ok=True)
+        logger.info(f"正在启动Web服务器: {host}:{port}")
+        logger.info(f"数据库配置: {config.DATABASE_URI}")
         
-        # 确保静态资源目录存在
+        # 检查是否使用Supabase
+        if not config.DATABASE_URI.startswith('supabase://'):
+            logger.error("未使用Supabase数据库，请检查配置")
+            logger.error(f"当前DATABASE_URI: {config.DATABASE_URI}")
+            logger.error("DATABASE_URI应以'supabase://'开头")
+            return None
+        
+        # 初始化Supabase适配器
+        logger.info("Web服务器使用Supabase数据库")
         try:
-            static_img_dir = os.path.join(app.static_folder, 'img')
-            os.makedirs(static_img_dir, exist_ok=True)
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            if db_adapter:
+                logger.info("Supabase适配器初始化成功")
+            else:
+                logger.error("无法初始化Supabase适配器")
+                return None
         except Exception as e:
-            logger.error(f"创建静态资源目录时出错: {str(e)}")
-            # 继续尝试启动服务器
+            logger.error(f"初始化Supabase适配器时出错: {str(e)}")
+            return None
         
-        logger.info(f"启动Web服务器 - {host}:{port}")
+        # 检测操作系统环境
+        import platform
+        is_windows = platform.system() == 'Windows'
         
-        # 修改为使用线程而不是多进程，解决Windows下的序列化问题
-        import threading
-        
-        def run_flask_app():
-            try:
-                app.run(host=host, port=port, debug=debug)
-            except Exception as e:
-                logger.error(f"Flask应用启动失败: {str(e)}")
-                # 尝试在其他端口启动
-                try:
-                    logger.info(f"尝试在备用端口启动: {port+1}")
-                    app.run(host=host, port=port+1, debug=debug)
-                except Exception as e2:
-                    logger.error(f"备用端口启动也失败: {str(e2)}")
-        
-        # 使用线程而不是多进程
-        web_thread = threading.Thread(target=run_flask_app)
-        web_thread.daemon = True  # 设置为守护线程，主线程退出时自动结束
-        web_thread.start()
-        
-        # 返回线程对象而不是进程对象
-        return web_thread
+        # 在Windows环境下使用线程，在Linux环境下使用多进程
+        if is_windows:
+            logger.info("Windows环境：使用线程启动Web服务器")
             
+            def run_flask_app():
+                global app
+                try:
+                    logger.info(f"Flask线程启动: {host}:{port}")
+                    app.run(host=host, port=port, debug=debug)
+                except Exception as e:
+                    logger.error(f"Flask线程崩溃: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
+            import threading
+            thread = threading.Thread(target=run_flask_app)
+            thread.daemon = True
+            thread.start()
+            
+            logger.info(f"已使用线程启动Web服务器")
+            return thread
+        else:
+            # 创建多进程 (Linux环境)
+            logger.info("Linux环境：使用多进程启动Web服务器")
+            
+            # 使用全局函数而非本地函数，解决pickling问题
+            process = multiprocessing.Process(target=run_flask_server, args=(host, port, debug))
+            process.daemon = True
+            
+            try:
+                process.start()
+                logger.info(f"Web服务器已启动，进程ID: {process.pid}")
+                return process
+            except Exception as multi_error:
+                logger.error(f"使用多进程启动失败: {str(multi_error)}")
+                # 回退到线程方式
+                logger.info("回退到线程方式启动")
+                
+                def run_flask_app():
+                    global app
+                    app.run(host=host, port=port, debug=debug)
+                    
+                import threading
+                thread = threading.Thread(target=run_flask_app)
+                thread.daemon = True
+                thread.start()
+                
+                logger.info(f"已使用线程启动Web服务器")
+                return thread
     except Exception as e:
         logger.error(f"启动Web服务器时出错: {str(e)}")
         import traceback
-        logger.debug(traceback.format_exc())
+        logger.error(traceback.format_exc())
         return None
+
+# 添加全局函数用于多进程启动Flask (Linux环境)
+def run_flask_server(host, port, debug):
+    """
+    在新进程中运行Flask服务器的全局函数
+    
+    Args:
+        host: 主机地址
+        port: 端口号
+        debug: 是否启用调试模式
+    """
+    global app
+    
+    # 在新进程中设置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../logs/web_app.log'))),
+            logging.StreamHandler()
+        ]
+    )
+    
+    try:
+        logger.info(f"Flask进程启动: {host}:{port}")
+        app.run(host=host, port=port, debug=debug)
+    except Exception as e:
+        logger.error(f"Flask进程崩溃: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 
 # 添加全局错误处理器
@@ -492,73 +644,106 @@ def api_token_market_history(chain, contract):
     """获取代币市值历史和频道统计数据的API"""
     try:
         logger.info(f"正在获取代币市值历史数据: {chain}/{contract}")
-        session = Session()
         
-        # 查询tokens_mark数据
-        history_query = session.query(
-            TokensMark.id,
-            TokensMark.chain,
-            TokensMark.token_symbol,
-            TokensMark.contract,
-            TokensMark.market_cap,
-            TokensMark.mention_time,
-            TokensMark.channel_id,
-            TelegramChannel.channel_name,
-            TelegramChannel.member_count
-        ).outerjoin(
-            TelegramChannel, 
-            TokensMark.channel_id == TelegramChannel.channel_id
-        ).filter(
-            TokensMark.chain == chain.upper(),
-            TokensMark.contract == contract
-        ).order_by(TokensMark.mention_time.asc())
+        # 使用Supabase获取数据
+        from supabase import create_client
         
-        history_records = history_query.all()
-        logger.info(f"查询到 {len(history_records)} 条历史记录")
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
+            return jsonify({
+                'success': False,
+                'error': "数据库配置不完整"
+            }), 500
+            
+        # 创建Supabase客户端
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 查询tokens_mark和telegram_channels表
+        # 修改：不再使用exec_sql函数，改用Supabase SDK原生方法
+        # 先获取tokens_mark数据
+        token_marks_response = supabase.table('tokens_mark')\
+            .select('*')\
+            .eq('chain', chain.upper())\
+            .eq('contract', contract)\
+            .order('mention_time', desc=False)\
+            .execute()
+            
+        if not hasattr(token_marks_response, 'data'):
+            logger.error("Supabase查询tokens_mark未返回data字段")
+            return jsonify({
+                'success': False,
+                'error': "查询数据失败"
+            }), 500
+            
+        token_marks = token_marks_response.data if hasattr(token_marks_response, 'data') else []
+        logger.info(f"查询到 {len(token_marks)} 条tokens_mark历史记录")
+        
+        # 获取所有涉及的channel_id
+        channel_ids = list(set([mark.get('channel_id') for mark in token_marks if mark.get('channel_id')]))
+        
+        # 获取这些channel的信息
+        channels_data = {}
+        if channel_ids:
+            # 逐个查询channel信息（因为in查询可能不支持）
+            for channel_id in channel_ids:
+                # 获取频道信息
+                channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', channel_id).limit(1).execute()
+                if hasattr(channel_response, 'data') and channel_response.data and len(channel_response.data) > 0:
+                    channels_data[channel_id] = channel_response.data[0]
         
         # 转换为JSON可序列化对象
         history_data = []
         channel_stats = {}  # 用于聚合每个频道的数据
         
-        for record in history_records:
+        for record in token_marks:
             try:
+                # 获取相关channel信息
+                channel_id = record.get('channel_id')
+                channel_info = channels_data.get(channel_id, {})
+                
                 # 创建历史记录
                 history_item = {
-                    'id': record.id,
-                    'chain': record.chain,
-                    'token_symbol': record.token_symbol,
-                    'contract': record.contract,
-                    'market_cap': record.market_cap,
-                    'mention_time': record.mention_time.isoformat() if record.mention_time else None,
-                    'channel_id': record.channel_id,
-                    'channel_name': record.channel_name,
-                    'member_count': record.member_count
+                    'id': record.get('id'),
+                    'chain': record.get('chain'),
+                    'token_symbol': record.get('token_symbol'),
+                    'contract': record.get('contract'),
+                    'market_cap': record.get('market_cap'),
+                    'mention_time': record.get('mention_time'),
+                    'channel_id': channel_id,
+                    'channel_name': channel_info.get('channel_name'),
+                    'member_count': channel_info.get('member_count')
                 }
                 history_data.append(history_item)
                 
                 # 聚合频道统计数据
-                if record.channel_id:
-                    if record.channel_id not in channel_stats:
-                        channel_stats[record.channel_id] = {
-                            'channel_id': record.channel_id,
-                            'channel_name': record.channel_name,
+                if channel_id:
+                    if channel_id not in channel_stats:
+                        channel_stats[channel_id] = {
+                            'channel_id': channel_id,
+                            'channel_name': channel_info.get('channel_name'),
                             'mention_count': 1,
-                            'first_mention_time': record.mention_time.isoformat() if record.mention_time else None,
-                            'first_market_cap': record.market_cap,
-                            'member_count': record.member_count
+                            'first_mention_time': record.get('mention_time'),
+                            'first_market_cap': record.get('market_cap'),
+                            'member_count': channel_info.get('member_count')
                         }
                     else:
                         # 增加提及次数
-                        channel_stats[record.channel_id]['mention_count'] += 1
+                        channel_stats[channel_id]['mention_count'] += 1
                         
                         # 检查并更新最早提及时间
-                        if record.mention_time and channel_stats[record.channel_id]['first_mention_time']:
-                            current_first_time = datetime.fromisoformat(channel_stats[record.channel_id]['first_mention_time'])
-                            if record.mention_time < current_first_time:
-                                channel_stats[record.channel_id]['first_mention_time'] = record.mention_time.isoformat()
-                                channel_stats[record.channel_id]['first_market_cap'] = record.market_cap
+                        if record.get('mention_time') and channel_stats[channel_id]['first_mention_time']:
+                            current_first_time = channel_stats[channel_id]['first_mention_time']
+                            record_time = record.get('mention_time')
+                            if isinstance(current_first_time, str) and isinstance(record_time, str):
+                                # 如果都是字符串，直接比较（ISO格式的日期字符串可以直接按字典序比较）
+                                if record_time < current_first_time:
+                                    channel_stats[channel_id]['first_mention_time'] = record_time
+                                    channel_stats[channel_id]['first_market_cap'] = record.get('market_cap')
             except Exception as record_error:
-                logger.error(f"处理记录 {record.id if hasattr(record, 'id') else '未知'} 失败: {str(record_error)}")
+                logger.error(f"处理记录失败: {str(record_error)}")
                 continue
         
         # 将频道统计字典转换为列表
@@ -586,81 +771,75 @@ def api_token_market_history(chain, contract):
             'success': False,
             'error': str(e)
         })
-    finally:
-        session.close()
 
 
 @app.route('/message/<chain>/<int:message_id>')
 def message_detail(chain, message_id):
     """显示特定消息的详情页面"""
     try:
-        db_session = Session()
-        
         # 获取当前URL并保存到session
         current_url = request.url
         session['last_message_detail_url'] = current_url
         
-        # 查询消息
-        message = db_session.query(Message).filter(
-            Message.chain == chain.upper(),
-            Message.message_id == message_id
-        ).first()
+        # 使用Supabase获取数据
+        from supabase import create_client
+        
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
+            return handle_error("数据库配置不完整", 500)
+            
+        # 创建Supabase客户端
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 获取消息数据
+        message_response = supabase.table('messages').select('*').eq('chain', chain).eq('message_id', message_id).limit(1).execute()
+        message = message_response.data[0] if hasattr(message_response, 'data') and message_response.data else None
         
         if not message:
             return handle_error(f"未找到消息: {chain}/{message_id}")
             
-        # 获取与消息相关的频道信息
+        # 获取频道数据
         channel = None
-        # 直接使用message.channel_id获取频道信息
-        if message.channel_id:
-            channel = db_session.query(TelegramChannel).filter(
-                TelegramChannel.channel_id == message.channel_id
-            ).first()
+        if message.get('channel_id'):
+            channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', message.get('channel_id')).limit(1).execute()
+            channel = channel_response.data[0] if hasattr(channel_response, 'data') and channel_response.data else None
         
-        # 如果没有找到channel，尝试通过TokensMark查找
-        if not channel:
-            token_mark = db_session.query(TokensMark).filter(
-                TokensMark.chain == chain.upper(),
-                TokensMark.message_id == message_id
-            ).first()
-            
-            if token_mark and token_mark.channel_id:
-                channel = db_session.query(TelegramChannel).filter(
-                    TelegramChannel.channel_id == token_mark.channel_id
-                ).first()
-        
-        # 查找相关代币
-        tokens = db_session.query(Token).filter(
-            Token.chain == chain.upper(),
-            Token.message_id == message_id
-        ).all()
-        
-        tokens_data = []
-        for token in tokens:
-            tokens_data.append({
-                'id': token.id,
-                'chain': token.chain,
-                'token_symbol': token.token_symbol,
-                'contract': token.contract,
-                'market_cap': token.market_cap,
-                'market_cap_formatted': token.market_cap_formatted,
-                'dexscreener_url': token.dexscreener_url or get_dexscreener_url(token.chain, token.contract)
-            })
+        # 检查是否有相关代币标记
+        tokens = []
+        token_mark_response = supabase.table('tokens_mark').select('*').eq('chain', chain).eq('message_id', message_id).execute()
+        if hasattr(token_mark_response, 'data') and token_mark_response.data:
+            # 提取所有唯一的合约地址
+            contract_set = set()
+            for token_mark in token_mark_response.data:
+                if token_mark.get('contract'):
+                    contract_set.add(token_mark.get('contract'))
+                
+            # 获取完整的代币数据
+            for contract in contract_set:
+                token_response = supabase.table('tokens').select('*').eq('chain', chain).eq('contract', contract).limit(1).execute()
+                if hasattr(token_response, 'data') and token_response.data and len(token_response.data) > 0:
+                    token = token_response.data[0]
+                    # 格式化市值
+                    token['market_cap_formatted'] = format_market_cap(token.get('market_cap'))
+                    tokens.append(token)
         
         # 渲染模板
         return render_template(
             'message_detail.html',
             message=message,
             channel=channel,
-            tokens=tokens_data,
-            has_tokens=len(tokens_data) > 0
+            tokens=tokens,
+            has_tokens=len(tokens) > 0
         )
         
     except Exception as e:
         logger.error(f"获取消息详情失败: {str(e)}")
-        return handle_error(str(e))
-    finally:
-        db_session.close()
+        import traceback
+        logger.error(traceback.format_exc())
+        return handle_error(f"获取消息详情失败: {str(e)}")
 
 
 @app.route('/media/<path:filename>')

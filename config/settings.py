@@ -2,20 +2,50 @@ import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+import logging
+
+# 导入 Supabase 客户端库
+try:
+    from supabase import create_client, Client
+    HAS_SUPABASE = True
+except ImportError:
+    print("警告: 未安装 supabase 客户端库. 如需使用 Supabase, 请运行: pip install supabase")
+    HAS_SUPABASE = False
 
 # 修改BASE_DIR为项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# 配置文件路径
-CONFIG_FILE = BASE_DIR / 'config/config.json'
-
 # 加载环境变量（自动从项目根目录查找.env文件）
-load_dotenv(BASE_DIR / '.env')
+env_file_path = BASE_DIR / '.env'
+if os.path.exists(env_file_path):
+    load_dotenv(env_file_path)
+    print(f"已加载环境变量文件: {env_file_path}")
+else:
+    print(f"警告: 环境变量文件不存在: {env_file_path}, 将使用默认值")
 
 # 数据库配置
-DATABASE_URI = os.getenv('DATABASE_URI', f'sqlite:///{BASE_DIR}/data/telegram_data.db')
+DATABASE_URI = os.getenv('DATABASE_URI', '')
+if not DATABASE_URI:
+    print("警告: 未设置DATABASE_URI环境变量，请在.env文件中设置supabase://开头的数据库连接字符串")
+elif not DATABASE_URI.startswith('supabase://'):
+    print(f"错误: DATABASE_URI必须以supabase://开头，当前值: {DATABASE_URI}")
+
 # PostgreSQL生产环境配置示例
 # DATABASE_URI = 'postgresql+psycopg2://user:password@localhost/dbname'
+
+# Supabase 配置
+SUPABASE_URL = os.getenv('SUPABASE_URL', '')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
+SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
+
+# 初始化 Supabase 客户端
+supabase_client = None
+if HAS_SUPABASE and SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print(f"Supabase 客户端初始化成功: {SUPABASE_URL}")
+    except Exception as e:
+        print(f"Supabase 客户端初始化失败: {str(e)}")
 
 # 关键词过滤文件路径
 KEYWORDS_FILE = BASE_DIR / 'config/sensitive_words.txt'
@@ -23,6 +53,9 @@ KEYWORDS_FILE = BASE_DIR / 'config/sensitive_words.txt'
 # 日志配置
 LOG_DIR = BASE_DIR / 'logs'
 LOG_FILE = LOG_DIR / 'monitor.log'
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+LOG_MAX_SIZE = int(os.getenv('LOG_MAX_SIZE', str(1024*1024*5)))  # 默认5MB
+LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '3'))
 
 # 增强的日志配置
 LOG_CONFIG = {
@@ -32,8 +65,8 @@ LOG_CONFIG = {
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
             'filename': LOG_FILE,
-            'maxBytes': 1024*1024*5,  # 5MB
-            'backupCount': 3,
+            'maxBytes': LOG_MAX_SIZE,
+            'backupCount': LOG_BACKUP_COUNT,
             'formatter': 'standard',
         },
     },
@@ -45,29 +78,47 @@ LOG_CONFIG = {
     'loggers': {
         '': {
             'handlers': ['file'],
-            'level': os.getenv('LOG_LEVEL', 'INFO'),
+            'level': LOG_LEVEL,
             'propagate': True
         }
     }
 }
 
-# 自动发现频道配置（新增）
-# 是否启用自动发现频道功能
-auto_channel_discovery = os.getenv('AUTO_CHANNEL_DISCOVERY', 'true').lower() == 'true'
-# 自动发现频道的间隔（秒）
-discovery_interval = int(os.getenv('DISCOVERY_INTERVAL', '3600'))
-# 自动添加的频道最小成员数
-min_channel_members = int(os.getenv('MIN_CHANNEL_MEMBERS', '500'))
-# 每次最多自动添加的频道数
-max_auto_channels = int(os.getenv('MAX_AUTO_CHANNELS', '10'))
-# 排除的频道列表（不会自动添加的频道）
-excluded_channels = os.getenv('EXCLUDED_CHANNELS', '').split(',')
+# 自动发现频道配置
+AUTO_CHANNEL_DISCOVERY = os.getenv('AUTO_CHANNEL_DISCOVERY', 'true').lower() == 'true'
+DISCOVERY_INTERVAL = int(os.getenv('DISCOVERY_INTERVAL', '3600'))
+MIN_CHANNEL_MEMBERS = int(os.getenv('MIN_CHANNEL_MEMBERS', '500'))
+MAX_AUTO_CHANNELS = int(os.getenv('MAX_AUTO_CHANNELS', '10'))
+EXCLUDED_CHANNELS = os.getenv('EXCLUDED_CHANNELS', '').split(',')
+
+# Web应用配置
+WEB_HOST = os.getenv('WEB_HOST', '0.0.0.0')
+WEB_PORT = int(os.getenv('WEB_PORT', '5000'))
+WEB_DEBUG = os.getenv('WEB_DEBUG', 'false').lower() == 'true'
+FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY', 'telegram-monitor-default-secret-key')
+
+# 群组和频道优先级配置
+PREFER_GROUPS = os.getenv('PREFER_GROUPS', 'false').lower() == 'true'
+GROUPS_ONLY = os.getenv('GROUPS_ONLY', 'false').lower() == 'true'
+CHANNELS_ONLY = os.getenv('CHANNELS_ONLY', 'false').lower() == 'true'
+
+# 批处理配置
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '10'))
+BATCH_INTERVAL = int(os.getenv('BATCH_INTERVAL', '30'))
+
+# 错误处理配置
+ERROR_MAX_RETRIES = int(os.getenv('ERROR_MAX_RETRIES', '3'))
+ERROR_RETRY_DELAY = float(os.getenv('ERROR_RETRY_DELAY', '1.0'))
+ERROR_REPORT_INTERVAL = int(os.getenv('ERROR_REPORT_INTERVAL', '3600'))
+
+# DAS API 配置
+DAS_API_KEY = os.getenv('DAS_API_KEY', '')
 
 # 代币数据更新配置
-token_update_limit = int(os.getenv('TOKEN_UPDATE_LIMIT', '500'))
-token_update_min_delay = float(os.getenv('TOKEN_UPDATE_MIN_DELAY', '0.5'))
-token_update_max_delay = float(os.getenv('TOKEN_UPDATE_MAX_DELAY', '2.0'))
-token_update_batch_size = int(os.getenv('TOKEN_UPDATE_BATCH_SIZE', '50'))
+TOKEN_UPDATE_LIMIT = int(os.getenv('TOKEN_UPDATE_LIMIT', '500'))
+TOKEN_UPDATE_MIN_DELAY = float(os.getenv('TOKEN_UPDATE_MIN_DELAY', '0.5'))
+TOKEN_UPDATE_MAX_DELAY = float(os.getenv('TOKEN_UPDATE_MAX_DELAY', '2.0'))
+TOKEN_UPDATE_BATCH_SIZE = int(os.getenv('TOKEN_UPDATE_BATCH_SIZE', '50'))
 
 # 自动发现频道的链关键词（用于猜测频道所属的链）
 chain_keywords = {
@@ -102,9 +153,17 @@ chain_keywords = {
 # 增强EnvConfig类
 class EnvConfig:
     def __init__(self):
-        # 统一管理API配置
-        self.API_ID = int(os.getenv('TG_API_ID', 0))
+        # Telegram API配置
+        self.API_ID = int(os.getenv('TG_API_ID', '0'))
         self.API_HASH = os.getenv('TG_API_HASH', '')
+        
+        # 数据库配置
+        self.DATABASE_URI = DATABASE_URI
+        
+        # Supabase配置
+        self.SUPABASE_URL = SUPABASE_URL
+        self.SUPABASE_KEY = SUPABASE_KEY
+        self.SUPABASE_SERVICE_KEY = SUPABASE_SERVICE_KEY
         
         # 添加路径校验
         sensitive_words_path = BASE_DIR / 'config/sensitive_words.txt'
@@ -112,23 +171,46 @@ class EnvConfig:
             print("警告：未检测到关键词过滤文件，将创建空文件")
             sensitive_words_path.touch()
 
-        # 新增媒体存储路径
+        # 媒体存储路径
         self.MEDIA_DIR = BASE_DIR / 'media'
         self.MEDIA_DIR.mkdir(exist_ok=True)
         
-        # 新增自动发现频道配置
-        self.AUTO_CHANNEL_DISCOVERY = auto_channel_discovery
-        self.DISCOVERY_INTERVAL = discovery_interval
-        self.MIN_CHANNEL_MEMBERS = min_channel_members
-        self.MAX_AUTO_CHANNELS = max_auto_channels
-        self.EXCLUDED_CHANNELS = [ch.strip() for ch in excluded_channels if ch.strip()]
+        # 自动发现频道配置
+        self.AUTO_CHANNEL_DISCOVERY = AUTO_CHANNEL_DISCOVERY
+        self.DISCOVERY_INTERVAL = DISCOVERY_INTERVAL
+        self.MIN_CHANNEL_MEMBERS = MIN_CHANNEL_MEMBERS
+        self.MAX_AUTO_CHANNELS = MAX_AUTO_CHANNELS
+        self.EXCLUDED_CHANNELS = [ch.strip() for ch in EXCLUDED_CHANNELS if ch.strip()]
         self.CHAIN_KEYWORDS = chain_keywords
         
+        # Web应用配置
+        self.WEB_HOST = WEB_HOST
+        self.WEB_PORT = WEB_PORT
+        self.WEB_DEBUG = WEB_DEBUG
+        self.FLASK_SECRET_KEY = FLASK_SECRET_KEY
+        
+        # 群组和频道优先级配置
+        self.PREFER_GROUPS = PREFER_GROUPS
+        self.GROUPS_ONLY = GROUPS_ONLY
+        self.CHANNELS_ONLY = CHANNELS_ONLY
+        
+        # 批处理配置
+        self.BATCH_SIZE = BATCH_SIZE
+        self.BATCH_INTERVAL = BATCH_INTERVAL
+        
+        # 错误处理配置
+        self.ERROR_MAX_RETRIES = ERROR_MAX_RETRIES
+        self.ERROR_RETRY_DELAY = ERROR_RETRY_DELAY
+        self.ERROR_REPORT_INTERVAL = ERROR_REPORT_INTERVAL
+        
+        # DAS API配置
+        self.DAS_API_KEY = DAS_API_KEY
+        
         # 代币数据更新配置
-        self.TOKEN_UPDATE_LIMIT = token_update_limit
-        self.TOKEN_UPDATE_MIN_DELAY = token_update_min_delay
-        self.TOKEN_UPDATE_MAX_DELAY = token_update_max_delay
-        self.TOKEN_UPDATE_BATCH_SIZE = token_update_batch_size
+        self.TOKEN_UPDATE_LIMIT = TOKEN_UPDATE_LIMIT
+        self.TOKEN_UPDATE_MIN_DELAY = TOKEN_UPDATE_MIN_DELAY
+        self.TOKEN_UPDATE_MAX_DELAY = TOKEN_UPDATE_MAX_DELAY
+        self.TOKEN_UPDATE_BATCH_SIZE = TOKEN_UPDATE_BATCH_SIZE
 
 # 实例化配置对象便于引用
 env_config = EnvConfig()
@@ -141,64 +223,53 @@ LOG_CONFIG['handlers']['console'] = {
 LOG_CONFIG['loggers']['']['handlers'] = ['file', 'console']  # 同时输出到文件和终端
 
 # 加载配置函数
-def load_config(config_file=CONFIG_FILE):
+def load_config(_=None):
     """
-    从配置文件加载配置
+    从环境变量加载配置，兼容旧代码
     
     Args:
-        config_file: 配置文件路径，默认为CONFIG_FILE
+        _: 忽略参数，兼容旧代码（原来接收config_file参数）
         
     Returns:
         dict: 配置字典
     """
     try:
-        if os.path.exists(config_file):
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            return config
-        else:
-            print(f"警告：配置文件 {config_file} 不存在，将使用默认配置")
-            # 创建默认配置
-            default_config = {
-                "telegram": {
-                    "api_id": env_config.API_ID,
-                    "api_hash": env_config.API_HASH
-                },
-                "database": {
-                    "uri": DATABASE_URI
-                },
-                "web_server": {
-                    "host": "0.0.0.0",
-                    "port": 5000,
-                    "debug": False
-                },
-                "discovery": {
-                    "enabled": env_config.AUTO_CHANNEL_DISCOVERY,
-                    "interval": env_config.DISCOVERY_INTERVAL,
-                    "min_members": env_config.MIN_CHANNEL_MEMBERS,
-                    "max_channels": env_config.MAX_AUTO_CHANNELS,
-                    "excluded_channels": env_config.EXCLUDED_CHANNELS
-                },
-                "token_update": {
-                    "limit": env_config.TOKEN_UPDATE_LIMIT,
-                    "min_delay": env_config.TOKEN_UPDATE_MIN_DELAY,
-                    "max_delay": env_config.TOKEN_UPDATE_MAX_DELAY,
-                    "batch_size": env_config.TOKEN_UPDATE_BATCH_SIZE
-                }
+        # 从环境变量构建配置字典
+        config = {
+            "telegram": {
+                "api_id": env_config.API_ID,
+                "api_hash": env_config.API_HASH
+            },
+            "database": {
+                "uri": DATABASE_URI
+            },
+            "web_server": {
+                "host": WEB_HOST,
+                "port": WEB_PORT,
+                "debug": WEB_DEBUG
+            },
+            "discovery": {
+                "enabled": AUTO_CHANNEL_DISCOVERY,
+                "interval": DISCOVERY_INTERVAL,
+                "min_members": MIN_CHANNEL_MEMBERS,
+                "max_channels": MAX_AUTO_CHANNELS,
+                "excluded_channels": env_config.EXCLUDED_CHANNELS
+            },
+            "token_update": {
+                "limit": TOKEN_UPDATE_LIMIT,
+                "min_delay": TOKEN_UPDATE_MIN_DELAY,
+                "max_delay": TOKEN_UPDATE_MAX_DELAY,
+                "batch_size": TOKEN_UPDATE_BATCH_SIZE
             }
-            
-            # 确保配置目录存在
-            os.makedirs(os.path.dirname(config_file), exist_ok=True)
-            
-            # 写入默认配置文件
-            try:
-                with open(config_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_config, f, indent=4, ensure_ascii=False)
-                print(f"已创建默认配置文件: {config_file}")
-            except Exception as e:
-                print(f"创建默认配置文件时出错: {str(e)}，将继续使用内存中的默认配置")
-                
-            return default_config
+        }
+        
+        # 日志信息
+        logging.info(f"已从环境变量加载配置")
+        
+        return config
     except Exception as e:
-        print(f"加载配置文件时出错: {str(e)}")
+        logging.error(f"加载配置时出错: {str(e)}")
         raise
+
+# 为了兼容现有代码，定义CONFIG_FILE变量
+CONFIG_FILE = str(env_file_path)

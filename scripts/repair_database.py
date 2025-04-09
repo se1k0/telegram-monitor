@@ -6,6 +6,7 @@ import sys
 import sqlite3
 import logging
 from typing import List, Dict, Any, Tuple
+import asyncio
 
 # 配置日志
 logging.basicConfig(
@@ -23,7 +24,21 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-# 获取数据库文件路径
+# 检查是否使用Supabase
+try:
+    import config.settings as config
+    DATABASE_URI = config.DATABASE_URI
+    IS_SUPABASE = DATABASE_URI.startswith('supabase://')
+except (ImportError, AttributeError):
+    # 如果无法导入配置，默认为False
+    IS_SUPABASE = False
+    # 尝试从环境变量加载
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(parent_dir, '.env'))
+    DATABASE_URI = os.getenv('DATABASE_URI', '')
+    IS_SUPABASE = DATABASE_URI.startswith('supabase://')
+
+# 获取数据库文件路径（仅用于SQLite）
 DB_PATH = os.path.join(parent_dir, "data", "telegram_data.db")
 
 def check_database_exists() -> bool:
@@ -33,6 +48,10 @@ def check_database_exists() -> bool:
     Returns:
         bool: 数据库文件是否存在
     """
+    if IS_SUPABASE:
+        logger.info("使用Supabase数据库，无需检查本地数据库文件")
+        return True
+        
     if not os.path.exists(DB_PATH):
         logger.error(f"数据库文件不存在: {DB_PATH}")
         return False
@@ -97,10 +116,39 @@ def add_column(conn: sqlite3.Connection, table_name: str, column_name: str, colu
         logger.error(f"添加列 {column_name} 到表 {table_name} 失败: {e}")
         return False
 
+async def check_supabase_schema():
+    """
+    检查Supabase数据库结构
+    """
+    try:
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        
+        # 执行简单检查确认连接成功
+        channels = await db_adapter.get_active_channels()
+        logger.info(f"成功连接到Supabase数据库，获取到 {len(channels)} 个频道")
+        
+        logger.info("Supabase数据库结构无需在此脚本中检查，请通过Supabase控制台管理数据库结构")
+        return True
+    except Exception as e:
+        logger.error(f"检查Supabase数据库失败: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return False
+
 def manually_add_columns() -> None:
     """
     手动检查并添加所有必要的列，仅限models.py中定义的列
     """
+    if IS_SUPABASE:
+        logger.info("检测到使用Supabase数据库")
+        try:
+            asyncio.run(check_supabase_schema())
+        except Exception as e:
+            logger.error(f"Supabase数据库检查失败: {e}")
+        return
+    
+    # SQLite数据库检查
     if not check_database_exists():
         logger.error("数据库文件不存在，无法修复")
         return

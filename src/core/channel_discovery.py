@@ -230,7 +230,21 @@ class ChannelDiscovery:
         
         # 获取当前活跃的频道
         active_channels = self.channel_manager.get_active_channels()
-        active_usernames = set(active_channels.keys())
+        
+        # 创建当前活跃频道的用户名集合
+        active_usernames = set()
+        if isinstance(active_channels, dict):
+            # 如果是字典，使用keys()方法
+            active_usernames = set(active_channels.keys())
+        elif isinstance(active_channels, list):
+            # 如果是列表，提取username字段
+            for channel in active_channels:
+                if isinstance(channel, dict) and 'username' in channel:
+                    active_usernames.add(channel['username'])
+                elif hasattr(channel, 'username') and channel.username:
+                    active_usernames.add(channel.username)
+        
+        logger.info(f"当前有 {len(active_usernames)} 个活跃频道")
         
         # 获取所有发现的频道和群组
         discovered = await self.discover_channels(limit=200)

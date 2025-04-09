@@ -30,6 +30,12 @@ Base = declarative_base()
 
 
 
+# 检测操作系统环境
+
+is_windows = platform.system() == 'Windows'
+
+
+
 # 设置SQLite连接参数，防止"database is locked"错误
 
 sqlite_connect_args = {
@@ -42,15 +48,23 @@ sqlite_connect_args = {
 
 
 
-# 检测操作系统环境
+# 全局引擎对象
 
-is_windows = platform.system() == 'Windows'
+engine = None
 
 
 
-# 创建引擎时添加连接参数
+# 跳过Supabase URL的引擎创建，因为SQLAlchemy不支持supabase方言
 
-if config.DATABASE_URI.startswith('sqlite:'):
+if config.DATABASE_URI.startswith('supabase:'):
+
+    # 使用Supabase适配器，不需要创建SQLAlchemy引擎
+
+    logging.info("检测到Supabase数据库URI，将使用Supabase适配器")
+
+    # engine变量保持为None
+
+elif config.DATABASE_URI.startswith('sqlite:'):
 
     # SQLite 不支持标准连接池参数，只使用connect_args
 
@@ -71,7 +85,6 @@ if config.DATABASE_URI.startswith('sqlite:'):
         pool_recycle=3600    # 一小时后回收连接
 
     )
-
     
 
     # 为SQLite添加优化配置
@@ -426,54 +439,57 @@ class PromotionInfo:
 
 
 def _check_and_add_columns():
-    """检查表中是否存在所需列，如果不存在则添加"""
+    """检查并添加任何缺少的列"""
     logger = logging.getLogger(__name__)
     
+    # 如果使用Supabase，跳过列检查
+    if config.DATABASE_URI.startswith('supabase:'):
+        logger.info("使用Supabase数据库，跳过列检查")
+        return
+        
+    # 确保引擎已创建
+    if engine is None:
+        logger.error("数据库引擎未创建，无法检查列")
+        return
+        
     try:
-        # 确保数据目录存在
-        if config.DATABASE_URI.startswith('sqlite:///'):
-            file_path = config.DATABASE_URI.replace('sqlite:///', '')
-            # 获取绝对路径
-            file_path = os.path.abspath(file_path)
-            dir_name = os.path.dirname(file_path)
-            if dir_name and not os.path.exists(dir_name):
-                os.makedirs(dir_name, exist_ok=True)
-                logger.info(f"创建数据库目录: {dir_name}")
-                
-        inspector = inspect(engine)
+        # 创建连接
         connection = engine.connect()
         transaction = connection.begin()
+        
+        # 使用inspector检查表和列
+        inspector = inspect(engine)
+        
+        # 检查tokens表中的columns
+        tokens_columns_to_check = {
+            'price': 'FLOAT',
+            'first_price': 'FLOAT',
+            'price_change_24h': 'FLOAT',
+            'price_change_7d': 'FLOAT',
+            'volume_24h': 'FLOAT',
+            'volume_1h': 'FLOAT',
+            'liquidity': 'FLOAT',
+            'holders_count': 'INTEGER',
+            'buys_1h': 'INTEGER DEFAULT 0',
+            'sells_1h': 'INTEGER DEFAULT 0',
+            'spread_count': 'INTEGER DEFAULT 0',
+            'community_reach': 'INTEGER DEFAULT 0',
+            'sentiment_score': 'FLOAT',
+            'positive_words': 'TEXT',
+            'negative_words': 'TEXT',
+            'is_trending': 'BOOLEAN DEFAULT 0',
+            'hype_score': 'FLOAT DEFAULT 0',
+            'risk_level': 'VARCHAR(20)',
+            'from_group': 'BOOLEAN',  # 添加from_group字段
+            'channel_id': 'INTEGER'   # 添加channel_id字段
+        }
         
         # 获取tokens表的现有列
         if 'tokens' in inspector.get_table_names():
             existing_columns = {col['name'] for col in inspector.get_columns('tokens')}
             
-            # 定义需要检查的列及其类型
-            columns_to_check = {
-                'price': 'FLOAT',
-                'first_price': 'FLOAT',
-                'price_change_24h': 'FLOAT',
-                'price_change_7d': 'FLOAT',
-                'volume_24h': 'FLOAT',
-                'volume_1h': 'FLOAT',  # 添加volume_1h字段检查
-                'liquidity': 'FLOAT',
-                'sentiment_score': 'FLOAT',
-                'positive_words': 'TEXT',
-                'negative_words': 'TEXT',
-                'is_trending': 'BOOLEAN',
-                'hype_score': 'FLOAT',
-                'risk_level': 'VARCHAR(20)',
-                'from_group': 'BOOLEAN',  # 添加from_group字段
-                'channel_id': 'INTEGER',  # 添加channel_id字段
-                'holders_count': 'INTEGER',  # 添加holders_count字段
-                'buys_1h': 'INTEGER',  # 添加buys_1h字段
-                'sells_1h': 'INTEGER',  # 添加sells_1h字段
-                'spread_count': 'INTEGER DEFAULT 0',  # 添加代币传播次数字段
-                'community_reach': 'INTEGER DEFAULT 0'  # 添加代币社群覆盖人数字段
-            }
-            
             # 检查并添加缺失的列
-            for col_name, col_type in columns_to_check.items():
+            for col_name, col_type in tokens_columns_to_check.items():
                 if col_name not in existing_columns:
                     # 使用原始SQL添加列，因为SQLAlchemy不直接支持添加列
                     alter_stmt = f"ALTER TABLE tokens ADD COLUMN {col_name} {col_type}"
@@ -548,45 +564,44 @@ def _check_and_add_columns():
 
 
 def init_db():
-
     """初始化数据库和所需目录"""
-
     # 确保数据目录存在
     os.makedirs('./data', exist_ok=True)
-
     
-
-    # 创建数据库URI中的目录结构
-
-    db_path = config.DATABASE_URI
-
-    if db_path.startswith('sqlite:///'):
-
-        file_path = db_path.replace('sqlite:///', '')
-
-        # 获取绝对路径，处理相对路径问题
-        file_path = os.path.abspath(file_path)
+    # 检查是否使用Supabase
+    if not config.DATABASE_URI.startswith('supabase://'):
+        logging.error("未使用Supabase数据库，请检查配置")
+        logging.error(f"当前DATABASE_URI: {config.DATABASE_URI}")
+        logging.error("DATABASE_URI应以'supabase://'开头")
+        return False
         
-        dir_name = os.path.dirname(file_path)
-
-        if dir_name and not os.path.exists(dir_name):
-
-            os.makedirs(dir_name, exist_ok=True)
-            
-        print(f"数据库文件路径: {file_path}")
-        print(f"数据库目录: {dir_name}")
-
+    logging.info("使用Supabase数据库，跳过本地表创建和列检查")
     
-
-    # 创建所有表
-
-    Base.metadata.create_all(bind=engine)
-
-    print("数据库表创建完成")
-
-    
-
-    # 检查并添加缺失的列
-
-    _check_and_add_columns()
+    # 检查Supabase连接
+    try:
+        from supabase import create_client
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logging.error("缺少SUPABASE_URL或SUPABASE_KEY环境变量")
+            return False
+        
+        # 尝试连接Supabase
+        logging.info(f"尝试连接到Supabase: {supabase_url}")
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 检查是否可以访问tokens表
+        response = supabase.table('tokens').select('*').limit(1).execute()
+        if hasattr(response, 'data'):
+            logging.info("成功连接到Supabase数据库")
+            return True
+        else:
+            logging.error("无法从Supabase获取数据")
+            return False
+    except Exception as e:
+        logging.error(f"Supabase连接检查失败: {str(e)}")
+        import traceback
+        logging.debug(traceback.format_exc())
+        return False
 

@@ -27,10 +27,12 @@ from src.database.models import init_db
 from src.database.db_handler import cleanup_batch_tasks
 from src.web.web_app import start_web_server
 from src.utils.error_handler import ErrorMonitor, monitor_errors
-from config.settings import load_config, CONFIG_FILE
+from config.settings import load_config
 # 导入调度器和代币更新器
 from src.utils.scheduler import scheduler
 from src.api.token_updater import hourly_update
+# 导入数据库工厂
+from src.database.db_factory import get_db_adapter
 
 # 设置日志
 logger = get_logger(__name__)
@@ -51,14 +53,85 @@ def log_runtime():
     runtime = end_time - start_time
     logger.info(f"Telegram 监控服务运行了 {runtime}")
 
+# 修改检查数据库连接函数
+async def check_database_connection() -> bool:
+    """
+    检查数据库连接是否正常
+    
+    Returns:
+        bool: 连接是否正常
+    """
+    try:
+        # 使用数据库工厂获取适配器
+        db_adapter = get_db_adapter()
+        logger.info("已获取数据库适配器")
+        
+        # 确认正在使用Supabase数据库
+        import config.settings as config
+        if not config.DATABASE_URI.startswith('supabase://'):
+            logger.error("未使用Supabase数据库，请检查配置")
+            logger.error(f"当前DATABASE_URI: {config.DATABASE_URI}")
+            logger.error("DATABASE_URI应以'supabase://'开头")
+            return False
+        
+        logger.info("正在使用 Supabase 数据库")
+        
+        # 直接使用 supabase 客户端检查连接
+        from supabase import create_client
+        
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 环境变量")
+            return False
+            
+        # 直接检查 Supabase 连接
+        logger.info(f"尝试连接到 Supabase: {supabase_url}")
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 检查是否可以获取活跃频道
+        response = supabase.table('telegram_channels').select('*').limit(5).execute()
+        
+        if hasattr(response, 'data'):
+            logger.info(f"数据库连接正常，获取到 {len(response.data)} 条频道记录")
+            
+            # 直接使用数据库适配器获取活跃频道
+            channels = await db_adapter.get_active_channels()
+            logger.info(f"通过数据库适配器获取到 {len(channels)} 个活跃频道")
+            
+            return True
+        else:
+            logger.error("无法从 Supabase 获取数据")
+            logger.error(f"响应: {response}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"数据库连接检查失败: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return False
 
-def setup(config_file: str = CONFIG_FILE) -> Dict[str, Any]:
+
+def parse_arguments():
+    """
+    解析命令行参数
+    
+    Returns:
+        argparse.Namespace: 解析后的参数
+    """
+    parser = argparse.ArgumentParser(description='Telegram 监控服务')
+    parser.add_argument('--no-web', action='store_true', help='不启动Web服务器')
+    parser.add_argument('--no-telegram', action='store_true', help='不启动Telegram监听器')
+    parser.add_argument('--no-token-update', action='store_true', help='不启动代币更新器')
+    parser.add_argument('--check-db', action='store_true', help='检查数据库连接并退出')
+    return parser.parse_args()
+
+
+def setup() -> Dict[str, Any]:
     """
     初始化程序环境
     
-    Args:
-        config_file: 配置文件路径
-        
     Returns:
         配置字典
     """
@@ -68,8 +141,8 @@ def setup(config_file: str = CONFIG_FILE) -> Dict[str, Any]:
         logger.info("正在初始化 Telegram 监控服务...")
         
         # 加载配置
-        config = load_config(config_file)
-        logger.info(f"已加载配置文件: {config_file}")
+        config = load_config()
+        logger.info("已从环境变量加载配置")
         
         # 初始化数据库
         init_db()
@@ -113,7 +186,7 @@ def setup(config_file: str = CONFIG_FILE) -> Dict[str, Any]:
         raise
 
 
-async def start_telegram_listener(config: Dict[str, Any]) -> TelegramListener:
+async def start_telegram_listener(config: Dict[str, Any]):
     """
     启动Telegram监听器
     
@@ -121,31 +194,19 @@ async def start_telegram_listener(config: Dict[str, Any]) -> TelegramListener:
         config: 配置字典
         
     Returns:
-        TelegramListener实例
+        TelegramListener: 启动后的监听器实例
     """
     try:
-        # 创建并启动Telegram监听器
+        # 导入TelegramListener类
         from src.core.telegram_listener import TelegramListener
+        
+        # 创建并启动监听器
         listener = TelegramListener()
-        
-        # 启动监听器
-        result = await listener.start()
-        
-        # 检查启动结果
-        if result is False:
-            logger.error("Telegram监听器启动失败")
-            return None
-        elif isinstance(result, TelegramListener):
-            # 如果start返回实例本身，使用它
-            listener = result
-        
-        # 获取活跃频道数量
-        active_channels = listener.channel_manager.get_active_channels()
-        logger.info(f"Telegram监听器已启动，监控 {len(active_channels)} 个频道")
-        
-        return listener
+        started_listener = await listener.start()
+        logger.info("Telegram监听器已成功启动")
+        return started_listener
     except Exception as e:
-        logger.critical(f"启动Telegram监听器失败: {str(e)}")
+        logger.error(f"启动Telegram监听器时出错: {str(e)}")
         import traceback
         logger.debug(traceback.format_exc())
         return None
@@ -386,95 +447,65 @@ async def periodic_tasks() -> None:
         logger.info("定期任务已退出")
 
 
-async def main_async() -> None:
+async def main_async(config: Dict[str, Any], no_web: bool, no_telegram: bool) -> None:
     """
     异步主函数
+    
+    Args:
+        config: 配置字典
+        no_web: 是否不启动Web界面
+        no_telegram: 是否不启动Telegram监听器
     """
+    # 注册信号处理，根据不同操作系统使用不同方式
+    register_signal_handlers()
+    
     try:
-        # 解析命令行参数
-        parser = argparse.ArgumentParser(description='Telegram 监控服务')
-        # 删除所有参数解析
-        args = parser.parse_args()
-        
-        # 初始化
-        config = setup(CONFIG_FILE)
-        
-        # 设置信号处理
-        # Windows系统使用不同的信号处理方式
-        if platform.system() == 'Windows':
-            try:
-                # Windows下改进的信号处理方式
-                loop = asyncio.get_event_loop()
-                
-                def win_signal_handler(signum, frame):
-                    logger.info(f"接收到信号 {signum}，开始优雅关闭...")
-                    # 设置关闭事件
-                    shutdown_event.set()
-                    if loop.is_running():
-                        loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown()))
-                    else:
-                        # 如果事件循环未运行，直接调用asyncio.run
-                        asyncio.run(shutdown())
-                
-                # 注册信号处理函数
-                signal.signal(signal.SIGINT, win_signal_handler)
-                signal.signal(signal.SIGTERM, win_signal_handler)
-                logger.debug("已设置Windows下的信号处理")
-            except Exception as e:
-                logger.warning(f"设置Windows信号处理失败: {e}, 程序将不能优雅关闭")
-        else:
-            # 在Unix系统下使用asyncio的信号处理器
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                asyncio.get_event_loop().add_signal_handler(sig, signal_handler)
-            logger.debug("已设置Unix下的信号处理")
-        
         # 启动调度器和定时任务
         logger.info("启动调度器和定时任务...")
         await start_scheduler(config)
         
-        # 无条件启动Web界面，先启动Web服务，防止Telegram监听器阻塞
-        logger.info(f"开始启动web服务")
-        start_web_interface(config)
+        # 先启动Web服务，防止Telegram监听器阻塞
+        if not no_web:
+            logger.info("开始启动Web服务")
+            start_web_interface(config)
         
         # 启动定期任务
         periodic_task = asyncio.create_task(periodic_tasks())
         
-        # 在后台启动Telegram监听器
-        logger.info("开始启动Telegram监听器(后台运行)")
-        global telegram_listener
-        telegram_task = asyncio.create_task(start_telegram_listener_background(config))
-        
+        # 启动Telegram监听器
+        if not no_telegram:
+            logger.info("开始启动Telegram监听器...")
+            global telegram_listener
+            
+            # 不同操作系统使用统一的启动方式
+            telegram_task = asyncio.create_task(start_telegram_listener_background(config))
+            
+        # 等待关闭事件
         try:
-            # 等待关闭事件
             await shutdown_event.wait()
         finally:
             # 取消定期任务
-            logger.debug("取消定期任务...")
             if 'periodic_task' in locals():
+                logger.debug("取消定期任务...")
                 periodic_task.cancel()
                 try:
                     await periodic_task
                 except asyncio.CancelledError:
                     pass
-                    
-            # 取消Telegram监听器任务
-            if 'telegram_task' in locals() and not telegram_task.done():
-                logger.debug("取消Telegram监听器任务...")
-                # 我们不直接取消任务，而是等待它自己完成关闭流程
-                if telegram_listener:
-                    await telegram_listener.stop()
+                
+            # 确保Telegram监听器正确关闭
+            if not no_telegram and telegram_listener:
+                logger.debug("关闭Telegram监听器...")
+                await telegram_listener.stop()
     except KeyboardInterrupt:
-        logger.info("在异步主函数中接收到键盘中断")
-        # 设置关闭事件
+        logger.info("接收到键盘中断")
         shutdown_event.set()
     except Exception as e:
-        logger.critical(f"程序运行出错:")
+        logger.critical(f"程序运行出错: {str(e)}")
         import traceback
         logger.debug(traceback.format_exc())
     finally:
-        # 确保程序正常关闭
-        if not shutdown_event.is_set():
-            logger.debug("关闭事件未设置，执行关闭流程...")
+        # 确保程序优雅关闭
         await shutdown()
 
 
@@ -487,42 +518,118 @@ async def start_telegram_listener_background(config: Dict[str, Any]) -> None:
     """
     global telegram_listener
     try:
+        # 直接异步调用，不使用asyncio.run，避免嵌套事件循环
         telegram_listener = await start_telegram_listener(config)
+        if telegram_listener:
+            logger.info("Telegram监听器成功在后台启动")
+            # 获取活跃频道数量
+            if hasattr(telegram_listener, 'channel_manager'):
+                active_channels = telegram_listener.channel_manager.get_active_channels()
+                logger.info(f"监控 {len(active_channels)} 个活跃频道")
     except Exception as e:
         logger.error(f"Telegram监听器启动失败: {str(e)}")
         import traceback
         logger.debug(traceback.format_exc())
 
 
+def register_signal_handlers():
+    """
+    注册信号处理函数，根据不同操作系统使用不同方式
+    """
+    try:
+        # Windows系统使用不同的信号处理方式
+        if platform.system() == 'Windows':
+            try:
+                # Windows下使用signal模块直接处理信号
+                loop = asyncio.get_running_loop()
+                
+                def win_signal_handler(signum, frame):
+                    logger.info(f"Windows: 接收到信号 {signum}，开始优雅关闭...")
+                    # 设置关闭事件
+                    shutdown_event.set()
+                    # 安全地创建异步任务
+                    if loop.is_running():
+                        loop.call_soon_threadsafe(lambda: asyncio.create_task(shutdown()))
+                
+                # 注册信号处理函数
+                signal.signal(signal.SIGINT, win_signal_handler)
+                signal.signal(signal.SIGTERM, win_signal_handler)
+                logger.debug("已设置Windows下的信号处理")
+            except Exception as e:
+                logger.warning(f"设置Windows信号处理失败: {e}, 程序将不能优雅关闭")
+        else:
+            # 在Unix系统下使用asyncio的信号处理器，这种方式更可靠
+            try:
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, signal_handler)
+                logger.debug("已设置Unix下的信号处理")
+            except Exception as e:
+                logger.warning(f"设置Unix信号处理失败: {e}，使用备用方法")
+                # 备用方法：使用signal模块
+                def unix_signal_handler(signum, frame):
+                    logger.info(f"Unix: 接收到信号 {signum}，开始优雅关闭...")
+                    shutdown_event.set()
+                    
+                signal.signal(signal.SIGINT, unix_signal_handler)
+                signal.signal(signal.SIGTERM, unix_signal_handler)
+    except Exception as e:
+        logger.error(f"注册信号处理函数失败: {e}")
+
+
 def main() -> None:
     """
-    主函数
+    主函数，程序入口
     """
-    start_time = datetime.now()
-    logger.info(f"Telegram 监控服务启动于 {start_time}")
-    
     try:
-        # 运行异步主函数
-        asyncio.run(main_async())
-    except KeyboardInterrupt:
-        logger.info("接收到键盘中断，正在优雅关闭...")
-        # 确保在键盘中断时也会执行清理操作
-        try:
-            # 创建新的事件循环运行shutdown
+        # 解析命令行参数
+        args = parse_arguments()
+        
+        # 初始化
+        config = setup()
+        
+        # 处理只检查数据库连接的情况
+        if args.check_db:
+            logger.info("检查数据库连接...")
+            # 创建一个新的事件循环来检查数据库连接
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(shutdown())
-            loop.close()
-        except Exception as e:
-            logger.error(f"关闭过程中出错: {str(e)}")
+            try:
+                result = loop.run_until_complete(check_database_connection())
+                if result:
+                    logger.info("数据库连接正常")
+                    sys.exit(0)
+                else:
+                    logger.error("数据库连接失败")
+                    sys.exit(1)
+            finally:
+                loop.close()
+        
+        # 根据不同操作系统设置多进程启动方法
+        if platform.system() == 'Windows':
+            try:
+                # Windows下需要显式设置多进程启动方法为'spawn'
+                import multiprocessing
+                multiprocessing.set_start_method('spawn', force=True)
+                logger.info("Windows环境：设置多进程启动方法为'spawn'")
+            except Exception as e:
+                logger.warning(f"设置Windows多进程方法失败: {e}")
+        
+        # 运行主异步函数
+        # 使用asyncio.run是最安全的方式，它会适当处理不同环境的差异
+        asyncio.run(main_async(config, args.no_web, args.no_telegram))
+        
+    except KeyboardInterrupt:
+        logger.info("收到用户中断，正在关闭...")
+        # 记录运行时间
+        log_runtime()
     except Exception as e:
         logger.critical(f"程序崩溃: {str(e)}")
         import traceback
-        logger.debug(traceback.format_exc())
-    
-    end_time = datetime.now()
-    runtime = end_time - start_time
-    logger.info(f"Telegram 监控服务运行了 {runtime}")
+        logger.critical(traceback.format_exc())
+        # 记录运行时间
+        log_runtime()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

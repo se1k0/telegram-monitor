@@ -7,6 +7,7 @@ import sqlite3
 import logging
 from typing import Optional
 from datetime import datetime
+import asyncio
 
 # 配置日志
 logging.basicConfig(
@@ -46,6 +47,15 @@ def get_connection() -> Optional[sqlite3.Connection]:
     Returns:
         Optional[sqlite3.Connection]: 数据库连接对象，如果连接失败则返回None
     """
+    # 如果使用Supabase，则不需要SQLite连接
+    try:
+        import config.settings as config
+        if config.DATABASE_URI.startswith('supabase:'):
+            logger.info("使用Supabase数据库，不需要直接的SQLite连接")
+            return None
+    except ImportError:
+        pass
+        
     try:
         conn = sqlite3.connect(DB_PATH)
         return conn
@@ -55,81 +65,103 @@ def get_connection() -> Optional[sqlite3.Connection]:
 
 def check_tokens_mark_table() -> bool:
     """
-    检查tokens_mark表是否存在
+    检查tokens_mark表是否已存在
     
     Returns:
-        bool: 表是否存在
+        bool: tokens_mark表是否存在
     """
-    if not check_database_exists():
-        return False
-        
+    # 如果使用Supabase，则通过Supabase客户端检查
+    try:
+        import config.settings as config
+        if config.DATABASE_URI.startswith('supabase:'):
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            result = asyncio.run(db_adapter.execute_query(
+                'tokens_mark',
+                'select',
+                limit=1
+            ))
+            logger.info(f"通过Supabase检查tokens_mark表: {'存在' if result is not None else '不存在'}")
+            return result is not None
+    except Exception as e:
+        logger.error(f"通过Supabase检查tokens_mark表失败: {str(e)}")
+    
+    # 否则使用SQLite连接检查
     conn = get_connection()
-    if not conn:
+    if conn is None:
         return False
         
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tokens_mark'"
-        )
-        result = bool(cursor.fetchone())
-        conn.close()
-        return result
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tokens_mark'")
+        exists = cursor.fetchone() is not None
+        return exists
     except sqlite3.Error as e:
-        logger.error(f"检查tokens_mark表失败: {e}")
-        if conn:
-            conn.close()
+        logger.error(f"检查tokens_mark表是否存在时出错: {e}")
         return False
+    finally:
+        conn.close()
 
 def create_tokens_mark_table() -> bool:
     """
-    创建tokens_mark表 - 严格按照models.py中的定义
+    创建tokens_mark表，用于记录代币被提及的历史
     
     Returns:
-        bool: 创建是否成功
+        bool: 表是否创建成功
     """
-    if not check_database_exists():
-        return False
-        
+    # 如果使用Supabase，则通过Supabase客户端创建
+    try:
+        import config.settings as config
+        if config.DATABASE_URI.startswith('supabase:'):
+            # 显示手动创建表的指南
+            logger.warning("Supabase不支持通过API直接创建表")
+            logger.warning("请在Supabase控制台 > SQL Editor中执行以下SQL语句:")
+            create_table_sql = """
+            CREATE TABLE IF NOT EXISTS tokens_mark (
+                id BIGSERIAL PRIMARY KEY,
+                chain TEXT NOT NULL,
+                token_symbol TEXT,
+                contract TEXT,
+                message_id BIGINT,
+                market_cap FLOAT,
+                mention_time TIMESTAMP,
+                channel_id BIGINT
+            );
+            """
+            logger.warning(create_table_sql)
+            logger.warning("或者使用Supabase控制台的Table Editor界面创建表")
+            # 返回False表示未自动创建表
+            return False
+    except Exception as e:
+        logger.error(f"处理Supabase创建tokens_mark表逻辑时出错: {str(e)}")
+    
+    # 否则使用SQLite连接创建
     conn = get_connection()
-    if not conn:
+    if conn is None:
         return False
     
     try:
         cursor = conn.cursor()
-        
-        # 创建tokens_mark表 - 完全按照models.py中的定义
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS tokens_mark (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chain VARCHAR(10) NOT NULL,
-            token_symbol VARCHAR(50),
-            contract VARCHAR(255) NOT NULL,
+            chain TEXT NOT NULL,
+            token_symbol TEXT,
+            contract TEXT,
             message_id INTEGER,
-            market_cap FLOAT,
-            mention_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            market_cap REAL,
+            mention_time TIMESTAMP,
             channel_id INTEGER
         )
         ''')
-        
-        # 创建索引 - 完全按照models.py中的定义
-        cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_tokens_mark_contract ON tokens_mark (chain, contract)
-        ''')
-        
-        cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_tokens_mark_time ON tokens_mark (mention_time)
-        ''')
-        
         conn.commit()
         logger.info("tokens_mark表创建成功")
-        conn.close()
         return True
     except sqlite3.Error as e:
-        logger.error(f"创建tokens_mark表失败: {e}")
-        if conn:
-            conn.close()
+        logger.error(f"创建tokens_mark表时出错: {e}")
         return False
+    finally:
+        conn.close()
 
 def main():
     """

@@ -1,6 +1,4 @@
 import logging
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 from src.database.models import TelegramChannel, Base
 import config.settings as config
 from telethon import TelegramClient
@@ -9,6 +7,10 @@ from telethon.tl.functions.messages import GetFullChatRequest
 from telethon.errors import ChatAdminRequiredError, ChannelPrivateError, UsernameNotOccupiedError
 from telethon.tl.types import PeerChannel, PeerChat, Channel, Chat
 from datetime import datetime
+# 导入数据库工厂
+from src.database.db_factory import get_db_adapter
+import asyncio
+from supabase import create_client
 
 # 创建日志记录器
 logger = logging.getLogger(__name__)
@@ -22,12 +24,19 @@ class ChannelManager:
         Args:
             client: 可选的Telegram客户端实例，用于验证频道
         """
-        self.engine = create_engine(config.DATABASE_URI)
-        self.Session = sessionmaker(bind=self.engine)
+        # 使用数据库工厂获取适配器
+        self.db_adapter = get_db_adapter()
         self.client = client
         
     async def verify_channel(self, channel_username):
         """验证一个Telegram频道或群组是否存在且可访问
+        
+        注意：Telegram ID格式说明
+        - 用户ID：通常是正数（如123456789）
+        - 频道/超级群组ID：通常是负数（如-1001234567890，其中-100是前缀）
+        - 普通群组ID：通常也是负数（如-12345678）
+        
+        在处理和存储ID时，应当保持原始格式，特别是保留负号。
         
         Args:
             channel_username: 频道用户名、频道ID或者群组ID
@@ -47,9 +56,18 @@ class ChannelManager:
                     
                     # 尝试作为频道ID获取实体
                     try:
+                        # 如果是正整数ID，记录日志但仍然尝试获取
+                        if channel_id > 0:
+                            logger.info(f"收到正整数ID {channel_id}，尝试直接获取实体")
+                            
                         channel_entity = await self.client.get_entity(PeerChannel(channel_id))
                         # 获取完整的频道信息，然后检查是否为超级群组
                         full_channel = await self.client(GetFullChannelRequest(channel=channel_entity))
+                        
+                        # 获取原始ID（保留负号）
+                        original_id = channel_entity.id
+                        logger.info(f"成功获取频道实体，原始ID: {original_id}")
+                        
                         # 检查是否为超级群组
                         is_group = getattr(channel_entity, 'megagroup', False)
                         is_supergroup = is_group  # 如果是megagroup，则也是supergroup
@@ -57,6 +75,10 @@ class ChannelManager:
                         # 如果不是频道ID，尝试作为普通群组ID获取实体
                         try:
                             channel_entity = await self.client.get_entity(PeerChat(channel_id))
+                            # 获取原始ID（保留负号）
+                            original_id = channel_entity.id
+                            logger.info(f"成功获取群组实体，原始ID: {original_id}")
+                            
                             # 普通群组
                             is_group = True
                             is_supergroup = False
@@ -69,6 +91,10 @@ class ChannelManager:
                 else:
                     # 使用用户名获取实体（只有频道和超级群组有用户名）
                     channel_entity = await self.client.get_entity(channel_username)
+                    # 获取原始ID（保留负号）
+                    original_id = channel_entity.id
+                    logger.info(f"成功通过用户名获取实体，原始ID: {original_id}")
+                    
                     # 默认设置，后面会更新
                     is_group = False
                     is_supergroup = False
@@ -106,7 +132,7 @@ class ChannelManager:
                     full_chat = await self.client(GetFullChatRequest(chat_id=channel_entity.id))
                     return {
                         'username': None,  # 群组没有用户名
-                        'channel_id': channel_entity.id,
+                        'channel_id': original_id,  # 使用原始ID（保留负号）
                         'name': getattr(channel_entity, 'title', str(channel_entity.id)),
                         'exists': True,
                         'member_count': getattr(full_chat.full_chat, 'participants_count', 0),
@@ -117,7 +143,7 @@ class ChannelManager:
                     logger.error(f"获取普通群组信息时出错: {str(e)}")
                     return {
                         'username': None,
-                        'channel_id': channel_entity.id,
+                        'channel_id': original_id,  # 使用原始ID（保留负号）
                         'name': getattr(channel_entity, 'title', str(channel_entity.id)),
                         'exists': True,
                         'member_count': 0,
@@ -131,7 +157,7 @@ class ChannelManager:
                     full_channel = await self.client(GetFullChannelRequest(channel=channel_entity))
                     return {
                         'username': getattr(channel_entity, 'username', None),
-                        'channel_id': channel_entity.id,
+                        'channel_id': original_id,  # 使用原始ID（保留负号）
                         'name': getattr(channel_entity, 'title', str(channel_entity.id)),
                         'exists': True,
                         'member_count': getattr(full_channel.full_chat, 'participants_count', 0),
@@ -142,7 +168,7 @@ class ChannelManager:
                     logger.error(f"获取频道信息时出错: {str(e)}")
                     return {
                         'username': getattr(channel_entity, 'username', None),
-                        'channel_id': channel_entity.id,
+                        'channel_id': original_id,  # 使用原始ID（保留负号）
                         'name': getattr(channel_entity, 'title', str(channel_entity.id)),
                         'exists': True,
                         'member_count': 0,
@@ -179,326 +205,370 @@ class ChannelManager:
             return False
             
         try:
-            # 检查是否已存在同名频道（根据用户名或ID）
-            existing_channels = []
-            session = self.Session()
+            # 处理频道ID格式 - 确保存储标准化格式
+            # 在Telegram API中，频道ID通常为负数（如-1001234567890）
+            # 超级群组ID通常为 -100 开头
+            # 普通群组ID通常为 -1 开头
+            normalized_channel_id = channel_id
             
-            if channel_username:
-                existing_username = session.query(TelegramChannel).filter(
-                    TelegramChannel.channel_username == channel_username,
-                ).first()
-                if existing_username:
-                    existing_channels.append(existing_username)
-                    
-            if channel_id:
-                existing_id = session.query(TelegramChannel).filter(
-                    TelegramChannel.channel_id == channel_id,
-                ).first()
-                if existing_id:
-                    existing_channels.append(existing_id)
-                    
-            # 处理已存在的情况
-            if existing_channels:
-                for existing in existing_channels:
-                    # 如果频道存在但被标记为非活跃，则重新激活
-                    if not existing.is_active:
-                        existing.is_active = True
-                        # 更新最新信息
-                        existing.channel_name = channel_name
-                        existing.chain = chain
-                        existing.is_group = is_group
-                        existing.is_supergroup = is_supergroup
-                        if member_count is not None:
-                            existing.member_count = member_count
-                        session.commit()
-                        
-                        # 确定频道类型描述
-                        channel_type = "普通频道"
-                        if is_supergroup:
-                            channel_type = "超级群组"
-                        elif is_group:
-                            channel_type = "普通群组"
-                            
-                        logger.info(f"重新激活{channel_type}: {channel_name}")
-                        return True
-                    else:
-                        # 如果频道已存在并且活跃，则记录信息
-                        logger.info(f"{'超级群组' if is_supergroup else ('普通群组' if is_group else '普通频道')}已存在: {channel_name}")
-                        return False
-                        
-            # 创建新频道记录
-            new_channel = TelegramChannel(
-                channel_username=channel_username,
-                channel_id=channel_id,
-                channel_name=channel_name,
-                chain=chain,
-                is_active=True,
-                is_group=is_group,
-                is_supergroup=is_supergroup,
-                member_count=member_count,
-                created_at=datetime.now(),  # 保持为datetime对象
-                last_updated=None  # 将last_updated初始化为None
-            )
+            # 如果频道ID是正数，记录日志以便追踪
+            if isinstance(channel_id, int) and channel_id > 0:
+                logger.info(f"注意: 添加频道时收到正数ID: {channel_id}，可能需要转换格式")
             
-            session.add(new_channel)
-            session.commit()
+            # 直接使用 Supabase 客户端
+            import config.settings as config
+            from supabase import create_client
             
-            # 根据频道类型和标识符方式输出不同的日志
-            if channel_username:
-                identifier = f"@{channel_username}"
-            else:
-                identifier = f"ID: {channel_id}"
-                
-            channel_type = "普通频道"
-            if is_supergroup:
-                channel_type = "超级群组"
-            elif is_group:
-                channel_type = "普通群组"
-                
-            logger.info(f"成功添加{channel_type}: {channel_name} ({identifier})")
-            return True
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
             
-        except Exception as e:
-            logger.error(f"添加{'超级群组' if is_supergroup else ('普通群组' if is_group else '普通频道')}时出错: {str(e)}")
-            if 'session' in locals():
-                session.rollback()
-            return False
-        finally:
-            if 'session' in locals():
-                session.close()
-            
-    def remove_channel(self, channel_username):
-        """从监控列表中移除一个频道
-        
-        Args:
-            channel_username: 要移除的频道用户名
-            
-        Returns:
-            bool: 移除是否成功
-        """
-        session = self.Session()
-        try:
-            channel = session.query(TelegramChannel).filter_by(
-                channel_username=channel_username
-            ).first()
-            
-            if not channel:
-                logger.warning(f"要移除的频道不存在: {channel_username}")
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 Supabase 连接信息，无法添加频道")
                 return False
                 
-            # 标记为不活跃而不是删除
-            channel.is_active = False
-            session.commit()
-            logger.info(f"已移除频道: {channel_username}")
-            return True
+            # 创建 Supabase 客户端
+            supabase = create_client(supabase_url, supabase_key)
             
+            # 首先检查频道是否已存在
+            query = supabase.table('telegram_channels').select('*')
+            
+            # 根据提供的信息构建查询条件
+            if channel_id:
+                query = query.eq('channel_id', channel_id)
+            elif channel_username:
+                query = query.eq('channel_username', channel_username)
+                
+            # 执行查询
+            response = query.execute()
+            
+            # 检查结果
+            if hasattr(response, 'data') and response.data and len(response.data) > 0:
+                existing_channel = response.data[0]
+                
+                # 检查频道是否活跃
+                if existing_channel.get('is_active'):
+                    logger.info(f"频道已存在且处于活跃状态: {channel_name}")
+                    
+                    # 如果有需要更新的信息，进行更新
+                    if (existing_channel.get('channel_name') != channel_name or
+                        existing_channel.get('member_count') != member_count):
+                        
+                        update_data = {
+                            'channel_name': channel_name,
+                            'member_count': member_count,
+                            'last_updated': datetime.now().isoformat()
+                        }
+                        
+                        # 更新频道信息
+                        update_response = supabase.table('telegram_channels').update(update_data).eq('id', existing_channel['id']).execute()
+                        
+                        if hasattr(update_response, 'data') and update_response.data:
+                            logger.info(f"已更新频道信息: {channel_name}")
+                        else:
+                            logger.warning(f"更新频道信息失败: {channel_name}")
+                    
+                    return True
+                else:
+                    # 频道存在但不活跃，重新激活它
+                    update_data = {
+                        'is_active': True,
+                        'channel_name': channel_name,
+                        'member_count': member_count,
+                        'last_updated': datetime.now().isoformat()
+                    }
+                    
+                    update_response = supabase.table('telegram_channels').update(update_data).eq('id', existing_channel['id']).execute()
+                    
+                    if hasattr(update_response, 'data') and update_response.data:
+                        logger.info(f"已重新激活频道: {channel_name}")
+                        return True
+                    else:
+                        logger.error(f"重新激活频道失败: {channel_name}")
+                        return False
+            
+            # 频道不存在，创建新频道
+            channel_data = {
+                'channel_username': channel_username,
+                'channel_id': normalized_channel_id,
+                'channel_name': channel_name,
+                'chain': chain,
+                'is_active': True,
+                'is_group': is_group,
+                'is_supergroup': is_supergroup,
+                'member_count': member_count,
+                'created_at': datetime.now().isoformat(),
+                'last_updated': datetime.now().isoformat()
+            }
+            
+            # 添加新频道
+            response = supabase.table('telegram_channels').insert(channel_data).execute()
+            
+            if hasattr(response, 'data') and response.data:
+                logger.info(f"已添加新频道: {channel_name}")
+                return True
+            else:
+                logger.error(f"添加频道失败: {channel_name}, 无返回数据")
+                logger.error(f"响应: {response}")
+                return False
+                
         except Exception as e:
-            session.rollback()
-            logger.error(f"移除频道时出错: {str(e)}")
+            logger.error(f"添加频道 {channel_name} 时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
-        finally:
-            session.close()
             
+    def remove_channel(self, channel_username):
+        """从数据库移除频道
+        
+        Args:
+            channel_username: 频道用户名
+            
+        Returns:
+            bool: 是否成功移除
+        """
+        try:
+            # 直接使用 Supabase 客户端获取数据，避免异步调用导致的问题
+            import config.settings as config
+            from supabase import create_client
+            
+            # 获取 Supabase 配置
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
+            
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 Supabase 连接信息，无法移除频道")
+                return False
+                
+            # 创建 Supabase 客户端
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 查询频道
+            logger.info(f"查询频道: {channel_username}")
+            response = supabase.table('telegram_channels').select('*').eq('channel_username', channel_username).limit(1).execute()
+            
+            if not response.data or len(response.data) == 0:
+                logger.warning(f"未找到频道: {channel_username}")
+                return False
+            
+            # 获取频道信息
+            channel = response.data[0] if hasattr(response, 'data') and response.data and len(response.data) > 0 else None
+            
+            if not channel:
+                logger.warning(f"无法获取频道数据: {channel_username}")
+                return False
+                
+            # 更新频道状态为非活跃
+            update_data = {
+                'is_active': False,
+                'last_updated': datetime.now().isoformat()
+            }
+            
+            # 更新数据库
+            update_response = supabase.table('telegram_channels').update(update_data).eq('id', channel['id']).execute()
+            
+            if hasattr(update_response, 'data') and update_response.data:
+                logger.info(f"已移除频道: {channel.get('channel_name', channel_username)}")
+                return True
+            else:
+                logger.error(f"移除频道失败: {channel_username}")
+                logger.error(f"响应: {update_response}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"移除频道 {channel_username} 时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
     def get_active_channels(self):
         """获取所有活跃的频道
         
         Returns:
-            dict: 频道标识符到链的映射字典
+            list: 活跃频道列表
         """
-        session = self.Session()
         try:
-            channels = session.query(TelegramChannel).filter_by(is_active=True).all()
-            channel_map = {}
+            # 直接使用 Supabase 客户端获取数据，避免异步调用导致的问题
+            import config.settings as config
+            from supabase import create_client
             
-            for channel in channels:
-                # 使用用户名或ID作为标识符
-                if channel.channel_username:
-                    channel_map[channel.channel_username] = channel.chain
-                    
-                # 如果有ID，也添加ID到链的映射
-                if channel.channel_id:
-                    id_key = str(channel.channel_id)
-                    channel_map[id_key] = channel.chain
-                    
-                # 如果既没有用户名也没有ID，尝试使用另一种标识符
-                if not channel.channel_username and not channel.channel_id:
-                    logger.warning(f"频道 ID {channel.id} 没有可用的标识符，无法添加到活跃频道映射")
-                    
-            return channel_map
+            # 获取 Supabase 配置
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_KEY
+            
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+                return []
+                
+            # 创建 Supabase 客户端并直接获取数据
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 执行查询
+            logger.info("直接使用 Supabase 客户端获取活跃频道")
+            response = supabase.table('telegram_channels').select('*').eq('is_active', True).execute()
+            
+            if hasattr(response, 'data'):
+                channels = response.data
+                logger.info(f"成功获取 {len(channels)} 个活跃频道")
+                return channels
+            else:
+                logger.error("获取活跃频道时，Supabase 未返回 data 字段")
+                logger.error(f"响应: {response}")
+                return []
+                
         except Exception as e:
             logger.error(f"获取活跃频道时出错: {str(e)}")
-            return {}
-        finally:
-            session.close()
-            
+            logger.error(f"错误类型: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # 返回空列表作为后备方案
+            return []
+    
     def get_all_channels(self):
-        """获取所有频道，包括活跃和不活跃的
+        """获取所有频道
         
         Returns:
-            list: 频道对象列表
+            list: 所有频道列表
         """
-        session = self.Session()
         try:
-            return session.query(TelegramChannel).all()
+            # 直接使用 Supabase 客户端获取数据，避免异步调用导致的问题
+            import config.settings as config
+            from supabase import create_client
+            
+            # 获取 Supabase 配置
+            supabase_url = config.SUPABASE_URL
+            supabase_key = config.SUPABASE_KEY
+            
+            if not supabase_url or not supabase_key:
+                logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+                return []
+                
+            # 创建 Supabase 客户端并直接获取数据
+            supabase = create_client(supabase_url, supabase_key)
+            
+            # 执行查询
+            logger.info("直接使用 Supabase 客户端获取所有频道")
+            response = supabase.table('telegram_channels').select('*').execute()
+            
+            if hasattr(response, 'data'):
+                channels = response.data
+                logger.info(f"成功获取 {len(channels)} 个频道")
+                return channels
+            else:
+                logger.error("获取频道时，Supabase 未返回 data 字段")
+                logger.error(f"响应: {response}")
+                return []
+                
         except Exception as e:
             logger.error(f"获取所有频道时出错: {str(e)}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
-        finally:
-            session.close()
             
     async def update_channels(self, default_channels=None):
-        """更新频道状态，验证所有频道和群组是否仍然存在
+        """更新频道列表状态
+        
+        检查已有频道的状态并更新
         
         Args:
-            default_channels: 默认频道字典 {channel_username: chain}，
-                             用于首次运行时初始化
-        
+            default_channels: 不再使用的参数，保留是为了兼容性
+            
         Returns:
-            tuple: (chain_map, entity_map)
-                - chain_map: 字典，映射频道标识符到链名
-                - entity_map: 字典，映射频道ID到频道实体对象
+            list: 更新后的活跃频道列表
         """
-        # 首次运行时使用默认频道
-        if default_channels:
-            for username, chain in default_channels.items():
-                # 默认用户名的频道，假定为普通频道而非群组
-                self.add_channel(
-                    channel_username=username, 
-                    channel_name=username, 
-                    chain=chain,
-                    channel_id=None,  # 初始化时没有ID信息
-                    is_group=False,   # 默认不是群组
-                    is_supergroup=False,  # 默认不是超级群组
-                    member_count=0    # 初始化时不知道成员数
-                )
-                
-        if not self.client:
-            logger.warning("未提供Telegram客户端，无法验证频道状态")
-            return self.get_active_channels(), {}
-            
-        session = self.Session()
-        entity_map = {}  # 频道ID到频道实体的映射
-        chain_map = {}   # 频道标识符到链的映射
+        # 获取当前活跃频道
+        active_channels = self.get_active_channels()
         
-        try:
-            channels = session.query(TelegramChannel).all()
-            for channel in channels:
-                try:
-                    # 确定频道标识符（用户名或ID）
-                    channel_identifier = channel.channel_username or (f"id_{channel.channel_id}" if channel.channel_id else None)
-                    
-                    # 跳过无法识别的频道
-                    if not channel_identifier:
-                        logger.warning(f"频道 ID {channel.id} 没有用户名或频道ID，无法识别")
-                        continue
-
-                    # 验证频道是否存在
-                    if channel.is_active:
-                        try:
-                            entity = None
-                            # 尝试获取实体
-                            if channel.channel_username:
-                                # 使用用户名获取频道
-                                entity = await self.client.get_entity(channel.channel_username)
-                            elif channel.channel_id:
-                                # 根据是否为群组使用不同方式获取实体
-                                if channel.is_group and not channel.is_supergroup:
-                                    # 普通群组 - 使用PeerChat
-                                    entity = await self.client.get_entity(PeerChat(channel.channel_id))
-                                else:
-                                    # 频道或超级群组 - 超级群组在技术上是Channel类型，使用PeerChannel
-                                    # 注意：超级群组虽然标记为is_group=True，但它们应该用PeerChannel而不是PeerChat来获取
-                                    entity = await self.client.get_entity(PeerChannel(channel.channel_id))
-                                
-                            if entity:
-                                # 更新频道类型信息
-                                is_group = False
-                                is_supergroup = False
-                                
-                                # 使用Telethon库的正确判断方式
-                                if isinstance(entity, Channel):
-                                    if entity.megagroup:
-                                        # 超级群组
-                                        is_supergroup = True
-                                        is_group = True
-                                    elif entity.broadcast:
-                                        # 普通频道
-                                        is_group = False
-                                        is_supergroup = False
-                                    else:
-                                        # 其他Channel类型
-                                        is_group = False
-                                elif isinstance(entity, Chat):
-                                    # 普通群组
-                                    is_group = True
-                                    is_supergroup = False
-                                
-                                # 获取频道/群组的成员数量
-                                current_member_count = 0
-                                try:
-                                    if is_group:
-                                        if is_supergroup:
-                                            # 超级群组
-                                            full_channel = await self.client(GetFullChannelRequest(channel=entity))
-                                            current_member_count = getattr(full_channel.full_chat, 'participants_count', 0)
-                                        else:
-                                            # 普通群组
-                                            full_chat = await self.client(GetFullChatRequest(chat_id=entity.id))
-                                            current_member_count = getattr(full_chat.full_chat, 'participants_count', 0)
-                                    else:
-                                        # 普通频道
-                                        full_channel = await self.client(GetFullChannelRequest(channel=entity))
-                                        current_member_count = getattr(full_channel.full_chat, 'participants_count', 0)
-                                    
-                                    # 更新频道成员数
-                                    if current_member_count > 0 and channel.member_count != current_member_count:
-                                        logger.info(f"更新频道 {channel_identifier} 的成员数: {channel.member_count} -> {current_member_count}")
-                                        channel.member_count = current_member_count
-                                        channel.last_updated = datetime.now()
-                                        session.commit()
-                                except Exception as e:
-                                    logger.warning(f"获取频道 {channel_identifier} 的成员数时出错: {str(e)}")
-                                
-                                # 如果频道类型有变化，更新数据库
-                                if channel.is_group != is_group or channel.is_supergroup != is_supergroup:
-                                    logger.info(f"更新频道 {channel_identifier} 的类型信息: 群组={is_group}, 超级群组={is_supergroup}")
-                                    channel.is_group = is_group
-                                    channel.is_supergroup = is_supergroup
-                                    channel.last_updated = datetime.now()
-                                    session.commit()
-                                
-                                # 存储实体
-                                entity_id = str(entity.id)
-                                entity_map[entity_id] = entity
-                                
-                                # 添加映射关系
-                                chain_map[entity_id] = channel.chain
-                                if channel.channel_username:
-                                    chain_map[channel.channel_username] = channel.chain
-                                
-                                logger.info(f"验证{'超级群组' if is_supergroup else ('普通群组' if is_group else '普通频道')} {channel_identifier} 成功")
-                            else:
-                                logger.warning(f"无法获取{'群组' if channel.is_group else '频道'} {channel_identifier} 的实体")
-                                
-                        except Exception as e:
-                            logger.error(f"验证{'群组' if channel.is_group else '频道'} {channel_identifier} 时出错: {str(e)}")
-                            # 保持频道活跃状态，即使验证失败
-                            if channel.channel_username:
-                                chain_map[channel.channel_username] = channel.chain
-                            if channel.channel_id:
-                                chain_map[str(channel.channel_id)] = channel.chain
-                except Exception as e:
-                    logger.error(f"处理频道ID {channel.id} 时出错: {str(e)}")
+        # 更新所有活跃频道的状态
+        if active_channels:
+            updated_channels = []
+            channels_to_update = []
             
-            return chain_map, entity_map
-        except Exception as e:
-            logger.error(f"更新频道状态时出错: {str(e)}")
-            return {}, {}
-        finally:
-            session.close()
-
-# 初始化需要导入的默认频道
-DEFAULT_CHANNELS = {
-    'MomentumTrackerCN': 'SOL',
-    'ETH_Momentum_Tracker_CN': 'ETH'
-} 
+            for channel in active_channels:
+                try:
+                    # 使用ID或用户名验证频道
+                    identifier = channel.get('channel_id') or channel.get('channel_username')
+                    if not identifier:
+                        logger.warning(f"频道缺少有效标识符: {channel}")
+                        continue
+                        
+                    channel_info = await self.verify_channel(identifier)
+                    
+                    if channel_info and channel_info.get('exists'):
+                        # 更新频道信息
+                        update_data = {
+                            'id': channel.get('id'),
+                            'channel_username': channel_info.get('username'),
+                            'channel_id': channel_info.get('channel_id'),
+                            'channel_name': channel_info.get('name'),
+                            'chain': channel.get('chain'),
+                            'is_active': True,
+                            'is_group': channel_info.get('is_group', False),
+                            'is_supergroup': channel_info.get('is_supergroup', False),
+                            'member_count': channel_info.get('member_count', 0),
+                            'last_updated': datetime.now()
+                        }
+                        
+                        # 添加到更新列表
+                        channels_to_update.append(update_data)
+                        updated_channels.append(update_data)
+                    else:
+                        logger.warning(f"频道 {identifier} 不再可访问，标记为不活跃")
+                        # 标记为不活跃
+                        channel['is_active'] = False
+                        
+                        # 直接使用 Supabase 更新数据
+                        import config.settings as config
+                        from supabase import create_client
+                        
+                        supabase_url = config.SUPABASE_URL
+                        supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
+                        
+                        supabase = create_client(supabase_url, supabase_key)
+                        
+                        # 更新频道状态
+                        channel_id = channel.get('id')
+                        if channel_id:
+                            update_data = {'is_active': False, 'last_updated': datetime.now().isoformat()}
+                            response = supabase.table('telegram_channels').update(update_data).eq('id', channel_id).execute()
+                            if not hasattr(response, 'data') or not response.data:
+                                logger.warning(f"将频道 {identifier} 标记为不活跃时未返回数据: {response}")
+                        
+                except Exception as e:
+                    logger.error(f"更新频道 {channel.get('channel_username') or channel.get('channel_id')} 状态时出错: {str(e)}")
+            
+            # 批量更新频道信息
+            if channels_to_update:
+                try:
+                    # 使用 Supabase 客户端直接更新
+                    import config.settings as config
+                    from supabase import create_client
+                    
+                    supabase_url = config.SUPABASE_URL
+                    supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
+                    
+                    supabase = create_client(supabase_url, supabase_key)
+                    
+                    # 逐个更新频道
+                    for channel_data in channels_to_update:
+                        channel_id = channel_data.get('id')
+                        if channel_id:
+                            # 格式化日期时间
+                            if isinstance(channel_data.get('last_updated'), datetime):
+                                channel_data['last_updated'] = channel_data['last_updated'].isoformat()
+                                
+                            # 直接更新
+                            response = supabase.table('telegram_channels').update(channel_data).eq('id', channel_id).execute()
+                            if hasattr(response, 'data') and response.data:
+                                logger.info(f"已更新频道: {channel_data.get('channel_name')}")
+                            else:
+                                logger.warning(f"更新频道 {channel_data.get('channel_name')} 时未返回数据: {response}")
+                        
+                except Exception as e:
+                    logger.error(f"批量更新频道信息时出错: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
+            return updated_channels
+        
+        return [] 

@@ -10,7 +10,7 @@ from telethon import TelegramClient
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.core.channel_manager import ChannelManager, DEFAULT_CHANNELS
+from src.core.channel_manager import ChannelManager
 from src.database.models import init_db
 
 # 设置日志
@@ -131,7 +131,7 @@ async def update_channels():
         
         # 更新频道
         print("正在更新频道信息...")
-        active_channels = await manager.update_channels(DEFAULT_CHANNELS)
+        active_channels = await manager.update_channels()
         
         print(f"频道更新完成，共有 {len(active_channels)} 个活跃频道")
             

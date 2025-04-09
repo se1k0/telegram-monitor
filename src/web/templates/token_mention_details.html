@@ -59,7 +59,7 @@
                         {% for mention in mentions %}
                         <tr>
                             <td>{{ loop.index }}</td>
-                            <td>{{ mention.mention_time.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td>{% if mention.mention_time is string %}{{ mention.mention_time }}{% else %}{{ mention.mention_time.strftime('%Y-%m-%d %H:%M:%S') }}{% endif %}</td>
                             <td>{{ mention.market_cap_formatted }}</td>
                             <td>
                                 <a href="/message/{{ mention.chain }}/{{ mention.message_id }}" class="btn btn-sm btn-outline-primary">
@@ -99,7 +99,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const mentionData = [
         {% for mention in mentions %}
         {
-            time: '{{ mention.mention_time.isoformat() }}',
+            time: {% if mention.mention_time is string %}'{{ mention.mention_time }}'{% else %}'{{ mention.mention_time.isoformat() }}'{% endif %},
             market_cap: {{ mention.market_cap or 0 }}
         }{% if not loop.last %},{% endif %}
         {% endfor %}

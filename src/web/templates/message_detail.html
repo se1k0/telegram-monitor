@@ -24,7 +24,7 @@
                     </div>
                     <div class="d-flex justify-content-between mb-2">
                         <span>日期:</span>
-                        <span>{{ message.date.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                        <span>{% if message.date is string %}{{ message.date }}{% else %}{{ message.date.strftime('%Y-%m-%d %H:%M:%S') }}{% endif %}</span>
                     </div>
                     <div class="d-flex justify-content-between mb-2">
                         <span>来源类型:</span>

@@ -15,6 +15,7 @@ import time
 from src.api.dex_screener_api import get_token_pools, DexScreenerAPI
 from src.database.models import Token
 from src.utils.error_handler import retry, safe_execute
+from src.database.db_factory import get_db_adapter
 
 # 设置日志记录
 logger = logging.getLogger(__name__)
@@ -697,4 +698,163 @@ def update_all_tokens_market_and_txn_data(session: Session, limit: int = 100) ->
             })
             logger.error(f"综合更新代币 {token.chain}/{token.contract} 时发生错误: {str(e)}")
     
-    return results 
+    return results
+
+async def update_token_market_data_async(chain: str, contract: str) -> Dict[str, Any]:
+    """
+    异步更新单个代币的市值和流动性数据，使用Supabase适配器
+    
+    Args:
+        chain: 区块链名称
+        contract: 代币合约地址
+        
+    Returns:
+        Dict: 包含更新结果的字典，包括marketCap和liquidity
+    """
+    logger.info(f"开始异步更新代币 {chain}/{contract} 的市值和流动性数据")
+    
+    # 获取数据库适配器
+    db_adapter = get_db_adapter()
+    
+    # 标准化链ID
+    chain_id = _normalize_chain_id(chain)
+    if not chain_id:
+        logger.warning(f"不支持的链: {chain}")
+        return {"error": f"不支持的链: {chain}"}
+    
+    # 获取代币池数据
+    pools_data = get_token_pools(chain_id, contract)
+    
+    # 检查API响应
+    if isinstance(pools_data, dict) and "error" in pools_data:
+        logger.error(f"获取代币池数据失败: {pools_data['error']}")
+        return {"error": pools_data["error"]}
+    
+    # 处理API返回的数据结构
+    if isinstance(pools_data, dict) and "pairs" in pools_data:
+        pairs = pools_data.get("pairs", [])
+    else:
+        pairs = pools_data
+        
+    if not pairs:
+        logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
+        return {"error": "未找到代币交易对"}
+        
+    # 查找市值最高的池
+    max_market_cap = 0
+    max_liquidity = 0
+    dex_screener_url = None
+    price = None
+    first_price = None
+    
+    for pair in pairs:
+        # 获取市值数据
+        market_cap = pair.get("marketCap", 0)
+        if market_cap and float(market_cap) > max_market_cap:
+            max_market_cap = float(market_cap)
+            
+        # 获取流动性数据
+        liquidity = pair.get("liquidity", {}).get("usd", 0)
+        if liquidity and float(liquidity) > max_liquidity:
+            max_liquidity = float(liquidity)
+            
+        # 获取价格
+        if not price and "priceUsd" in pair:
+            price = float(pair["priceUsd"])
+
+        # 获取首次价格
+        if not first_price and "priceNative" in pair:
+            first_price = float(pair["priceNative"])
+            
+        # 获取DEX Screener URL
+        if not dex_screener_url:
+            chain_path = pair.get("chainId", "").lower()
+            pair_address = pair.get("pairAddress", "")
+            if chain_path and pair_address:
+                dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
+    
+    # 获取目标代币
+    token = await db_adapter.get_token_by_contract(chain, contract)
+    
+    if token:
+        # 更新代币数据
+        try:
+            # 准备更新数据
+            update_data = {
+                'market_cap_1h': token.get('market_cap'),
+                'market_cap': max_market_cap,
+                'market_cap_formatted': _format_market_cap(max_market_cap),
+                'liquidity': max_liquidity,
+                'price': price
+            }
+            
+            # 如果是首次设置价格，同时设置first_price
+            if token.get('first_price') is None:
+                update_data['first_price'] = first_price
+            
+            if dex_screener_url:
+                update_data['dexscreener_url'] = dex_screener_url
+            
+            # 执行更新
+            filters = {'chain': chain, 'contract': contract}
+            await db_adapter.execute_query('tokens', 'update', update_data, filters)
+            
+            logger.info(f"成功更新代币 {chain}/{contract} 的市值和流动性数据")
+            logger.info(f"市值: {max_market_cap}, 上一小时市值: {token.get('market_cap')}, 流动性: {max_liquidity}")
+            
+            return {
+                "success": True,
+                "marketCap": max_market_cap,
+                "marketCap1h": token.get('market_cap'),
+                "liquidity": max_liquidity,
+                "price": price,
+                "dexScreenerUrl": dex_screener_url
+            }
+            
+        except Exception as e:
+            logger.error(f"更新代币数据时发生错误: {str(e)}")
+            return {"error": str(e)}
+    else:
+        logger.warning(f"数据库中未找到代币 {chain}/{contract}")
+        return {"error": "数据库中未找到该代币"}
+
+def _format_market_cap(market_cap: float) -> str:
+    """格式化市值显示
+    
+    Args:
+        market_cap: 市值数字
+        
+    Returns:
+        str: 格式化后的市值字符串
+    """
+    if market_cap >= 1000000000:  # 十亿 (B)
+        return f"${market_cap/1000000000:.2f}B"
+    elif market_cap >= 1000000:   # 百万 (M)
+        return f"${market_cap/1000000:.2f}M"
+    elif market_cap >= 1000:      # 千 (K)
+        return f"${market_cap/1000:.2f}K"
+    return f"${market_cap:.2f}"
+
+def _normalize_chain_id(chain: str) -> Optional[str]:
+    """标准化链ID到DexScreener API支持的格式
+    
+    Args:
+        chain: 链ID
+        
+    Returns:
+        Optional[str]: 标准化后的链ID，如果不支持则返回None
+    """
+    chain_map = {
+        "SOL": "solana",
+        "ETH": "ethereum",
+        "BSC": "bsc",
+        "AVAX": "avalanche",
+        "MATIC": "polygon",
+        "ARB": "arbitrum",
+        "OP": "optimism",
+        "BASE": "base",
+        "ZK": "zksync",
+        "TON": "ton"
+    }
+    
+    return chain_map.get(chain.upper()) 

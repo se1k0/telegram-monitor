@@ -1,6 +1,17 @@
 # Telegram 频道监控服务
 
-这是一个用于监控Telegram频道的服务，可以自动捕获消息并保存。
+## 数据库说明
+
+本项目现在**只支持Supabase数据库**，不再支持SQLite或其他数据库。数据库配置需要在`.env`文件中设置：
+
+```
+DATABASE_URI=supabase://your_project_ref.supabase.co/your_anon_key
+SUPABASE_URL=https://your_project_ref.supabase.co
+SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_KEY=your_supabase_service_key
+```
+
+请确保在运行程序前正确配置以上参数。具体Supabase设置指南请参考`docs/supabase_setup_summary.md`。
 
 ## 功能特性
 
@@ -10,7 +21,46 @@
 - 提取和分析消息中的信息
 - 将提取的信息保存到数据库中
 - 支持同时监控频道和群组聊天
-- SQLite数据库性能优化，支持并发访问
+- 自动重连机制，处理API限流和连接问题
+- 增强的代币提及记录系统
+
+## 2025/04/02新增功能
+
+### 全新的自动重连机制
+
+- 实现了API限流(FloodWaitError)的智能处理和自动等待重连
+- 添加了连接状态监控和自动恢复机制
+- 记录限流信息到独立日志文件，便于追踪和分析
+- 提供API连接诊断工具，快速定位问题
+- 自动计算剩余等待时间，避免不必要的连接尝试
+
+使用示例：
+
+```bash
+# 检查API连接状态
+python scripts/auto_reconnect.py test
+
+# 自动等待限流时间并重试连接
+python scripts/auto_reconnect.py wait
+```
+
+### 增强的代币提及记录系统
+
+- 新增了`tokens_mark`表专门记录代币被提及信息
+- 通过新表结构实现更高效的代币提及查询和分析
+- 提供代币提及数据完整性检查和自动修复工具
+- 支持跨频道的代币提及追踪和统计
+- 自动创建必要的数据库结构，确保系统兼容性
+
+使用示例：
+
+```bash
+# 检查tokens_mark表是否存在并正常工作
+python scripts/check_tokens_mark.py
+
+# 创建tokens_mark表（如果不存在）
+python scripts/create_tokens_mark_table.py
+```
 
 ## 2025/04/01新增功能
 
@@ -280,28 +330,55 @@ python scripts/token_data_updater.py all --limit 50 --repeat 24 --interval 30
 - 可以通过配置文件调整批处理大小和间隔
 
 
-## 配置说明
+## 配置
 
-除了原有配置外，新增以下配置选项：
+项目的所有配置都集中在 `.env` 文件中。首次使用时，你可以复制 `.env.example` 文件并重命名为 `.env`，然后按需修改配置：
 
-```yaml
-# 批处理配置
-batch_size: 10          # 批处理大小
-batch_interval: 30      # 批处理间隔（秒）
-
-# Web界面配置
-web:
-  host: 0.0.0.0         # Web服务器主机
-  port: 5000            # Web服务器端口
-  debug: false          # 是否启用调试模式
-
-# 错误处理配置
-error_handling:
-  max_retries: 3        # 最大重试次数
-  retry_delay: 1.0      # 重试延迟（秒）
-  report_interval: 3600 # 错误报告间隔（秒）
+```bash
+cp .env.example .env
 ```
 
+## 主要配置项
+
+### Telegram API 配置
+```
+TG_API_ID='your_api_id'
+TG_API_HASH='your_api_hash'
+```
+
+### 数据库配置
+```
+DATABASE_URI=supabase://your_project_ref.supabase.co/your_anon_key
+SUPABASE_URL=https://your_project_ref.supabase.co
+SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_KEY=your_supabase_service_key
+```
+
+### 日志配置
+```
+LOG_LEVEL=DEBUG
+LOG_MAX_SIZE=5242880  # 5MB in bytes
+LOG_BACKUP_COUNT=3
+```
+
+### 自动发现频道配置
+```
+AUTO_CHANNEL_DISCOVERY=true
+DISCOVERY_INTERVAL=3600
+MIN_CHANNEL_MEMBERS=500
+MAX_AUTO_CHANNELS=10
+EXCLUDED_CHANNELS=my_test_channel,temporary_channel
+```
+
+### Web应用配置
+```
+FLASK_SECRET_KEY='secure_secret_key'
+WEB_HOST=0.0.0.0
+WEB_PORT=5000
+WEB_DEBUG=false
+```
+
+完整的配置选项请参考 `.env.example` 文件。
 
 ## 安装
 
@@ -314,7 +391,7 @@ error_handling:
    ```
    TG_API_ID=你的Telegram API ID
    TG_API_HASH=你的Telegram API Hash
-   DATABASE_URI=sqlite:///data/telegram_data.db
+   DATABASE_URI=supabase://your_project_ref.supabase.co/your_anon_key
    LOG_LEVEL=INFO
    # 其他配置...
    ```
@@ -441,7 +518,6 @@ discovery.add_chain_keywords('NEWCHAIN', ['new_chain', 'newchain', '新链'])
   - `repair_database.py`: 数据库修复工具
 - `tests/`: 测试目录
 - `config/`: 配置文件
-  - `config.json`: 主配置文件
   - `settings.py`: 配置加载和管理模块
   - `sensitive_words.txt`: 敏感词过滤文件
 - `logs/`: 日志目录
@@ -451,82 +527,21 @@ discovery.add_chain_keywords('NEWCHAIN', ['new_chain', 'newchain', '新链'])
 
 ## 注意事项
 
-- 首次运行时，会自动创建数据库和必要的目录
+- 首次运行时，会自动创建必要的目录
 - 默认会初始化两个频道：`MomentumTrackerCN` 和 `ETH_Momentum_Tracker_CN`
 - 使用命令行工具管理频道时，需要有网络连接以验证频道信息
 - 自动发现功能会定期检查你已加入的Telegram频道和群组，并根据配置自动添加符合条件的频道和群组
-- 如果在升级到群组支持版本后遇到数据库错误，请运行修复脚本：
-  ```bash
-  python scripts/repair_database.py
-  ```
-  这将更新数据库结构，添加支持群组功能所需的字段
 
 
 ## 2025/02/28 功能优化
 
-### SQLite 并发访问优化
-
-为了解决 SQLite 在并发访问时出现的 "database is locked" 错误，以及提高整体性能，实施以下优化措施：
-
-#### 1. WAL 模式
-
-启用了 SQLite 的 Write-Ahead Logging (WAL) 模式
-- 提高并发性：读取操作不会阻塞写入操作
-- 更快的事务性能：写入操作更高效
-- 更好的崩溃恢复能力
-
-```python
-connection.execute("PRAGMA journal_mode=WAL")
-```
-
-#### 2. 同步模式优化
-
-将同步模式设置为 NORMAL，在保证数据安全的同时提高写入性能：
-
-```python
-connection.execute("PRAGMA synchronous=NORMAL")
-```
-
-#### 3. 缓存大小优化
-
-增加 SQLite 的缓存大小，减少磁盘 I/O 操作：
-
-```python
-connection.execute("PRAGMA cache_size=-64000")  # 约64MB缓存
-```
-
-#### 4. 连接超时设置
-
-增加连接超时时间，减少"database is locked"错误：
-
-```python
-connection.execute("PRAGMA busy_timeout=30000")  # 30秒
-```
-
-#### 5. 重试机制
-
-为所有 SQLite 操作添加了自动重试机制，即使在高并发情况下也能保证操作最终成功：
-
-```python
-# 示例：带有重试的数据库操作
-@retry_sqlite_operation(max_retries=5, delay=1)
-def database_operation():
-    # 执行数据库操作
-```
-
-#### 6. 批量操作优化
-
-使用批量保存提高大量数据写入的效率：
-
-```python
-session.bulk_save_objects(objects, return_defaults=False)
-```
+### 代币价格和市值监控增强
 
 ## 环境要求
 
 - Python 3.8+
 - Telethon 1.28.5+
-- SQLAlchemy 2.0.20+
+- Supabase客户端库
 - Flask 2.3.3+
 - 其他依赖见 requirements.txt
 

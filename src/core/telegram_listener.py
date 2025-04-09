@@ -15,13 +15,21 @@ import logging
 import traceback as tb  # 重命名为tb，避免变量名冲突
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
-from dotenv import load_dotenv
+from functools import wraps
 
 import telethon
 from telethon import TelegramClient, events
-from telethon.tl.types import Channel, Chat, PeerChannel, PeerChat
+from telethon.tl.types import Channel, Chat, PeerChannel, PeerChat, PeerUser
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.messages import GetFullChatRequest
+# 添加Telethon错误类型导入，用于处理登录限流问题
+from telethon.errors.rpcerrorlist import (
+    FloodWaitError, 
+    PhoneCodeInvalidError, 
+    PhoneCodeExpiredError, 
+    PasswordHashInvalidError,
+    SessionPasswordNeededError
+)
 
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,20 +37,17 @@ sys.path.insert(0, project_root)
 
 # 导入项目模块
 from src.utils.logger import get_logger
-from src.core.channel_manager import ChannelManager, DEFAULT_CHANNELS
-from src.database.models import engine, TelegramChannel, init_db
+from src.core.channel_manager import ChannelManager
+from src.database.models import TelegramChannel
 from src.database.db_handler import (
-    save_telegram_message, extract_promotion_info, 
-    save_token_info, process_message_batch, token_batch, update_token_info,
+    extract_promotion_info, 
+    process_message_batch, token_batch,
     process_batches, cleanup_batch_tasks
 )
 import config.settings as config
 from src.utils.utils import parse_market_cap, format_market_cap
 from src.core.channel_discovery import ChannelDiscovery
-import sqlite3
 import traceback
-from functools import wraps
-import time
 
 # 将现有日志替换为我们的统一日志模块
 try:
@@ -53,7 +58,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 # 加载环境变量
-load_dotenv()
 
 # 重试装饰器，用于处理异步操作中的临时性错误
 def async_retry(max_retries=3, delay=1, backoff=2, exceptions=(Exception,)):
@@ -143,31 +147,47 @@ class TelegramListener:
     """Telegram 消息监听器类"""
     
     def __init__(self):
-        # Telegram API 认证信息
-        self.api_id = os.getenv('TG_API_ID')
-        self.api_hash = os.getenv('TG_API_HASH')
+        """初始化Telegram监听器"""
         
-        # 确保会话目录存在
-        session_dir = os.path.join(os.getcwd(), 'data', 'sessions')
-        os.makedirs(session_dir, exist_ok=True)
+        # 从配置中获取API认证信息
+        try:
+            # 直接从config模块获取配置
+            import config.settings as config
+            self.api_id = config.env_config.API_ID
+            self.api_hash = config.env_config.API_HASH
+            logger.info("已从环境变量中获取API ID和API HASH")
+            
+            # 验证API ID和API HASH是否有效
+            if not self.api_id or not self.api_hash:
+                logger.error("API ID或API HASH无效，请检查.env文件")
+                raise ValueError("API ID或API HASH无效，请检查.env文件")
+                
+        except Exception as e:
+            logger.error(f"获取API认证信息时出错: {str(e)}")
+            # 尝试直接从环境变量获取，作为最后的尝试
+            self.api_id = int(os.getenv('TG_API_ID', '0'))
+            self.api_hash = os.getenv('TG_API_HASH', '')
+            if not self.api_id or not self.api_hash:
+                logger.critical("无法获取有效的API ID和API HASH，无法初始化Telegram客户端")
+                raise ValueError("无法获取有效的API ID和API HASH，无法初始化Telegram客户端")
         
-        # 设置数据库会话
-        from sqlalchemy.orm import sessionmaker
-        from src.database.models import engine
-        self.Session = sessionmaker(bind=engine)
-        
-        # 生成唯一的会话名称，避免冲突
+        # 初始化会话参数
+        self.session_dir = os.path.join('./data')
+        # 使用进程ID和时间戳创建唯一的会话名称
         session_name = f'tg_session_{os.getpid()}_{int(time.time())}'
-        self.session_path = os.path.join(session_dir, session_name)
+        self.session_path = os.path.join(self.session_dir, session_name)
         
-        # 设置Telethon的SQLite连接参数
-        self.connection_retries = 10  # 增加重试次数
-        self.auto_reconnect = True
-        self.retry_delay = 5  # 增加延迟时间，避免频繁重试
-        self.request_retries = 5  # 请求重试次数
-        self.flood_sleep_threshold = 60  # 被限流时等待时间（秒）
+        # 确保目录存在
+        os.makedirs(self.session_dir, exist_ok=True)
         
-        # 初始化客户端，添加更强健的连接参数（移除不兼容参数）
+        # 设置连接参数
+        self.connection_retries = 5  # 连接重试次数
+        self.auto_reconnect = True   # 自动重连
+        self.retry_delay = 5         # 重试延迟时间（秒）
+        self.request_retries = 5     # 请求重试次数
+        self.flood_sleep_threshold = 60  # 洪水睡眠阈值
+        
+        # 初始化Telegram客户端
         self.client = TelegramClient(
             self.session_path,
             self.api_id, 
@@ -204,91 +224,162 @@ class TelegramListener:
         self.batch_task = None
         
         # 自动发现频道配置
-        self.auto_discovery_enabled = config.auto_channel_discovery if hasattr(config, 'auto_channel_discovery') else True
-        self.discovery_interval = config.discovery_interval if hasattr(config, 'discovery_interval') else 3600
-        self.min_members = config.min_channel_members if hasattr(config, 'min_channel_members') else 500
-        self.max_auto_channels = config.max_auto_channels if hasattr(config, 'max_auto_channels') else 10
+        self.auto_discovery_enabled = config.AUTO_CHANNEL_DISCOVERY
+        self.discovery_interval = config.DISCOVERY_INTERVAL
+        self.min_members = config.MIN_CHANNEL_MEMBERS
+        self.max_auto_channels = config.MAX_AUTO_CHANNELS
     
     @async_retry(max_retries=3, delay=2, exceptions=(ConnectionError, TimeoutError))
     async def setup_channels(self):
-        """设置频道监听，添加重试机制"""
+        """设置频道监听"""
         try:
-            # 等待客户端连接
+            logger.info("开始设置频道监听...")
+            
+            # 确保客户端已连接
             if not self.client.is_connected():
+                logger.warning("客户端未连接，尝试连接...")
                 await self.client.connect()
-                logger.info("客户端已成功连接")
                 
-            # 更新频道信息
-            self.chain_map, self.channel_entities = await self.channel_manager.update_channels(DEFAULT_CHANNELS)
-            logger.info(f"已加载 {len(self.chain_map)} 个活跃频道")
+            # 验证连接状态
+            if not self.client.is_connected():
+                logger.error("无法连接到Telegram服务器，请检查网络连接")
+                return False
+                
+            # 获取活跃的频道
+            active_channels = self.channel_manager.get_active_channels()
             
-            # 初始化频道发现器
-            self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
+            if not active_channels:
+                logger.warning("未找到活跃频道，请手动添加频道")
+                return False
             
-            # 注册消息处理程序
-            await self.register_handlers()
+            # 注册消息处理器
+            self.chain_map = active_channels
+            await self.register_handlers(active_channels)
+            logger.info(f"已注册消息处理器，监听 {len(active_channels)} 个活跃频道")
             return True
+            
         except Exception as e:
             logger.error(f"设置频道监听时出错: {str(e)}")
             logger.debug(tb.format_exc())
-            raise  # 让装饰器捕获异常并处理重试
+            return False
     
     @async_retry(max_retries=2, delay=1)
-    async def register_handlers(self):
-        """注册所有活跃频道和群组的消息处理程序，添加重试机制"""
+    async def register_handlers(self, active_channels=None):
+        """注册消息处理程序
+        
+        Args:
+            active_channels: 可选的活跃频道列表，如果为None则自动获取
+            
+        Returns:
+            bool: 是否成功注册处理程序
+        """
         try:
-            # 移除旧的处理程序
-            for handler in list(self.event_handlers.values()):
-                self.client.remove_event_handler(handler)
-            self.event_handlers.clear()
+            # 获取活跃频道
+            if active_channels is None:
+                # 使用channel_manager获取所有活跃频道
+                active_channels = self.channel_manager.get_active_channels()
             
-            # 构建监听实体列表
-            chat_entities = []
+            if not active_channels:
+                logger.warning("没有活跃的频道，无法注册消息处理程序")
+                return False
+                
+            # 打印当前活跃频道数量
+            logger.info(f"注册处理程序: {len(active_channels)} 个活跃频道")
+                
+            # 准备要监听的实体
+            entities = []
+            entity_names = []
             
-            # 如果有channel_entities，使用实体进行监听 
-            if hasattr(self, 'channel_entities') and self.channel_entities:
-                chat_entities = list(self.channel_entities.values())
-                logger.info(f"将使用 {len(chat_entities)} 个频道/群组实体进行消息监听")
-            else:
-                # 向后兼容：尝试使用用户名列表
-                channel_list = list(self.chain_map.keys())
-                if channel_list:
-                    chat_entities = channel_list
-                    logger.info(f"将使用 {len(channel_list)} 个频道/群组用户名进行消息监听")
+            # 构建实体字典
+            self.channel_entities = {}
+            self.chain_map = {}
             
-            if not chat_entities:
-                logger.warning("没有活跃的频道或群组可监听")
+            # 添加每个频道或群组
+            for channel in active_channels:
+                try:
+                    # 优先使用channel_id
+                    channel_id = channel.get('channel_id')
+                    channel_username = channel.get('channel_username')
+                    chain = channel.get('chain')
+                    
+                    if not channel_id and not channel_username:
+                        logger.warning(f"跳过缺少ID和用户名的频道: {channel}")
+                        continue
+                        
+                    # 记录频道ID格式
+                    if channel_id:
+                        if isinstance(channel_id, int):
+                            id_type = "正整数" if channel_id > 0 else "负整数"
+                            logger.info(f"频道ID格式: {id_type}, 值: {channel_id}")
+                        else:
+                            logger.info(f"频道ID类型: {type(channel_id)}, 值: {channel_id}")
+                    
+                    # 添加到监听实体列表
+                    entity = None
+                    
+                    # 尝试初始化实体类型
+                    if channel_id:
+                        # 优先使用ID
+                        try:
+                            # 如果是正整数，尝试转换为频道格式
+                            if isinstance(channel_id, int) and channel_id > 0:
+                                try:
+                                    # 尝试将正数ID作为频道处理（添加-100前缀）
+                                    entity = await self.client.get_entity(PeerChannel(-1000000000000 - channel_id))
+                                    logger.info(f"成功将正整数ID {channel_id} 转换为频道实体")
+                                except Exception as e:
+                                    logger.warning(f"无法将正整数ID {channel_id} 转换为频道实体: {str(e)}")
+                                    # 回退到原始ID
+                                    entity = await self.client.get_entity(PeerChannel(channel_id))
+                            else:
+                                # 直接使用ID
+                                entity = await self.client.get_entity(PeerChannel(channel_id))
+                        except ValueError as e:
+                            logger.warning(f"无法通过ID {channel_id} 获取频道实体: {str(e)}")
+                            if channel_username:
+                                try:
+                                    # 尝试使用用户名
+                                    entity = await self.client.get_entity(channel_username)
+                                except Exception as e2:
+                                    logger.error(f"无法通过用户名 {channel_username} 获取频道实体: {str(e2)}")
+                                    continue
+                            else:
+                                continue
+                    elif channel_username:
+                        # 如果没有ID但有用户名
+                        try:
+                            entity = await self.client.get_entity(channel_username)
+                        except Exception as e:
+                            logger.error(f"无法通过用户名 {channel_username} 获取频道实体: {str(e)}")
+                            continue
+                    
+                    if entity:
+                        entities.append(entity)
+                        entity_name = getattr(entity, 'title', None) or channel_username or f"ID:{channel_id}"
+                        entity_names.append(entity_name)
+                        
+                        # 保存实体和链的映射
+                        entity_key = str(entity.id)
+                        self.channel_entities[entity_key] = entity
+                        self.chain_map[entity_key] = chain
+                        
+                        if channel_username:
+                            self.chain_map[channel_username] = chain
+                except Exception as e:
+                    logger.error(f"处理频道时出错: {channel.get('channel_name', 'unknown')}, 错误: {str(e)}")
+                    continue
+            
+            # 检查是否有需要监听的实体
+            if not entities:
+                logger.warning("没有有效的频道实体，无法注册消息处理程序")
                 return False
                 
             # 注册新消息处理程序
-            handler = self.client.add_event_handler(
-                self.handle_new_message,
-                events.NewMessage(chats=chat_entities)
-            )
-            self.event_handlers['new_message'] = handler
-            
-            # 日志记录监听的频道和群组
-            if hasattr(self, 'channel_entities') and self.channel_entities:
-                # 使用实体名称或ID记录日志
-                entity_names = []
-                for entity_id, entity in self.channel_entities.items():
-                    # 判断是否为群组
-                    is_group = False
-                    if hasattr(entity, 'broadcast') and not entity.broadcast:
-                        is_group = True
-                    
-                    if hasattr(entity, 'username') and entity.username:
-                        entity_names.append(f"@{entity.username}{'(群组)' if is_group else ''}")
-                    elif hasattr(entity, 'title'):
-                        entity_names.append(f"{entity.title}{'(群组)' if is_group else ''} (ID: {entity_id})")
-                    else:
-                        entity_names.append(f"ID: {entity_id}{'(群组)' if is_group else ''}")
-                        
-                logger.info(f"已注册消息处理程序，监听频道和群组: {', '.join(entity_names)}")
-            else:
-                # 向后兼容：使用用户名列表记录日志
-                logger.info(f"已注册消息处理程序，监听频道和群组: {', '.join(channel_list)}")
+            @self.client.on(events.NewMessage(chats=entities))
+            async def handler(event):
+                await self.handle_new_message(event)
                 
+            logger.info(f"已注册消息处理程序，监听实体: {', '.join(entity_names)}")
             return True
         except Exception as e:
             logger.error(f"注册处理程序时出错: {str(e)}")
@@ -309,6 +400,30 @@ class TelegramListener:
         try:
             from telethon.tl.functions.channels import GetFullChannelRequest
             from telethon.tl.functions.messages import GetFullChatRequest
+            from telethon.tl.types import PeerUser, PeerChannel, PeerChat
+            
+            # 检查是否为用户ID
+            if isinstance(channel_id, PeerUser):
+                logger.warning(f"尝试获取用户实体的成员数，这是不可能的: {channel_id}")
+                return 0
+                
+            # 处理整数ID
+            if isinstance(channel_id, int):
+                # 在数据库中，频道ID可能被存储为正数
+                # 如果是正数ID，尝试转换为频道格式后再获取
+                if channel_id > 0:
+                    logger.info(f"检测到正整数频道ID: {channel_id}，尝试转换为频道格式")
+                    try:
+                        # 尝试将正整数ID转换为频道格式（添加-100前缀）
+                        # 这是Telegram内部存储格式的一种处理方式
+                        channel_entity = await self.client.get_entity(PeerChannel(-1000000000000 - channel_id))
+                        full_channel = await self.client(GetFullChannelRequest(channel=channel_entity))
+                        members_count = getattr(full_channel.full_chat, 'participants_count', 0)
+                        logger.info(f"成功获取转换后频道 {channel_id} 的成员数: {members_count}")
+                        return members_count
+                    except Exception as e:
+                        logger.warning(f"尝试将 {channel_id} 转换为频道格式后获取成员数失败: {str(e)}")
+                        # 如果转换失败，尝试原始方法
             
             if is_group:
                 if is_supergroup:
@@ -349,6 +464,9 @@ class TelegramListener:
         # 尝试获取频道ID和类型
         if hasattr(event.chat, 'id'):
             channel_id = event.chat.id
+            # 记录频道ID格式
+            id_type = "正整数" if channel_id > 0 else "负整数"
+            logger.debug(f"处理消息: 频道ID格式: {id_type}, 值: {channel_id}")
         
         # 使用Telethon库的正确判断方式
         from telethon.tl.types import Channel, Chat
@@ -383,26 +501,57 @@ class TelegramListener:
                 
                 # 更新数据库中的成员数
                 if member_count > 0:
-                    session = self.Session()
+                    # 使用数据库适配器获取频道信息
+                    from src.database.db_factory import get_db_adapter
+                    db_adapter = get_db_adapter()
+                    
                     try:
-                        channel = session.query(TelegramChannel).filter(
-                            TelegramChannel.channel_id == channel_id
-                        ).first()
+                        # 尝试获取频道
+                        channel = await db_adapter.get_channel_by_id(channel_id)
                         
-                        if channel and channel.member_count != member_count:
-                            logger.info(f"更新频道 {channel_id} 的成员数: {channel.member_count} -> {member_count}")
-                            channel.member_count = member_count
-                            channel.last_updated = datetime.now()
-                            session.commit()
+                        if channel and channel.get('member_count') != member_count:
+                            logger.info(f"更新频道 {channel_id} 的成员数: {channel.get('member_count')} -> {member_count}")
+                            channel['member_count'] = member_count
+                            channel['last_updated'] = datetime.now()
+                            await db_adapter.save_channel(channel)
                     except Exception as e:
                         logger.error(f"更新频道 {channel_id} 成员数时出错: {str(e)}")
-                        if 'session' in locals():
-                            session.rollback()
-                    finally:
-                        if 'session' in locals():
-                            session.close()
             except Exception as e:
-                logger.error(f"处理频道 {channel_id} 成员数时出错: {str(e)}")
+                logger.warning(f"获取频道 {channel_id} 成员数时出错: {str(e)}")
+        
+        # 获取消息的基本信息
+        message_id = message.id
+        date = message.date
+        text = message.text or message.message or ""
+        
+        # 确定该消息所属的区块链
+        channel_chain = None
+        
+        try:
+            # 由于ChannelManager已修改，获取所有活跃频道
+            active_channels = self.channel_manager.get_active_channels()
+            
+            # 查找与当前消息匹配的频道
+            for channel in active_channels:
+                if (channel.get('channel_id') and channel.get('channel_id') == channel_id) or \
+                   (channel.get('channel_username') and hasattr(event.chat, 'username') and 
+                    channel.get('channel_username') == event.chat.username):
+                    channel_chain = channel.get('chain')
+                    break
+                
+            if not channel_chain:
+                # 尝试从消息内容中提取区块链信息
+                from src.database.db_handler import extract_chain_from_message
+                extracted_chain = extract_chain_from_message(text)
+                if extracted_chain:
+                    channel_chain = extracted_chain
+                    logger.info(f"从消息内容中提取到区块链: {channel_chain}")
+                else:
+                    logger.warning(f"无法确定消息的区块链，跳过处理: channel_id={channel_id}")
+                    return
+        except Exception as e:
+            logger.error(f"确定消息区块链时出错: {str(e)}")
+            return
         
         # 获取标识符（用户名或ID）
         if hasattr(event.chat, 'username') and event.chat.username:
@@ -463,140 +612,193 @@ class TelegramListener:
                     logger.error(f"下载媒体文件失败: {str(e)}")
                     media_path = None
             
-            # 使用新的数据库函数保存消息
-            saved = save_telegram_message(
-                chain=chain,
-                message_id=message.id,
-                date=message.date,
-                text=message.text,
-                media_path=media_path,
-                channel_id=channel_id  # 只使用channel_id字段，移除is_group和is_supergroup
-            )
-            
-            # 如果消息已存在，则不继续处理
-            if not saved:
-                return
-            
-            # 从消息中提取 promotion 信息
-            promo = None
-            if message.text:
-                try:
-                    promo = extract_promotion_info(message.text, message.date, chain)
-                    logger.debug(f"extract_promotion_info 返回值: {promo}")
-                except Exception as e:
-                    logger.error(f"提取 promotion 信息时出错: {str(e)}")
-                    logger.debug(tb.format_exc())
-            
-            # 更新 tokens 表
-            if promo and promo.contract_address:
-                try:
-                    market_cap_value = parse_market_cap(promo.market_cap) if promo.market_cap else 0
-                    market_cap_formatted = format_market_cap(market_cap_value)
-                    
-                    # 转换时间到 UTC+8
-                    utc_time = message.date
-                    utc8_time = utc_time + timedelta(hours=8)
-                    current_time = utc8_time.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    # 使用新的token保存函数
-                    token_data = {
-                        'chain': chain,
-                        'token_symbol': promo.token_symbol,
-                        'contract': promo.contract_address,
-                        'message_id': message.id,
-                        'market_cap': market_cap_value,
-                        'market_cap_formatted': market_cap_formatted,
-                        'first_market_cap': market_cap_value,  # 第一次推荐时的市值
-                        'promotion_count': getattr(promo, 'promotion_count', 0),
-                        'likes_count': 0,
-                        'telegram_url': getattr(promo, 'telegram_url', ''),
-                        'twitter_url': getattr(promo, 'twitter_url', ''),
-                        'website_url': getattr(promo, 'website_url', ''),
-                        'latest_update': current_time,
-                        'first_update': current_time,
-                        'from_group': is_group,  # 添加是否来自群组的标记
-                        'channel_name': channel_identifier,  # 添加channel_name字段
-                        'channel_id': channel_id  # 直接保存channel_id值
-                    }
-                    
-                    # 添加情感分析相关字段
-                    if hasattr(promo, 'sentiment_score') and promo.sentiment_score is not None:
-                        token_data['sentiment_score'] = promo.sentiment_score
-                    if hasattr(promo, 'positive_words') and promo.positive_words is not None:
-                        token_data['positive_words'] = ','.join(promo.positive_words)
-                    if hasattr(promo, 'negative_words') and promo.negative_words is not None:
-                        token_data['negative_words'] = ','.join(promo.negative_words)
-                    if hasattr(promo, 'hype_score') and promo.hype_score is not None:
-                        token_data['hype_score'] = promo.hype_score
-                    if hasattr(promo, 'risk_level') and promo.risk_level is not None:
-                        token_data['risk_level'] = promo.risk_level
-                        
-                    # 保存代币数据
-                    # 获取数据库连接
+            try:
+                # 使用数据库适配器获取连接
+                from src.database.db_factory import get_db_adapter
+                db_adapter = get_db_adapter()
+                
+                # 使用新的数据库函数保存消息
+                message_data = {
+                    'chain': chain,
+                    'message_id': message.id,
+                    'date': message.date,
+                    'text': message.text,
+                    'media_path': media_path,
+                    'channel_id': channel_id  # 只使用channel_id字段
+                }
+                saved = await db_adapter.save_message(message_data)
+                
+                # 如果消息已存在，则不继续处理
+                if not saved:
+                    return
+                
+                # 从消息中提取 promotion 信息
+                promo = None
+                if message.text:
                     try:
-                        import sqlite3
-                        from config.settings import DATABASE_URI
-                        
-                        # 转换SQLAlchemy的URI为sqlite3能接受的路径
-                        db_path = DATABASE_URI.replace('sqlite:///', '')
-                        conn = sqlite3.connect(db_path)
-                        
-                        # 使用正确的参数调用update_token_info
-                        update_token_info(conn, token_data)
-                        logger.info(f"成功更新代币信息: {promo.token_symbol}")
-                        
-                        # 确保关闭连接
-                        conn.close()
+                        promo = extract_promotion_info(message.text, message.date, chain)
+                        logger.debug(f"extract_promotion_info 返回值: {promo}")
                     except Exception as e:
-                        logger.error(f"获取数据库连接或更新代币信息时出错: {str(e)}")
+                        logger.error(f"提取 promotion 信息时出错: {str(e)}")
                         logger.debug(tb.format_exc())
-                    
-                    # 使用 DexScreener API 更新代币市值和流动性数据
+                
+                # 保存代币信息
+                logger.info(f"处理代币信息: 链={chain}, 代币符号={promo.token_symbol}, 合约地址={promo.contract_address}")
+                
+                # 更新 tokens 表
+                if promo:
                     try:
-                        # 导入token_market_updater模块
-                        from src.api.token_market_updater import update_token_market_data
-                        from sqlalchemy.orm import sessionmaker
-                        from src.database.models import engine
+                        # 如果promo对象存在，即使没有contract_address也可能是有效信息
+                        # 因为我们的优化规则可能是通过链和symbol从数据库获取数据的
+                        market_cap_value = parse_market_cap(promo.market_cap) if promo.market_cap else 0
+                        market_cap_formatted = format_market_cap(market_cap_value)
                         
-                        # 创建数据库会话
-                        Session = sessionmaker(bind=engine)
-                        session = Session()
+                        # 转换时间到 UTC+8
+                        utc_time = message.date
+                        utc8_time = utc_time + timedelta(hours=8)
+                        current_time = utc8_time.strftime('%Y-%m-%d %H:%M:%S')
                         
-                        # 调用更新函数
-                        result = update_token_market_data(session, chain, promo.contract_address)
+                        # 获取原始链信息
+                        original_chain = chain
                         
-                        if "error" not in result:
-                            logger.info(f"成功更新代币 {promo.token_symbol} ({chain}/{promo.contract_address}) 的市值和流动性数据")
-                            logger.info(f"市值: {result.get('marketCap', 'N/A')}, 流动性: {result.get('liquidity', 'N/A')}")
-                        else:
-                            logger.warning(f"更新代币 {promo.token_symbol} ({chain}/{promo.contract_address}) 的市值和流动性数据失败: {result['error']}")
+                        # 检查promo对象中是否包含更新的链信息(通过DEX API获取)
+                        if hasattr(promo, 'chain') and promo.chain and promo.chain != "UNKNOWN":
+                            logger.info(f"使用从promo对象中获取的链信息: {promo.chain}, 替代原始链信息: {original_chain}")
+                            chain = promo.chain
+                        
+                        # 使用新的token保存函数
+                        token_data = {
+                            'chain': chain,  # 使用更新后的链信息
+                            'token_symbol': promo.token_symbol,
+                            'contract': promo.contract_address,
+                            'message_id': message.id,
+                            'market_cap': market_cap_value,
+                            'market_cap_formatted': market_cap_formatted,
+                            'first_market_cap': market_cap_value,  # 第一次推荐时的市值
+                            'promotion_count': getattr(promo, 'promotion_count', 0),
+                            'likes_count': 0,
+                            'telegram_url': getattr(promo, 'telegram_url', ''),
+                            'twitter_url': getattr(promo, 'twitter_url', ''),
+                            'website_url': getattr(promo, 'website_url', ''),
+                            'latest_update': current_time,
+                            'first_update': current_time,
+                            'from_group': is_group,  # 添加是否来自群组的标记
+                            'channel_id': channel_id  # 直接保存channel_id值
+                        }
+                        
+                        # 添加情感分析相关字段
+                        if hasattr(promo, 'sentiment_score') and promo.sentiment_score is not None:
+                            token_data['sentiment_score'] = promo.sentiment_score
+                        if hasattr(promo, 'positive_words') and promo.positive_words is not None:
+                            token_data['positive_words'] = ','.join(promo.positive_words)
+                        if hasattr(promo, 'negative_words') and promo.negative_words is not None:
+                            token_data['negative_words'] = ','.join(promo.negative_words)
+                        if hasattr(promo, 'hype_score') and promo.hype_score is not None:
+                            token_data['hype_score'] = promo.hype_score
+                        if hasattr(promo, 'risk_level') and promo.risk_level is not None:
+                            token_data['risk_level'] = promo.risk_level
                             
-                        # 关闭会话
-                        session.close()
+                        # 如果有价格信息，也添加到token数据中
+                        if hasattr(promo, 'price') and promo.price is not None:
+                            token_data['price'] = promo.price
+                        
+                        # 检查是否有足够信息进行保存
+                        if promo.contract_address or (promo.token_symbol and chain and chain != "UNKNOWN"):
+                            # 只在有足够信息时保存代币
+                            await db_adapter.save_token(token_data)
+                            logger.info(f"成功更新代币信息: {promo.token_symbol}")
+                            
+                            # 保存代币标记信息
+                            token_mark_data = {
+                                'chain': chain,
+                                'token_symbol': promo.token_symbol,
+                                'contract': promo.contract_address,
+                                'message_id': message.id,
+                                'market_cap': market_cap_value,
+                                'channel_id': channel_id
+                            }
+                            
+                            # 记录保存代币标记前的数据
+                            logger.info(f"准备保存代币标记: {token_mark_data}")
+                            
+                            # 检查token_mark_data数据完整性，确保至少有contract或token_symbol
+                            if (not token_mark_data.get('contract') and not token_mark_data.get('token_symbol')) or not token_mark_data.get('chain'):
+                                logger.warning(f"代币标记数据不完整，跳过保存: {token_mark_data}")
+                            else:
+                                # 尝试保存代币标记信息
+                                try:
+                                    mark_result = await db_adapter.save_token_mark(token_mark_data)
+                                    if mark_result:
+                                        logger.info(f"成功保存代币标记信息: {promo.token_symbol or '未知代币'}")
+                                    else:
+                                        logger.warning(f"保存代币标记信息失败: {promo.token_symbol or '未知代币'}")
+                                except Exception as e:
+                                    logger.error(f"保存代币标记信息时出错: {str(e)}")
+                                    logger.debug(tb.format_exc())
+                                
+                                # 使用 DexScreener API 更新代币市值和流动性数据
+                                # 只有当有合约地址时才进行更新
+                                if promo.contract_address:
+                                    try:
+                                        # 导入token_market_updater模块
+                                        from src.api.token_market_updater import update_token_market_data_async
+                                        
+                                        # 调用异步更新函数
+                                        result = await update_token_market_data_async(chain, promo.contract_address)
+                                        
+                                        if "error" not in result:
+                                            logger.info(f"成功更新代币 {promo.token_symbol} ({chain}/{promo.contract_address}) 的市值和流动性数据")
+                                            logger.info(f"市值: {result.get('marketCap', 'N/A')}, 流动性: {result.get('liquidity', 'N/A')}")
+                                            
+                                            # 检查返回结果中是否有更正的代币符号信息
+                                            if result.get('symbol') and result.get('symbol') != promo.token_symbol:
+                                                # 如果DEX API返回了与原始不同的代币符号，更新到数据库
+                                                corrected_symbol = result.get('symbol')
+                                                logger.info(f"发现代币符号不匹配，从DEX API获取到正确符号: {corrected_symbol}，原始符号: {promo.token_symbol}")
+                                                
+                                                # 更新promo对象中的代币符号
+                                                original_symbol = promo.token_symbol
+                                                promo.token_symbol = corrected_symbol
+                                                logger.info(f"已更新当前处理中的代币符号: {original_symbol} -> {corrected_symbol}")
+                                                
+                                                # 更新token_data中的代币符号
+                                                token_data['token_symbol'] = corrected_symbol
+                                                
+                                                # 更新token_mark_data中的代币符号
+                                                token_mark_data['token_symbol'] = corrected_symbol
+                                                logger.info(f"已更新token_mark_data中的代币符号为: {corrected_symbol}")
+                                                
+                                                # 更新数据库中的代币符号
+                                                token_update = {
+                                                    'token_symbol': corrected_symbol,
+                                                    'chain': chain,
+                                                    'contract': promo.contract_address
+                                                }
+                                                await db_adapter.save_token(token_update)
+                                        else:
+                                            logger.warning(f"更新代币 {promo.token_symbol} ({chain}/{promo.contract_address}) 的市值和流动性数据失败: {result['error']}")
+                                            
+                                    except Exception as e:
+                                        logger.error(f"调用 DexScreener API 更新代币市值和流动性数据时出错: {str(e)}")
+                                        logger.debug(tb.format_exc())
+                        else:
+                            # 如果在extract_promotion_info函数中判断不是废信息，但仍然没有足够信息，记录警告
+                            logger.warning(f"代币信息不完整，无法保存: Symbol={promo.token_symbol}, Contract={promo.contract_address}, Chain={chain}")
                     except Exception as e:
-                        logger.error(f"调用 DexScreener API 更新代币市值和流动性数据时出错: {str(e)}")
+                        logger.error(f"处理代币信息时出错: {str(e)}")
                         logger.debug(tb.format_exc())
-                    
-                    # 保存推广渠道信息
-                    # for channel in getattr(promo, 'promotion_channels', []):
-                    #     data = {
-                    #         'chain': chain,
-                    #         'message_id': message.id,
-                    #         'channel_info': channel
-                    #     }
-                    #     save_promotion_channel(data)
-                    
-                except Exception as e:
-                    logger.error(f"处理代币信息时出错: {str(e)}")
-                    logger.debug(tb.format_exc())
-            
-            # 重置错误计数，表示处理成功
-            self.error_count = 0
-            self.last_error_time = None
-            
-            # 记录处理时间
-            process_time = time.time() - start_time
-            logger.debug(f"消息处理完成，耗时: {process_time:.2f}秒")
+                
+                # 重置错误计数，表示处理成功
+                self.error_count = 0
+                self.last_error_time = None
+                
+                # 记录处理时间
+                process_time = time.time() - start_time
+                logger.debug(f"消息处理完成，耗时: {process_time:.2f}秒")
+                
+            except Exception as e:
+                logger.error(f"获取数据库连接或更新代币信息时出错: {str(e)}")
+                logger.debug(tb.format_exc())
             
         except Exception as e:
             # 记录错误并更新错误计数
@@ -629,9 +831,20 @@ class TelegramListener:
     
     async def auto_discover_channels(self):
         """定期自动发现并添加新频道"""
-        if not self.auto_discovery_enabled or not self.channel_discovery:
-            logger.info("自动发现频道功能已禁用")
+        if not self.auto_discovery_enabled:
+            logger.info("自动发现频道功能已在配置中禁用")
             return
+            
+        if not self.channel_discovery:
+            logger.warning("频道发现器未初始化，无法执行自动发现功能")
+            try:
+                # 尝试重新初始化频道发现器
+                from src.core.channel_discovery import ChannelDiscovery
+                self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
+                logger.info("已重新初始化频道发现器")
+            except Exception as e:
+                logger.error(f"重新初始化频道发现器失败: {str(e)}")
+                return
             
         try:
             logger.info("开始自动发现新频道")
@@ -659,6 +872,30 @@ class TelegramListener:
         connection_attempt = 0
         
         try:
+            # 处理操作系统差异
+            import platform
+            is_windows = platform.system() == 'Windows'
+            
+            # 在Windows环境下优化会话文件路径和名称
+            if is_windows:
+                # Windows环境下使用更简单的会话名称，避免使用进程ID
+                session_name = f'tg_session_win_{int(time.time())}'
+                self.session_path = os.path.join(self.session_dir, session_name)
+                
+                # 重新初始化客户端使用新的会话路径
+                logger.info(f"Windows环境：使用简化的会话名称: {session_name}")
+                self.client = TelegramClient(
+                    self.session_path,
+                    self.api_id, 
+                    self.api_hash,
+                    connection_retries=self.connection_retries,
+                    auto_reconnect=self.auto_reconnect,
+                    retry_delay=self.retry_delay,
+                    request_retries=self.request_retries,
+                    flood_sleep_threshold=self.flood_sleep_threshold,
+                    timeout=30  # 设置更长的超时时间
+                )
+            
             # 设置连接超时
             connection_timeout = 60  # 秒
             
@@ -707,7 +944,7 @@ class TelegramListener:
             except asyncio.TimeoutError:
                 logger.error(f"检查授权状态超时")
                 is_authorized = False
-                
+            
             if not is_authorized:
                 logger.info("用户未登录，开始登录流程...")
                 
@@ -715,14 +952,58 @@ class TelegramListener:
                     # 提示用户输入手机号码
                     phone = input("请输入您的手机号码 (包含国家代码，如 +86xxxxxxxxxx): ")
                     
-                    # 发送验证码请求（带超时）
+                    # 发送验证码请求（带超时和FloodWaitError处理）
                     try:
                         await asyncio.wait_for(
                             self.client.send_code_request(phone),
                             timeout=60
                         )
+                    except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
+                        # 解析错误信息中的等待时间（单位为秒）
+                        wait_seconds = getattr(flood_error, 'seconds', 0)
+                        if not wait_seconds:
+                            # 如果无法从错误属性中获取等待时间，尝试从错误消息中提取
+                            import re
+                            match = re.search(r'wait of (\d+) seconds', str(flood_error))
+                            if match:
+                                wait_seconds = int(match.group(1))
+                            else:
+                                wait_seconds = 3600  # 默认等待1小时
+                        
+                        # 转换为易读的时间格式
+                        wait_minutes = wait_seconds // 60
+                        wait_hours = wait_minutes // 60
+                        remaining_minutes = wait_minutes % 60
+                        
+                        if wait_hours > 0:
+                            wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
+                        else:
+                            wait_msg = f"{wait_minutes}分钟"
+                        
+                        logger.error(f"Telegram API限流: 需要等待{wait_msg}后才能继续。错误: {str(flood_error)}")
+                        print(f"\n⚠️ 您的账号或IP已被Telegram限流，需要等待{wait_msg}后才能重试登录。")
+                        print(f"⚠️ 限流原因: 可能是短时间内多次尝试登录或存在异常活动。")
+                        print(f"⚠️ 请稍后再试或使用其他账号/网络环境。")
+                        
+                        # 将限流信息保存到文件，以便后续查看
+                        try:
+                            with open("./logs/flood_wait_info.txt", "w") as f:
+                                f.write(f"限流发生时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                                f.write(f"需要等待时间: {wait_msg} ({wait_seconds}秒)\n")
+                                f.write(f"限流错误详情: {str(flood_error)}\n")
+                                f.write(f"手机号: {phone}\n")
+                        except Exception as file_error:
+                            logger.error(f"保存限流信息到文件时出错: {str(file_error)}")
+                        
+                        return False
                     except asyncio.TimeoutError:
                         logger.error("发送验证码请求超时")
+                        print("\n⚠️ 发送验证码请求超时，请检查网络连接后重试。")
+                        return False
+                    except Exception as e:
+                        logger.error(f"发送验证码时发生错误: {str(e)}")
+                        print(f"\n⚠️ 发送验证码失败: {str(e)}")
+                        print("请检查手机号是否正确，或网络连接是否稳定后重试。")
                         return False
                     
                     # 提示用户输入验证码
@@ -731,14 +1012,43 @@ class TelegramListener:
                         logger.info("用户取消登录")
                         return False
                         
-                    # 登录（带超时）
+                    # 登录（带超时和FloodWaitError处理）
                     try:
                         await asyncio.wait_for(
                             self.client.sign_in(phone, code),
                             timeout=60
                         )
+                    except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
+                        # 处理FloodWaitError，类似于上面的处理
+                        wait_seconds = getattr(flood_error, 'seconds', 3600)  # 默认1小时
+                        wait_minutes = wait_seconds // 60
+                        wait_hours = wait_minutes // 60
+                        remaining_minutes = wait_minutes % 60
+                        
+                        if wait_hours > 0:
+                            wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
+                        else:
+                            wait_msg = f"{wait_minutes}分钟"
+                        
+                        logger.error(f"登录时遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
+                        print(f"\n⚠️ 登录过程中被Telegram限流，需要等待{wait_msg}后才能重试")
+                        return False
+                    except telethon.errors.PhoneCodeInvalidError:
+                        logger.error("验证码无效")
+                        print("\n⚠️ 验证码无效，请确保输入了正确的验证码")
+                        return False
+                    except telethon.errors.PhoneCodeExpiredError:
+                        logger.error("验证码已过期")
+                        print("\n⚠️ 验证码已过期，请重新获取验证码")
+                        return False
                     except asyncio.TimeoutError:
                         logger.error("登录请求超时")
+                        print("\n⚠️ 登录请求超时，请检查网络连接后重试")
+                        return False
+                    except Exception as e:
+                        logger.error(f"登录过程中出错: {str(e)}")
+                        print(f"\n⚠️ 登录失败: {str(e)}")
+                        logger.debug(tb.format_exc())
                         return False
                     
                     # 检查是否需要两步验证
@@ -758,14 +1068,37 @@ class TelegramListener:
                             logger.info("用户取消登录")
                             return False
                             
-                        # 密码登录（带超时）
+                        # 密码登录（带超时和FloodWaitError处理）
                         try:
                             await asyncio.wait_for(
                                 self.client.sign_in(password=password),
                                 timeout=60
                             )
+                        except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
+                            wait_seconds = getattr(flood_error, 'seconds', 3600)
+                            wait_minutes = wait_seconds // 60
+                            wait_hours = wait_minutes // 60
+                            remaining_minutes = wait_minutes % 60
+                            
+                            if wait_hours > 0:
+                                wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
+                            else:
+                                wait_msg = f"{wait_minutes}分钟"
+                            
+                            logger.error(f"两步验证时遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
+                            print(f"\n⚠️ 两步验证过程中被Telegram限流，需要等待{wait_msg}后才能重试")
+                            return False
+                        except telethon.errors.PasswordHashInvalidError:
+                            logger.error("两步验证密码无效")
+                            print("\n⚠️ 两步验证密码无效，请确保输入了正确的密码")
+                            return False
                         except asyncio.TimeoutError:
                             logger.error("两步验证登录请求超时")
+                            print("\n⚠️ 两步验证登录请求超时，请检查网络连接后重试")
+                            return False
+                        except Exception as e:
+                            logger.error(f"两步验证过程中出错: {str(e)}")
+                            print(f"\n⚠️ 两步验证失败: {str(e)}")
                             return False
                     
                     # 登录成功，获取用户信息
@@ -775,10 +1108,28 @@ class TelegramListener:
                             timeout=30
                         )
                         logger.info(f"登录成功! 已登录为: {me.first_name} (ID: {me.id})")
+                        print(f"\n✅ 登录成功! 您已登录为: {me.first_name} (ID: {me.id})")
                     except asyncio.TimeoutError:
                         logger.warning("获取用户信息超时，但登录可能已成功")
+                        print("\n⚠️ 获取用户信息超时，但登录可能已成功")
+                except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
+                    # 捕获整个登录流程中的FloodWaitError
+                    wait_seconds = getattr(flood_error, 'seconds', 3600)
+                    wait_minutes = wait_seconds // 60
+                    wait_hours = wait_minutes // 60
+                    remaining_minutes = wait_minutes % 60
+                    
+                    if wait_hours > 0:
+                        wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
+                    else:
+                        wait_msg = f"{wait_minutes}分钟"
+                    
+                    logger.error(f"登录流程中遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
+                    print(f"\n⚠️ 登录流程中被Telegram限流，需要等待{wait_msg}后才能重试")
+                    return False
                 except Exception as e:
                     logger.error(f"登录过程中出错: {str(e)}")
+                    print(f"\n⚠️ 登录过程中发生错误: {str(e)}")
                     logger.debug(tb.format_exc())
                     return False
                 
@@ -794,23 +1145,37 @@ class TelegramListener:
                     
                 if not is_authorized:
                     logger.error("登录失败，请检查凭据后重试")
+                    print("\n⚠️ 登录失败，请检查您的凭据后重试")
                     return False
             
-            # 设置频道
-            try:
-                setup_result = await self.setup_channels()
-                if not setup_result:
-                    logger.warning("设置频道失败，但将继续尝试启动服务")
-            except Exception as e:
-                logger.error(f"设置频道时出错: {str(e)}")
-                logger.debug(tb.format_exc())
-                # 即使设置频道失败，也继续启动服务
+            # 初始化频道发现器（用于自动发现新频道）
+            if self.auto_discovery_enabled:
+                try:
+                    from src.core.channel_discovery import ChannelDiscovery
+                    self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
+                    logger.info("频道发现器已初始化，自动发现功能已启用")
+                except Exception as e:
+                    logger.error(f"初始化频道发现器时出错，自动发现功能将禁用: {str(e)}")
+                    self.auto_discovery_enabled = False
+                    self.channel_discovery = None
+            else:
+                logger.info("自动发现频道功能已手动禁用")
                 
+            # 设置活跃频道并注册处理程序
+            await self.setup_channels()
+            
             # 设置运行状态
             self.is_running = True
             
-            # 启动批处理任务
-            self.batch_task = asyncio.create_task(process_batches())
+            # 根据操作系统不同使用不同的批处理策略
+            if is_windows:
+                # Windows环境下在当前进程中运行批处理
+                logger.info("Windows环境：在当前进程中运行批处理任务")
+                self.batch_task = asyncio.create_task(process_batches())
+            else:
+                # Linux环境下可以安全使用进程间通信
+                logger.info("非Windows环境：使用标准方式启动批处理任务")
+                self.batch_task = asyncio.create_task(process_batches())
             
             # 启动健康检查和自动发现任务
             self.health_check_task = asyncio.create_task(self.health_check())
@@ -1102,9 +1467,6 @@ def run_listener():
     """启动 Telegram 监听服务"""
     # 设置日志
     setup_logging()
-    
-    # 确保数据库表存在
-    init_db()
     
     # 创建必要目录
     os.makedirs('./media', exist_ok=True)
