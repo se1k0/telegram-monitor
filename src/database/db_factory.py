@@ -3,7 +3,7 @@
 
 """
 数据库工厂模块
-根据配置返回适当的数据库适配器
+专门用于创建和管理Supabase数据库适配器
 """
 
 import os
@@ -23,58 +23,62 @@ except ImportError:
     )
     logger = logging.getLogger(__name__)
 
-# 从配置中获取数据库类型
+# 从配置中获取数据库连接信息
 try:
     import config.settings as config
     DATABASE_URI = config.DATABASE_URI
+    logger.info(f"成功从config.settings加载DATABASE_URI，值为: {DATABASE_URI[:10]}...")
 except ImportError:
-    # 尝试从环境变量加载
+    # 如果无法导入配置，尝试直接从环境变量加载
     from dotenv import load_dotenv
     load_dotenv()
     DATABASE_URI = os.getenv('DATABASE_URI', '')
+    logger.warning(f"无法从config.settings加载配置，直接从环境变量加载DATABASE_URI")
 
-# 数据库适配器存储
-_adapters = {}
+if not DATABASE_URI:
+    logger.error("DATABASE_URI未设置，请检查config/settings.py文件或环境变量")
+
+# 数据库适配器单例实例
+_adapter = None
 
 def get_db_adapter():
     """
-    获取数据库适配器
+    获取Supabase数据库适配器的单例实例
+    
+    如果DATABASE_URI不是supabase类型，将抛出异常
     
     Returns:
-        数据库适配器实例
+        SupabaseAdapter: 数据库适配器实例
     """
-    global _adapters
+    global _adapter
     
     # 检查是否已创建适配器
-    if DATABASE_URI in _adapters:
-        return _adapters[DATABASE_URI]
+    if _adapter is not None:
+        return _adapter
         
     # 确保DATABASE_URI是supabase类型
     if not DATABASE_URI.startswith('supabase://'):
         logger.error(f"不支持的数据库类型: {DATABASE_URI}")
-        logger.error("目前只支持Supabase数据库，DATABASE_URI必须以supabase://开头")
+        logger.error("项目只支持Supabase数据库，DATABASE_URI必须以supabase://开头")
         raise ValueError(f"不支持的数据库类型: {DATABASE_URI}")
         
-    # 使用Supabase适配器
+    # 创建Supabase适配器
     try:
         from .supabase_adapter import get_adapter as get_supabase_adapter
-        adapter = get_supabase_adapter()
-        _adapters[DATABASE_URI] = adapter
-        logger.info("使用Supabase数据库适配器")
-        return adapter
+        _adapter = get_supabase_adapter()
+        logger.info("成功创建Supabase数据库适配器")
+        return _adapter
     except ImportError as e:
         logger.error(f"无法导入Supabase适配器: {str(e)}")
         logger.error("请运行: pip install supabase")
         raise
             
-    return None
-
-# 获取默认适配器
+# 获取默认适配器 (保留兼容性)
 def get_default_adapter():
     """
     获取默认数据库适配器
     
     Returns:
-        默认数据库适配器实例
+        Supabase数据库适配器实例
     """
     return get_db_adapter() 

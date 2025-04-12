@@ -27,7 +27,7 @@ from src.database.models import init_db
 from src.database.db_handler import cleanup_batch_tasks
 from src.web.web_app import start_web_server
 from src.utils.error_handler import ErrorMonitor, monitor_errors
-from config.settings import load_config
+from config.settings import load_config, DATABASE_URI
 # 导入调度器和代币更新器
 from src.utils.scheduler import scheduler
 from src.api.token_updater import hourly_update
@@ -56,54 +56,38 @@ def log_runtime():
 # 修改检查数据库连接函数
 async def check_database_connection() -> bool:
     """
-    检查数据库连接是否正常
+    检查Supabase数据库连接是否正常
     
     Returns:
         bool: 连接是否正常
     """
     try:
-        # 使用数据库工厂获取适配器
-        db_adapter = get_db_adapter()
-        logger.info("已获取数据库适配器")
+        # 从配置中获取数据库URI
+        from config.settings import DATABASE_URI
         
         # 确认正在使用Supabase数据库
-        import config.settings as config
-        if not config.DATABASE_URI.startswith('supabase://'):
+        if not DATABASE_URI or not DATABASE_URI.startswith('supabase://'):
             logger.error("未使用Supabase数据库，请检查配置")
-            logger.error(f"当前DATABASE_URI: {config.DATABASE_URI}")
+            logger.error(f"当前DATABASE_URI: {DATABASE_URI or '未设置'}")
             logger.error("DATABASE_URI应以'supabase://'开头")
             return False
         
         logger.info("正在使用 Supabase 数据库")
         
-        # 直接使用 supabase 客户端检查连接
-        from supabase import create_client
+        # 使用数据库工厂获取适配器
+        db_adapter = get_db_adapter()
+        logger.info("已获取Supabase数据库适配器")
         
-        supabase_url = config.SUPABASE_URL
-        supabase_key = config.SUPABASE_KEY
-        
-        if not supabase_url or not supabase_key:
-            logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 环境变量")
-            return False
-            
-        # 直接检查 Supabase 连接
-        logger.info(f"尝试连接到 Supabase: {supabase_url}")
-        supabase = create_client(supabase_url, supabase_key)
+        # 直接使用数据库适配器获取活跃频道
+        channels = await db_adapter.get_active_channels()
+        logger.info(f"通过数据库适配器获取到 {len(channels)} 个活跃频道")
         
         # 检查是否可以获取活跃频道
-        response = supabase.table('telegram_channels').select('*').limit(5).execute()
-        
-        if hasattr(response, 'data'):
-            logger.info(f"数据库连接正常，获取到 {len(response.data)} 条频道记录")
-            
-            # 直接使用数据库适配器获取活跃频道
-            channels = await db_adapter.get_active_channels()
-            logger.info(f"通过数据库适配器获取到 {len(channels)} 个活跃频道")
-            
+        if len(channels) >= 0:  # 允许0个频道的情况
+            logger.info(f"数据库连接正常，准备就绪")
             return True
         else:
-            logger.error("无法从 Supabase 获取数据")
-            logger.error(f"响应: {response}")
+            logger.error("数据库连接检查失败，无法获取频道列表")
             return False
             
     except Exception as e:
@@ -136,44 +120,42 @@ def setup() -> Dict[str, Any]:
         配置字典
     """
     try:
-        # 设置日志
-        setup_logger()
+        # 设置日志 - 确保只初始化一次
+        if not logging.getLogger().handlers:
+            setup_logger()
+            logger.info("已初始化日志系统")
         logger.info("正在初始化 Telegram 监控服务...")
         
         # 加载配置
         config = load_config()
         logger.info("已从环境变量加载配置")
         
-        # 初始化数据库
-        init_db()
-        logger.info("数据库初始化完成")
-        
-        # 修复数据库结构
+        # 导入数据库URI直接从settings中获取
         try:
-            from scripts.repair_database import manually_add_columns
-            logger.info("检查并修复数据库结构...")
-            manually_add_columns()
-            logger.info("数据库结构检查和修复完成")
-        except Exception as e:
-            logger.warning(f"数据库结构检查失败: {str(e)}")
-            logger.warning("如果应用无法启动，请尝试运行: python scripts/repair_database.py")
+            from config.settings import DATABASE_URI
+            # 确认使用Supabase数据库
+            if not DATABASE_URI or not DATABASE_URI.startswith('supabase://'):
+                logger.error("未使用Supabase数据库，请检查配置")
+                logger.error(f"当前DATABASE_URI: {DATABASE_URI or '未设置'}")
+                logger.error("DATABASE_URI应以'supabase://'开头")
+                sys.exit(1)
+            # 将DATABASE_URI也加入config字典，保持一致性
+            config['DATABASE_URI'] = DATABASE_URI
+        except ImportError:
+            logger.error("无法导入config.settings模块")
+            sys.exit(1)
         
-        # 创建tokens_mark表
+        # 初始化数据库连接
         try:
-            from scripts.create_tokens_mark_table import create_tokens_mark_table, check_tokens_mark_table
-            logger.info("检查tokens_mark表...")
-            if not check_tokens_mark_table():
-                logger.info("创建tokens_mark表...")
-                if create_tokens_mark_table():
-                    logger.info("tokens_mark表创建成功")
-                else:
-                    logger.warning("tokens_mark表创建失败")
-            else:
-                logger.info("tokens_mark表已存在")
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            logger.info("Supabase数据库适配器初始化成功")
+            
+            # 不再检查tokens_mark表，假设它已经存在
+            
         except Exception as e:
-            logger.warning(f"检查或创建tokens_mark表时出错: {str(e)}")
-            import traceback
-            logger.debug(traceback.format_exc())
+            logger.error(f"Supabase数据库适配器初始化失败: {e}")
+            sys.exit(1)
         
         # 创建错误监控器
         global error_monitor

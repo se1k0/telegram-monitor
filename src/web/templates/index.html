@@ -100,6 +100,7 @@
         padding: 15px;
         border-top: 1px solid var(--secondary-color);
         margin-top: 10px;
+        position: relative; /* 添加相对定位，用于遮罩的定位参考 */
     }
     .chart-container {
         height: 300px;
@@ -122,6 +123,36 @@
     .active-row {
         border-color: var(--primary-color);
         box-shadow: 0 0 8px rgba(66, 72, 116, 0.3);
+    }
+    /* 涨跌幅颜色样式 */
+    .positive-change {
+        color: #4caf50;
+    }
+    .negative-change {
+        color: #f44336;
+    }
+    .neutral-change {
+        color: #757575;
+    }
+    /* 加载遮罩样式 */
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5); /* 灰色半透明背景 */
+        z-index: 1050; /* 确保遮罩在所有内容之上 */
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    .loading-content {
+        background-color: white;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
     }
 </style>
 {% endblock %}
@@ -256,7 +287,7 @@
             </div>
         </div>
         <div class="col-1 text-center">
-            <div class="stat-value">{{ token.volume_1h|default('0', true) }}</div>
+            <div class="stat-value">{{ token.volume_1h|default('$0', true) }}</div>
         </div>
         <div class="col-1 text-center">
             <div class="stat-value">{{ token.community_reach|default('0人', true) }}</div>
@@ -337,7 +368,51 @@ function copyToClipboard(text, label) {
     });
 }
 
-// 加载代币详情数据
+// 防抖实现 - 限制同一代币短时间内多次点击
+const debounceTimers = {};
+const clickCooldowns = {};
+const COOLDOWN_PERIOD = 1000; // 1秒冷却时间
+
+function debounce(func, wait, chainContract) {
+    return function() {
+        const context = this;
+        const args = arguments;
+        
+        // 检查该代币是否在冷却期内
+        const now = Date.now();
+        if (clickCooldowns[chainContract] && (now - clickCooldowns[chainContract] < COOLDOWN_PERIOD)) {
+            console.log(`点击过于频繁: ${chainContract}, 剩余冷却时间: ${Math.ceil((COOLDOWN_PERIOD - (now - clickCooldowns[chainContract])) / 1000)}秒`);
+            // 显示冷却提示
+            const cooldownMsg = document.createElement('div');
+            cooldownMsg.className = 'alert alert-warning alert-dismissible fade show';
+            cooldownMsg.style.position = 'fixed';
+            cooldownMsg.style.top = '10px';
+            cooldownMsg.style.right = '10px';
+            cooldownMsg.style.zIndex = '9999';
+            cooldownMsg.innerHTML = `
+                <strong>请勿频繁点击!</strong> 请等待数据加载完成。
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.body.appendChild(cooldownMsg);
+            
+            // 5秒后自动移除提示
+            setTimeout(() => {
+                cooldownMsg.remove();
+            }, 5000);
+            
+            return;
+        }
+        
+        clearTimeout(debounceTimers[chainContract]);
+        debounceTimers[chainContract] = setTimeout(function() {
+            func.apply(context, args);
+            // 设置点击冷却时间
+            clickCooldowns[chainContract] = Date.now();
+        }, wait);
+    };
+}
+
+// 初始化代币详情数据
 function loadTokenDetails(chain, contract, detailContainer) {
     // 获取详情容器
     const chartId = `chart-${chain}-${contract}`;
@@ -348,11 +423,111 @@ function loadTokenDetails(chain, contract, detailContainer) {
         return;
     }
     
-    // 发送请求获取数据
+    // 添加全页面加载遮罩
+    const overlay = document.createElement('div');
+    overlay.className = 'loading-overlay';
+    overlay.id = 'page-loading-overlay';
+    overlay.innerHTML = `
+        <div class="loading-content">
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">加载中...</span>
+            </div>
+            <div>正在获取代币详情数据，请稍候...</div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    
+    // 显示加载指示器
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'text-center my-3';
+    loadingIndicator.innerHTML = `
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+        </div>
+        <div class="mt-2">加载数据中，请稍候...</div>
+    `;
+    detailContainer.prepend(loadingIndicator);
+    
+    // 获取当前选中的行元素
+    const currentRow = document.querySelector(`.token-row[data-chain="${chain}"][data-contract="${contract}"]`);
+    
+    // 发送请求获取数据并更新
     fetch(`/api/token_market_history/${chain}/${contract}`)
         .then(response => response.json())
         .then(data => {
+            // 移除加载指示器
+            loadingIndicator.remove();
+            // 移除全页面遮罩
+            document.getElementById('page-loading-overlay')?.remove();
+            
             if (data.success) {
+                // 更新列表中的数据
+                if (currentRow && data.token) {
+                    // 更新持有者数量
+                    const holdersElement = currentRow.querySelector('.col-1:nth-child(3) .stat-value');
+                    if (holdersElement) {
+                        holdersElement.textContent = data.token.holders_count || '0';
+                    }
+                    
+                    // 更新市值/池子数据
+                    const marketCapElement = currentRow.querySelector('.col-1:nth-child(4) .stat-value');
+                    const liquidityElement = currentRow.querySelector('.col-1:nth-child(4) .stat-label');
+                    if (marketCapElement && data.token.market_cap_formatted) {
+                        marketCapElement.textContent = data.token.market_cap_formatted;
+                    }
+                    if (liquidityElement && data.token.liquidity) {
+                        liquidityElement.textContent = `$${data.token.liquidity}`;
+                    }
+                    
+                    // 更新1h交易数
+                    const buysElement = currentRow.querySelector('.buys_1h');
+                    const sellsElement = currentRow.querySelector('.sells_1h');
+                    if (buysElement) {
+                        buysElement.textContent = data.token.buys_1h || '0';
+                    }
+                    if (sellsElement) {
+                        sellsElement.textContent = data.token.sells_1h || '0';
+                    }
+                    
+                    // 更新1h交易金额
+                    const volumeElement = currentRow.querySelector('.col-1:nth-child(7) .stat-value');
+                    if (volumeElement) {
+                        volumeElement.textContent = data.token.volume_1h_formatted || '$0';
+                    }
+                    
+                    // 更新社群人数覆盖
+                    const communityElement = currentRow.querySelector('.col-1:nth-child(8) .stat-value');
+                    if (communityElement) {
+                        communityElement.textContent = `${data.token.community_reach || '0'}人`;
+                    }
+                    
+                    // 更新社群传播次数
+                    const spreadElement = currentRow.querySelector('.col-1:nth-child(9) .stat-value');
+                    if (spreadElement) {
+                        spreadElement.textContent = `${data.token.spread_count || '0'}次`;
+                    }
+                    
+                    // 更新涨跌幅
+                    if (data.token.change_percentage) {
+                        const changeElement = currentRow.querySelector('.col-1:nth-child(5) .stat-value');
+                        if (changeElement) {
+                            // 移除之前的颜色类
+                            changeElement.classList.remove('positive-change', 'negative-change', 'neutral-change');
+                            
+                            // 添加新的颜色类和内容
+                            if (data.token.change_pct_value > 0) {
+                                changeElement.classList.add('positive-change');
+                            } else if (data.token.change_pct_value < 0) {
+                                changeElement.classList.add('negative-change');
+                            } else {
+                                changeElement.classList.add('neutral-change');
+                            }
+                            
+                            changeElement.textContent = data.token.change_percentage;
+                        }
+                    }
+                }
+                
                 // 初始化市值历史图表
                 if (data.history && data.history.length > 0) {
                     initMarketCapChart(chartId, data.history);
@@ -373,13 +548,19 @@ function loadTokenDetails(chain, contract, detailContainer) {
                 detailContainer.dataset.loaded = 'true';
             } else {
                 // 加载失败显示错误信息
+                const errorMsg = data.error || '未知错误';
                 document.getElementById(chartId).parentNode.innerHTML = 
-                    `<div class="alert alert-danger">加载数据失败: ${data.error || '未知错误'}</div>`;
+                    `<div class="alert alert-danger">加载数据失败: ${errorMsg}</div>`;
                 document.getElementById(tableId).innerHTML = 
-                    '<tr><td colspan="6" class="text-center text-danger">加载数据失败</td></tr>';
+                    `<tr><td colspan="6" class="text-center text-danger">加载数据失败: ${errorMsg}</td></tr>`;
             }
         })
         .catch(error => {
+            // 移除加载指示器
+            loadingIndicator.remove();
+            // 移除全页面遮罩
+            document.getElementById('page-loading-overlay')?.remove();
+            
             console.error('请求数据时出错:', error);
             document.getElementById(chartId).parentNode.innerHTML = 
                 `<div class="alert alert-danger">请求数据出错: ${error.message}</div>`;
@@ -596,9 +777,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const tokenRows = document.querySelectorAll('.token-row');
     
     tokenRows.forEach(row => {
-        row.addEventListener('click', function() {
-            const chain = this.dataset.chain;
-            const contract = this.dataset.contract;
+        const chain = row.dataset.chain;
+        const contract = row.dataset.contract;
+        const chainContract = `${chain}_${contract}`;
+        
+        // 使用防抖包装点击处理函数
+        row.addEventListener('click', debounce(function() {
             const detailContainer = document.getElementById(`detail-${chain}-${contract}`);
             
             // 切换显示状态
@@ -621,7 +805,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // 加载详情数据
                 loadTokenDetails(chain, contract, detailContainer);
             }
-        });
+        }, 300, chainContract));
     });
 });
 </script>

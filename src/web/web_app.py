@@ -8,6 +8,16 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, f
 from flask_cors import CORS
 from dotenv import load_dotenv
 from src.database.models import Token, Message, TelegramChannel, TokensMark
+from functools import wraps
+import threading
+
+# 缓存和速率限制相关
+# 使用简单的内存字典实现缓存，生产环境可考虑使用Redis
+API_CACHE = {}  # 格式: {cache_key: {'data': data, 'timestamp': timestamp}}
+API_LOCKS = {}  # 格式: {cache_key: lock_object}
+API_LOCK = threading.Lock()  # 全局锁，用于保护API_LOCKS和API_CACHE的并发访问
+CACHE_CLEANUP_INTERVAL = 300  # 缓存清理间隔，单位秒（5分钟）
+CACHE_MAX_AGE = 300  # 缓存最大保存时间，单位秒（5分钟）
 
 # 在开发环境中修改路径
 import sys
@@ -256,7 +266,7 @@ def index():
                     'holders_count': token.get('holders_count') or '未知',
                     'buys_1h': token.get('buys_1h') or 0,
                     'sells_1h': token.get('sells_1h') or 0,
-                    'volume_1h': format_market_cap(token.get('volume_1h')) if token.get('volume_1h') else 0,
+                    'volume_1h': format_market_cap(token.get('volume_1h')) if token.get('volume_1h') else '$0',
                     'spread_count': f"{token.get('spread_count') or 0}次",
                     'community_reach': f"{token.get('community_reach') or 0}人"
                 }
@@ -641,136 +651,343 @@ def internal_server_error(e):
 
 @app.route('/api/token_market_history/<chain>/<contract>')
 def api_token_market_history(chain, contract):
-    """获取代币市值历史和频道统计数据的API"""
+    """获取代币市值历史数据和提及统计API，并更新关键数据"""
     try:
-        logger.info(f"正在获取代币市值历史数据: {chain}/{contract}")
+        # 定义缓存键
+        cache_key = f"{chain}_{contract}"
+        # 缓存时间（秒）
+        cache_duration = 60  # 1分钟
+        current_time = time.time()
         
-        # 使用Supabase获取数据
-        from supabase import create_client
-        
-        supabase_url = config.SUPABASE_URL
-        supabase_key = config.SUPABASE_KEY
-        
-        if not supabase_url or not supabase_key:
-            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
-            return jsonify({
-                'success': False,
-                'error': "数据库配置不完整"
-            }), 500
+        # 首先检查是否存在缓存数据且未过期
+        with API_LOCK:
+            if cache_key in API_CACHE:
+                cache_data = API_CACHE[cache_key]
+                # 如果缓存有效且未过期，直接返回缓存数据
+                if current_time - cache_data['timestamp'] < cache_duration:
+                    logger.info(f"返回缓存数据: {chain}/{contract}")
+                    return jsonify(cache_data['data'])
             
-        # 创建Supabase客户端
-        supabase = create_client(supabase_url, supabase_key)
-        
-        # 查询tokens_mark和telegram_channels表
-        # 修改：不再使用exec_sql函数，改用Supabase SDK原生方法
-        # 先获取tokens_mark数据
-        token_marks_response = supabase.table('tokens_mark')\
-            .select('*')\
-            .eq('chain', chain.upper())\
-            .eq('contract', contract)\
-            .order('mention_time', desc=False)\
-            .execute()
+            # 获取或创建此代币的锁
+            if cache_key not in API_LOCKS:
+                API_LOCKS[cache_key] = threading.Lock()
             
-        if not hasattr(token_marks_response, 'data'):
-            logger.error("Supabase查询tokens_mark未返回data字段")
-            return jsonify({
-                'success': False,
-                'error': "查询数据失败"
-            }), 500
+            # 尝试获取锁
+            token_lock = API_LOCKS[cache_key]
+            lock_acquired = token_lock.acquire(blocking=False)
             
-        token_marks = token_marks_response.data if hasattr(token_marks_response, 'data') else []
-        logger.info(f"查询到 {len(token_marks)} 条tokens_mark历史记录")
+            # 如果无法获取锁（意味着另一个请求正在处理相同的代币），再次检查缓存
+            if not lock_acquired:
+                if cache_key in API_CACHE:
+                    logger.info(f"无法获取锁，返回缓存数据: {chain}/{contract}")
+                    return jsonify(API_CACHE[cache_key]['data'])
+                else:
+                    # 如果没有缓存，则告知用户稍后重试
+                    logger.info(f"无法获取锁且无缓存，等待其他请求完成: {chain}/{contract}")
+                    return jsonify({"success": False, "error": "系统正在处理相同的请求，请稍后重试"})
         
-        # 获取所有涉及的channel_id
-        channel_ids = list(set([mark.get('channel_id') for mark in token_marks if mark.get('channel_id')]))
-        
-        # 获取这些channel的信息
-        channels_data = {}
-        if channel_ids:
-            # 逐个查询channel信息（因为in查询可能不支持）
-            for channel_id in channel_ids:
-                # 获取频道信息
-                channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', channel_id).limit(1).execute()
-                if hasattr(channel_response, 'data') and channel_response.data and len(channel_response.data) > 0:
-                    channels_data[channel_id] = channel_response.data[0]
-        
-        # 转换为JSON可序列化对象
-        history_data = []
-        channel_stats = {}  # 用于聚合每个频道的数据
-        
-        for record in token_marks:
+        try:
+            # 使用Supabase适配器
             try:
-                # 获取相关channel信息
-                channel_id = record.get('channel_id')
-                channel_info = channels_data.get(channel_id, {})
+                from supabase import create_client
+                supabase_url = config.SUPABASE_URL
+                supabase_key = config.SUPABASE_KEY
                 
-                # 创建历史记录
-                history_item = {
-                    'id': record.get('id'),
-                    'chain': record.get('chain'),
-                    'token_symbol': record.get('token_symbol'),
-                    'contract': record.get('contract'),
-                    'market_cap': record.get('market_cap'),
-                    'mention_time': record.get('mention_time'),
-                    'channel_id': channel_id,
-                    'channel_name': channel_info.get('channel_name'),
-                    'member_count': channel_info.get('member_count')
-                }
-                history_data.append(history_item)
+                # 创建Supabase客户端
+                supabase = create_client(supabase_url, supabase_key)
                 
-                # 聚合频道统计数据
-                if channel_id:
-                    if channel_id not in channel_stats:
-                        channel_stats[channel_id] = {
-                            'channel_id': channel_id,
-                            'channel_name': channel_info.get('channel_name'),
-                            'mention_count': 1,
-                            'first_mention_time': record.get('mention_time'),
-                            'first_market_cap': record.get('market_cap'),
-                            'member_count': channel_info.get('member_count')
-                        }
+                # 获取代币基本信息
+                token_response = supabase.table('tokens').select('*').eq('chain', chain).eq('contract', contract).limit(1).execute()
+                token = token_response.data[0] if hasattr(token_response, 'data') and token_response.data else None
+                
+                if not token:
+                    return jsonify({"success": False, "error": f"未找到代币 {chain}/{contract}"})
+                
+                # 更新代币数据
+                logger.info(f"开始更新代币数据: {chain}/{contract}")
+                
+                try:
+                    # 1. 尝试更新代币持有者数量 - 可能需要调用外部API
+                    logger.info("更新持有者数量")
+                    updated_holders_count = None
+                    
+                    if chain == 'SOL':
+                        # 如果是Solana链，尝试使用DAS API获取持有者信息
+                        try:
+                            from src.api.das_api import get_token_holders_info
+                            holders_count, _ = get_token_holders_info(contract)
+                            if holders_count:
+                                updated_holders_count = holders_count
+                                logger.info(f"通过DAS API获取到持有者数量: {holders_count}")
+                        except Exception as e:
+                            logger.error(f"DAS API获取持有者信息失败: {str(e)}")
                     else:
+                        # 其他链可以添加对应的API调用
+                        logger.info(f"暂未实现{chain}链的持有者数量更新")
+                    
+                    # 2. 更新交易数据 - 调用DEX Screener API
+                    logger.info("更新交易数据")
+                    updated_buys_1h = None
+                    updated_sells_1h = None
+                    updated_volume_1h = None
+                    updated_market_cap = None
+                    updated_liquidity = None
+                    
+                    try:
+                        from src.api.dex_screener_api import get_token_pools
+                        pools = get_token_pools(chain.lower(), contract)
+                        
+                        if pools and 'pairs' in pools and pools['pairs']:
+                            # 汇总所有交易对的交易数据
+                            buys_1h = 0
+                            sells_1h = 0
+                            volume_1h = 0
+                            
+                            # 获取市值和流动性数据
+                            market_cap = 0
+                            liquidity = 0
+                            
+                            for pair in pools['pairs']:
+                                if 'txns' in pair and 'h1' in pair['txns']:
+                                    h1_data = pair['txns']['h1']
+                                    buys_1h += h1_data.get('buys', 0)
+                                    sells_1h += h1_data.get('sells', 0)
+                                    
+                                if 'volume' in pair and 'h1' in pair['volume']:
+                                    volume_1h += float(pair['volume']['h1'] or 0)
+                                    
+                                # 提取市值和流动性数据
+                                if 'fdv' in pair:
+                                    market_cap = float(pair['fdv'] or 0)
+                                    
+                                if 'liquidity' in pair and 'usd' in pair['liquidity']:
+                                    liquidity += float(pair['liquidity']['usd'] or 0)
+                            
+                            updated_buys_1h = buys_1h
+                            updated_sells_1h = sells_1h
+                            updated_volume_1h = volume_1h
+                            
+                            if market_cap > 0:
+                                updated_market_cap = market_cap
+                                logger.info(f"更新市值: ${market_cap}")
+                                
+                            if liquidity > 0:
+                                updated_liquidity = liquidity
+                                logger.info(f"更新流动性: ${liquidity}")
+                            
+                            logger.info(f"更新交易数据: 买入={buys_1h}, 卖出={sells_1h}, 交易量=${volume_1h}")
+                    except Exception as e:
+                        logger.error(f"DEX Screener API获取交易数据失败: {str(e)}")
+                    
+                    # 3. 更新社群数据
+                    logger.info("更新社群数据")
+                    # 重新计算社群覆盖人数和传播次数
+                    try:
+                        # 计算传播次数 - 代币在所有群组中被提及的次数
+                        spread_count_response = supabase.table('tokens_mark').select('id', count='exact').eq('chain', chain).eq('contract', contract).execute()
+                        updated_spread_count = spread_count_response.count if hasattr(spread_count_response, 'count') else 0
+                        
+                        # 计算社群覆盖人数 - 涉及该代币的所有群组成员总数
+                        # 先获取所有提到该代币的频道ID
+                        channel_ids_response = supabase.table('tokens_mark').select('channel_id').eq('chain', chain).eq('contract', contract).execute()
+                        if hasattr(channel_ids_response, 'data') and channel_ids_response.data:
+                            # 提取唯一的频道ID
+                            unique_channel_ids = set()
+                            for item in channel_ids_response.data:
+                                if item.get('channel_id'):
+                                    unique_channel_ids.add(item.get('channel_id'))
+                            
+                            # 获取这些频道的成员数并求和
+                            if unique_channel_ids:
+                                community_reach = 0
+                                for channel_id in unique_channel_ids:
+                                    channel_response = supabase.table('telegram_channels').select('member_count').eq('channel_id', channel_id).limit(1).execute()
+                                    if hasattr(channel_response, 'data') and channel_response.data:
+                                        member_count = channel_response.data[0].get('member_count', 0)
+                                        community_reach += member_count
+                                
+                                updated_community_reach = community_reach
+                                logger.info(f"更新社群数据: 覆盖人数={community_reach}, 传播次数={updated_spread_count}")
+                    except Exception as e:
+                        logger.error(f"更新社群数据失败: {str(e)}")
+                    
+                    # 4. 计算市值涨跌幅
+                    logger.info("计算市值涨跌幅")
+                    # 获取当前市值（如果已经通过API更新，使用新值）
+                    current_market_cap = updated_market_cap if updated_market_cap is not None else token.get('market_cap')
+                    
+                    # 获取1小时前市值
+                    market_cap_1h = token.get('market_cap_1h')
+                    
+                    # 计算涨跌幅
+                    change_pct = 0
+                    change_percentage = '0.00%'
+                    
+                    if current_market_cap is not None and market_cap_1h is not None and market_cap_1h > 0:
+                        change_pct = (float(current_market_cap) - float(market_cap_1h)) / float(market_cap_1h) * 100
+                        change_percentage = f"{change_pct:+.2f}%"
+                        logger.info(f"涨跌幅: {change_percentage}")
+                    
+                    # 5. 更新数据库中的代币数据
+                    update_data = {}
+                    
+                    # 只更新有值的字段
+                    if updated_holders_count is not None:
+                        update_data['holders_count'] = updated_holders_count
+                    
+                    if updated_buys_1h is not None:
+                        update_data['buys_1h'] = updated_buys_1h
+                    
+                    if updated_sells_1h is not None:
+                        update_data['sells_1h'] = updated_sells_1h
+                    
+                    if updated_volume_1h is not None:
+                        update_data['volume_1h'] = updated_volume_1h
+                    
+                    if updated_market_cap is not None:
+                        update_data['market_cap'] = updated_market_cap
+                    
+                    if updated_liquidity is not None:
+                        update_data['liquidity'] = updated_liquidity
+                    
+                    if 'updated_community_reach' in locals() and updated_community_reach is not None:
+                        update_data['community_reach'] = updated_community_reach
+                    
+                    if 'updated_spread_count' in locals() and updated_spread_count is not None:
+                        update_data['spread_count'] = updated_spread_count
+                    
+                    # 更新市值1小时数据，用于下次计算涨跌幅
+                    if current_market_cap is not None:
+                        update_data['market_cap_1h'] = current_market_cap
+                    
+                    # 更新最后更新时间
+                    update_data['latest_update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 执行更新
+                    if update_data:
+                        logger.info(f"更新代币数据: {update_data}")
+                        supabase.table('tokens').update(update_data).eq('chain', chain).eq('contract', contract).execute()
+                    
+                    # 重新获取更新后的数据
+                    updated_token_response = supabase.table('tokens').select('*').eq('chain', chain).eq('contract', contract).limit(1).execute()
+                    token = updated_token_response.data[0] if hasattr(updated_token_response, 'data') and updated_token_response.data else token
+                    
+                except Exception as e:
+                    logger.error(f"更新代币数据过程中出错: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
+                # 获取代币提及历史
+                # 通过tokens_mark表获取
+                mentions_response = supabase.table('tokens_mark').select('*').eq('chain', chain).eq('contract', contract).order('mention_time', desc=True).execute()
+                mentions = mentions_response.data if hasattr(mentions_response, 'data') else []
+                
+                # 格式化提及历史数据
+                history = []
+                channel_stats = {}  # 用于统计各频道的提及情况
+                
+                for mention in mentions:
+                    channel_id = mention.get('channel_id')
+                    mention_time = mention.get('mention_time')
+                    market_cap = mention.get('market_cap')
+                    
+                    if channel_id and mention_time:
+                        # 获取频道信息
+                        channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', channel_id).limit(1).execute()
+                        channel = channel_response.data[0] if hasattr(channel_response, 'data') and channel_response.data else None
+                        
+                        channel_name = channel.get('channel_name') if channel else '未知频道'
+                        member_count = channel.get('member_count') if channel else 0
+                        
+                        # 添加到历史记录
+                        history.append({
+                            'mention_time': mention_time,
+                            'market_cap': market_cap,
+                            'channel_id': channel_id,
+                            'channel_name': channel_name,
+                            'member_count': member_count
+                        })
+                        
+                        # 更新频道统计
+                        if channel_id not in channel_stats:
+                            channel_stats[channel_id] = {
+                                'channel_id': channel_id,
+                                'channel_name': channel_name,
+                                'member_count': member_count,
+                                'mention_count': 0,
+                                'first_mention_time': None,
+                                'first_market_cap': None
+                            }
+                        
                         # 增加提及次数
                         channel_stats[channel_id]['mention_count'] += 1
                         
-                        # 检查并更新最早提及时间
-                        if record.get('mention_time') and channel_stats[channel_id]['first_mention_time']:
-                            current_first_time = channel_stats[channel_id]['first_mention_time']
-                            record_time = record.get('mention_time')
-                            if isinstance(current_first_time, str) and isinstance(record_time, str):
-                                # 如果都是字符串，直接比较（ISO格式的日期字符串可以直接按字典序比较）
-                                if record_time < current_first_time:
-                                    channel_stats[channel_id]['first_mention_time'] = record_time
-                                    channel_stats[channel_id]['first_market_cap'] = record.get('market_cap')
-            except Exception as record_error:
-                logger.error(f"处理记录失败: {str(record_error)}")
-                continue
-        
-        # 将频道统计字典转换为列表
-        channel_stats_list = list(channel_stats.values())
-        logger.info(f"生成了 {len(channel_stats_list)} 条频道统计数据")
-        
-        # 检查数据是否为空
-        if not history_data:
-            logger.warning(f"未找到代币 {chain}/{contract} 的市值历史数据")
-        
-        if not channel_stats_list:
-            logger.warning(f"未找到代币 {chain}/{contract} 的频道统计数据")
+                        # 更新首次提及时间和市值
+                        if not channel_stats[channel_id]['first_mention_time'] or mention_time < channel_stats[channel_id]['first_mention_time']:
+                            channel_stats[channel_id]['first_mention_time'] = mention_time
+                            channel_stats[channel_id]['first_market_cap'] = market_cap
+                
+                # 获取当前代币的市场数据
+                current_data = {
+                    'token_symbol': token.get('token_symbol'),
+                    'contract': token.get('contract'),
+                    'chain': token.get('chain'),
+                    'market_cap': token.get('market_cap'),
+                    'market_cap_formatted': format_market_cap(token.get('market_cap')),
+                    'liquidity': token.get('liquidity'),
+                    'buys_1h': token.get('buys_1h') or 0,
+                    'sells_1h': token.get('sells_1h') or 0,
+                    'volume_1h': token.get('volume_1h') or 0,
+                    'volume_1h_formatted': format_market_cap(token.get('volume_1h')),
+                    'holders_count': token.get('holders_count') or 0,
+                    'community_reach': token.get('community_reach') or 0,
+                    'spread_count': token.get('spread_count') or 0
+                }
+                
+                # 添加涨跌幅数据
+                if 'change_pct' in locals() and 'change_percentage' in locals():
+                    current_data['change_percentage'] = change_percentage
+                    current_data['change_pct_value'] = change_pct
+                    
+                    # 设置样式类
+                    if change_pct > 0:
+                        current_data['change_class'] = 'positive-change'
+                    elif change_pct < 0:
+                        current_data['change_class'] = 'negative-change'
+                    else:
+                        current_data['change_class'] = 'neutral-change'
+                
+                # 构建响应数据
+                response_data = {
+                    "success": True,
+                    "token": current_data,
+                    "history": sorted(history, key=lambda x: x['mention_time']),
+                    "channel_stats": list(channel_stats.values())
+                }
+                
+                # 更新缓存
+                with API_LOCK:
+                    API_CACHE[cache_key] = {
+                        'data': response_data,
+                        'timestamp': time.time()
+                    }
+                
+                return jsonify(response_data)
+                
+            except Exception as e:
+                logger.error(f"获取代币市值历史数据出错: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return jsonify({"success": False, "error": str(e)})
+        finally:
+            # 确保锁被释放
+            token_lock.release()
             
-        return jsonify({
-            'success': True,
-            'history': history_data,
-            'channel_stats': channel_stats_list
-        })
-        
     except Exception as e:
-        logger.error(f"获取代币市值历史数据失败: {str(e)}")
+        logger.error(f"处理API请求时出错: {str(e)}")
         import traceback
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        })
+        logger.error(traceback.format_exc())
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.route('/message/<chain>/<int:message_id>')
@@ -895,6 +1112,45 @@ def serve_media(filename):
         logger.error(f"提供媒体文件时出错: {str(e)}")
         return handle_error("无法加载所请求的媒体文件", 404)
 
+
+# 定时清理过期缓存的函数
+def cleanup_expired_cache():
+    """定期清理过期的API缓存，防止内存泄漏"""
+    global API_CACHE
+    while True:
+        try:
+            # 每隔一段时间执行一次清理
+            time.sleep(CACHE_CLEANUP_INTERVAL)
+            
+            # 获取当前时间
+            current_time = time.time()
+            keys_to_remove = []
+            
+            # 加锁访问缓存
+            with API_LOCK:
+                # 查找过期的缓存项
+                for key, cache_item in API_CACHE.items():
+                    if current_time - cache_item['timestamp'] > CACHE_MAX_AGE:
+                        keys_to_remove.append(key)
+                
+                # 移除过期的缓存项
+                for key in keys_to_remove:
+                    del API_CACHE[key]
+                    # 同时也可以清理不再需要的锁
+                    if key in API_LOCKS:
+                        del API_LOCKS[key]
+                        
+            if keys_to_remove:
+                logger.info(f"已清理 {len(keys_to_remove)} 个过期的API缓存项")
+        except Exception as e:
+            logger.error(f"清理缓存时发生错误: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+# 启动缓存清理线程
+cache_cleanup_thread = threading.Thread(target=cleanup_expired_cache, daemon=True)
+cache_cleanup_thread.start()
+logger.info("已启动API缓存清理线程")
 
 if __name__ == '__main__':
     # 确保必要的目录存在

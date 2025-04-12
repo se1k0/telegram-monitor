@@ -1,14 +1,14 @@
 import logging
-import asyncio
-from telethon import TelegramClient, events
+# import asyncio
+from telethon import TelegramClient # events
 from telethon.tl.functions.messages import GetDialogsRequest
-from telethon.tl.types import InputPeerEmpty, Channel, Chat, ChannelFull, PeerChannel, PeerChat, PeerUser
+from telethon.tl.types import InputPeerEmpty, PeerUser # Channel, Chat, ChannelFull, PeerChannel, PeerChat, 
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.messages import GetFullChatRequest
 from telethon.errors import ChannelPrivateError, ChatAdminRequiredError
-from typing import List, Dict, Optional, Tuple, Set
-import re
-from datetime import datetime, timedelta
+from typing import List, Dict #Optional, Tuple, Set
+# import re
+# from datetime import datetime, timedelta
 from .channel_manager import ChannelManager
 from config.settings import env_config
 

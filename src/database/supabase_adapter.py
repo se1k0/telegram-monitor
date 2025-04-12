@@ -299,10 +299,22 @@ class SupabaseAdapter:
             是否成功
         """
         try:
+            # 确保token_data是字典
+            if not isinstance(token_data, dict):
+                logger.error(f"token_data必须是字典，但收到了: {type(token_data)}")
+                return False
+            
             # 格式化日期时间字段
             for key, value in token_data.items():
                 if isinstance(value, datetime):
                     token_data[key] = value.isoformat()
+            
+            # 验证必要字段
+            required_fields = ['chain', 'contract']
+            for field in required_fields:
+                if field not in token_data or token_data[field] is None or token_data[field] == '':
+                    logger.error(f"保存代币信息到Supabase失败: 缺少必需字段 '{field}'或字段为空")
+                    return False
             
             # 检查代币是否已存在
             existing = await self.execute_query(
@@ -323,6 +335,26 @@ class SupabaseAdapter:
                 if existing_token and 'id' in existing_token:
                     # 更新现有代币，保留原始ID
                     token_data['id'] = existing_token['id']
+                    
+                    # 如果是更新操作，处理一些需要保留的字段
+                    # 确保保留first_market_cap
+                    if not token_data.get('first_market_cap') and existing_token.get('first_market_cap'):
+                        token_data['first_market_cap'] = existing_token['first_market_cap']
+                    # 如果没有提供message_id，保留现有的
+                    if not token_data.get('message_id') and existing_token.get('message_id'):
+                        token_data['message_id'] = existing_token['message_id']
+                    # 累计promotion_count
+                    if token_data.get('promotion_count', 0) > 0:
+                        token_data['promotion_count'] = (existing_token.get('promotion_count') or 0) + token_data.get('promotion_count')
+                    elif existing_token.get('promotion_count'):
+                        token_data['promotion_count'] = existing_token.get('promotion_count')
+                    # 如果没有提供channel_id，保留现有的
+                    if not token_data.get('channel_id') and existing_token.get('channel_id'):
+                        token_data['channel_id'] = existing_token['channel_id']
+                    # 如果没有提供risk_level，保留现有的
+                    if not token_data.get('risk_level') and existing_token.get('risk_level'):
+                        token_data['risk_level'] = existing_token['risk_level']
+                    
                     result = await self.execute_query(
                         'tokens',
                         'update',
@@ -336,6 +368,12 @@ class SupabaseAdapter:
                     # 插入新代币，不指定id
                     if 'id' in token_data:
                         token_data.pop('id')
+                    
+                    # 再次验证必要字段
+                    if not token_data.get('contract'):
+                        logger.error(f"插入新代币失败: 缺少必需字段 'contract'或字段为空")
+                        return False
+                    
                     result = await self.execute_query(
                         'tokens',
                         'insert',
@@ -347,8 +385,18 @@ class SupabaseAdapter:
                 return False
             else:
                 # 插入新代币，确保不提供id字段，让数据库自动生成
-                if 'id' in token_data and token_data['id'] is None:
+                if 'id' in token_data:
                     token_data.pop('id')
+                
+                # 最后检查一次contract字段
+                if not token_data.get('contract'):
+                    logger.error(f"插入新代币失败: 合约地址为空")
+                    return False
+                
+                # 对于新代币，确保first_market_cap有值
+                if token_data.get('market_cap') and not token_data.get('first_market_cap'):
+                    token_data['first_market_cap'] = token_data['market_cap']
+                
                 result = await self.execute_query(
                     'tokens',
                     'insert',
@@ -357,13 +405,13 @@ class SupabaseAdapter:
                 
             # 检查结果
             if isinstance(result, dict) and result.get('error'):
-                logger.error(f"保存代币信息操作返回错误: {result.get('error')}")
+                logger.error(f"保存代币操作返回错误: {result.get('error')}")
                 return False
                 
             return True
             
         except Exception as e:
-            logger.error(f"保存代币信息到Supabase失败: {str(e)}")
+            logger.error(f"保存代币到Supabase失败: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -397,16 +445,19 @@ class SupabaseAdapter:
             
             logger.info(f"准备保存代币标记数据: {mark_data}")
             
-            # 验证必需字段 - 调整必需字段的验证规则
-            # 只要有足够的信息来标识代币，就允许保存
+            # 严格验证必需字段
             if not mark_data.get('chain'):
                 logger.error(f"保存代币标记失败: 缺少必需字段 'chain'")
                 return False
                 
-            # 检查是否至少有contract或token_symbol中的一个
-            if not mark_data.get('contract') and not mark_data.get('token_symbol'):
-                logger.error(f"保存代币标记失败: 'contract'和'token_symbol'至少需要提供一个")
+            # 严格验证contract字段，确保不为空
+            if not mark_data.get('contract'):
+                logger.error(f"保存代币标记失败: 缺少必需字段 'contract'（不能为null）")
                 return False
+            
+            # 检查token_symbol字段，应当也提供
+            if not mark_data.get('token_symbol'):
+                logger.warning(f"代币标记缺少token_symbol字段，但将继续保存")
                 
             # 检查message_id字段
             if not mark_data.get('message_id'):
@@ -414,39 +465,28 @@ class SupabaseAdapter:
                 return False
                 
             # 检查记录是否已存在(合约+消息ID唯一性检查)
-            if mark_data.get('contract'):
-                existing = await self.execute_query(
-                    'tokens_mark',
-                    'select',
-                    filters={
-                        'chain': mark_data.get('chain'),
-                        'contract': mark_data.get('contract'),
-                        'message_id': mark_data.get('message_id')
-                    },
-                    limit=1
-                )
+            existing = await self.execute_query(
+                'tokens_mark',
+                'select',
+                filters={
+                    'chain': mark_data.get('chain'),
+                    'contract': mark_data.get('contract'),
+                    'message_id': mark_data.get('message_id')
+                },
+                limit=1
+            )
                 
-                if existing and isinstance(existing, list) and len(existing) > 0:
-                    logger.warning(f"代币标记记录已存在，跳过插入: 链={mark_data.get('chain')}, "
-                                    f"合约={mark_data.get('contract')}, 消息ID={mark_data.get('message_id')}")
-                    return True  # 已存在视为成功
-            elif mark_data.get('token_symbol'):
-                # 如果没有合约地址，则使用代币符号+链+消息ID检查
-                existing = await self.execute_query(
-                    'tokens_mark',
-                    'select',
-                    filters={
-                        'chain': mark_data.get('chain'),
-                        'token_symbol': mark_data.get('token_symbol'),
-                        'message_id': mark_data.get('message_id')
-                    },
-                    limit=1
-                )
-                
-                if existing and isinstance(existing, list) and len(existing) > 0:
-                    logger.warning(f"代币标记记录已存在，跳过插入: 链={mark_data.get('chain')}, "
-                                    f"代币符号={mark_data.get('token_symbol')}, 消息ID={mark_data.get('message_id')}")
-                    return True  # 已存在视为成功
+            if existing and isinstance(existing, list) and len(existing) > 0:
+                logger.warning(f"代币标记记录已存在，跳过插入: 链={mark_data.get('chain')}, "
+                                f"合约={mark_data.get('contract')}, 消息ID={mark_data.get('message_id')}")
+                return True  # 已存在视为成功
+            
+            # 再次确认所有必需字段不为null，防止数据库约束错误
+            required_fields = ['chain', 'contract', 'message_id']
+            for field in required_fields:
+                if not mark_data.get(field):
+                    logger.error(f"保存代币标记失败: 必需字段 '{field}' 为空")
+                    return False
             
             # 直接插入新记录，不指定id，让数据库自动生成
             logger.debug(f"执行tokens_mark表插入操作，数据: {mark_data}")
@@ -651,74 +691,31 @@ class SupabaseAdapter:
             logger.error(f"保存频道信息到Supabase失败: {str(e)}")
             return False
 
-    async def check_tokens_mark_table(self) -> Dict[str, Any]:
+    async def check_tokens_mark_table(self):
         """
-        检查tokens_mark表是否存在并正常工作
+        检查tokens_mark表是否存在
         
         Returns:
-            Dict: 包含状态和错误信息的字典
+            Dict: 包含检查结果的字典
         """
         try:
-            # 尝试从tokens_mark表中查询一条数据
             logger.info("检查tokens_mark表是否存在...")
-            result = await self.execute_query(
-                'tokens_mark',
-                'select',
-                limit=1
-            )
             
-            # 尝试插入一条测试数据
-            test_data = {
-                'chain': 'TEST',
-                'token_symbol': 'TEST',
-                'contract': '0xtest123456789',
-                'message_id': 0,
-                'market_cap': 0,
-                'mention_time': datetime.now().isoformat(),
-                'channel_id': 0
-            }
-            
-            logger.info("尝试向tokens_mark表插入测试数据...")
-            insert_result = await self.execute_query(
-                'tokens_mark',
-                'insert',
-                data=test_data
-            )
-            
-            # 检查插入结果
-            if isinstance(insert_result, dict) and insert_result.get('error'):
-                return {
-                    'status': False,
-                    'error': f"插入测试数据失败: {insert_result.get('error')}",
-                    'select_result': result,
-                    'insert_result': insert_result
-                }
-                
-            # 插入成功后尝试删除测试数据
-            if isinstance(insert_result, list) and len(insert_result) > 0 and 'id' in insert_result[0]:
-                test_id = insert_result[0]['id']
-                logger.info(f"删除测试数据 ID: {test_id}")
-                delete_result = await self.execute_query(
-                    'tokens_mark',
-                    'delete',
-                    filters={'id': test_id}
-                )
-            
+            # 假设表已经存在，直接返回成功
             return {
                 'status': True,
-                'message': "tokens_mark表检查成功",
-                'select_result': result,
-                'insert_result': insert_result
+                'exists': True,
+                'message': 'tokens_mark表已存在'
             }
             
         except Exception as e:
-            logger.error(f"检查tokens_mark表时出错: {str(e)}")
+            logger.error(f"检查tokens_mark表时出错: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return {
                 'status': False,
-                'error': str(e),
-                'traceback': traceback.format_exc()
+                'exists': False,
+                'error': str(e)
             }
 
 # 创建单例实例

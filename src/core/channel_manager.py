@@ -28,6 +28,11 @@ class ChannelManager:
         self.db_adapter = get_db_adapter()
         self.client = client
         
+        # 添加缓存机制
+        self._active_channels_cache = None
+        self._cache_timestamp = None
+        self._cache_ttl = 60  # 缓存有效期（秒）
+        
     async def verify_channel(self, channel_username):
         """验证一个Telegram频道或群组是否存在且可访问
         
@@ -267,6 +272,10 @@ class ChannelManager:
                         else:
                             logger.warning(f"更新频道信息失败: {channel_name}")
                     
+                    # 清除缓存，强制下次重新获取
+                    self._active_channels_cache = None
+                    self._cache_timestamp = None
+                    
                     return True
                 else:
                     # 频道存在但不活跃，重新激活它
@@ -281,6 +290,9 @@ class ChannelManager:
                     
                     if hasattr(update_response, 'data') and update_response.data:
                         logger.info(f"已重新激活频道: {channel_name}")
+                        # 清除缓存，强制下次重新获取
+                        self._active_channels_cache = None
+                        self._cache_timestamp = None
                         return True
                     else:
                         logger.error(f"重新激活频道失败: {channel_name}")
@@ -305,6 +317,9 @@ class ChannelManager:
             
             if hasattr(response, 'data') and response.data:
                 logger.info(f"已添加新频道: {channel_name}")
+                # 清除缓存，强制下次重新获取
+                self._active_channels_cache = None
+                self._cache_timestamp = None
                 return True
             else:
                 logger.error(f"添加频道失败: {channel_name}, 无返回数据")
@@ -368,6 +383,9 @@ class ChannelManager:
             
             if hasattr(update_response, 'data') and update_response.data:
                 logger.info(f"已移除频道: {channel.get('channel_name', channel_username)}")
+                # 清除缓存，强制下次重新获取
+                self._active_channels_cache = None
+                self._cache_timestamp = None
                 return True
             else:
                 logger.error(f"移除频道失败: {channel_username}")
@@ -387,6 +405,14 @@ class ChannelManager:
             list: 活跃频道列表
         """
         try:
+            # 检查缓存是否有效
+            if self._active_channels_cache is not None and self._cache_timestamp is not None:
+                now = datetime.now()
+                cache_age = (now - self._cache_timestamp).total_seconds()
+                if cache_age < self._cache_ttl:
+                    logger.debug(f"使用缓存的活跃频道数据，缓存年龄: {cache_age:.1f}秒")
+                    return self._active_channels_cache
+
             # 直接使用 Supabase 客户端获取数据，避免异步调用导致的问题
             import config.settings as config
             from supabase import create_client
@@ -409,6 +435,11 @@ class ChannelManager:
             if hasattr(response, 'data'):
                 channels = response.data
                 logger.info(f"成功获取 {len(channels)} 个活跃频道")
+                
+                # 更新缓存
+                self._active_channels_cache = channels
+                self._cache_timestamp = datetime.now()
+                
                 return channels
             else:
                 logger.error("获取活跃频道时，Supabase 未返回 data 字段")
@@ -563,6 +594,10 @@ class ChannelManager:
                                 logger.info(f"已更新频道: {channel_data.get('channel_name')}")
                             else:
                                 logger.warning(f"更新频道 {channel_data.get('channel_name')} 时未返回数据: {response}")
+                        
+                    # 更新完成后清除缓存
+                    self._active_channels_cache = None
+                    self._cache_timestamp = None
                         
                 except Exception as e:
                     logger.error(f"批量更新频道信息时出错: {str(e)}")

@@ -4,31 +4,68 @@ from pathlib import Path
 from dotenv import load_dotenv
 import logging
 
+# 设置基本日志 - 只设置基础配置，不添加处理器
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'
+    # 去掉处理器配置，由setup_logger统一处理
+)
+logger = logging.getLogger(__name__)
+
 # 导入 Supabase 客户端库
 try:
     from supabase import create_client, Client
     HAS_SUPABASE = True
 except ImportError:
-    print("警告: 未安装 supabase 客户端库. 如需使用 Supabase, 请运行: pip install supabase")
+    logger.warning("未安装 supabase 客户端库. 如需使用 Supabase, 请运行: pip install supabase")
     HAS_SUPABASE = False
 
 # 修改BASE_DIR为项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# 加载环境变量（自动从项目根目录查找.env文件）
-env_file_path = BASE_DIR / '.env'
-if os.path.exists(env_file_path):
-    load_dotenv(env_file_path)
-    print(f"已加载环境变量文件: {env_file_path}")
-else:
-    print(f"警告: 环境变量文件不存在: {env_file_path}, 将使用默认值")
+# 尝试多个可能的.env文件位置
+ENV_PATHS = [
+    BASE_DIR / '.env',  # 项目根目录
+    BASE_DIR.parent / '.env',  # 上级目录
+    Path.cwd() / '.env',  # 当前工作目录
+    Path(os.path.expanduser('~')) / '.telegram-monitor.env'  # 用户主目录
+]
 
-# 数据库配置
+# 加载环境变量
+env_loaded = False
+found_env_path = None  # 跟踪找到的.env文件路径
+
+for env_path in ENV_PATHS:
+    if os.path.exists(env_path):
+        try:
+            load_dotenv(env_path)
+            logger.info(f"已加载环境变量文件: {env_path}")
+            env_loaded = True
+            found_env_path = env_path  # 记录找到的路径
+            break
+        except Exception as e:
+            logger.error(f"加载环境变量文件 {env_path} 失败: {e}")
+
+if not env_loaded:
+    logger.warning(f"未找到任何环境变量文件, 将使用系统环境变量或默认值")
+    # 尝试不指定文件路径加载.env（查找默认位置）
+    try:
+        load_dotenv()
+        logger.info("已从默认位置加载环境变量")
+    except Exception as e:
+        logger.error(f"从默认位置加载环境变量失败: {e}")
+    
+    # 如果没有找到.env文件，使用默认文件路径
+    found_env_path = ENV_PATHS[0]  # 使用项目根目录作为默认位置
+
+# 获取并验证数据库配置
 DATABASE_URI = os.getenv('DATABASE_URI', '')
 if not DATABASE_URI:
-    print("警告: 未设置DATABASE_URI环境变量，请在.env文件中设置supabase://开头的数据库连接字符串")
+    logger.error("未设置DATABASE_URI环境变量，请在.env文件中设置supabase://开头的数据库连接字符串")
 elif not DATABASE_URI.startswith('supabase://'):
-    print(f"错误: DATABASE_URI必须以supabase://开头，当前值: {DATABASE_URI}")
+    logger.error(f"错误: DATABASE_URI必须以supabase://开头，当前值: {DATABASE_URI}")
+else:
+    logger.info(f"成功读取DATABASE_URI: {DATABASE_URI[:15]}...")
 
 # PostgreSQL生产环境配置示例
 # DATABASE_URI = 'postgresql+psycopg2://user:password@localhost/dbname'
@@ -215,12 +252,15 @@ class EnvConfig:
 # 实例化配置对象便于引用
 env_config = EnvConfig()
 
-# 增强日志配置
+# 增强日志配置 - 只定义配置，不自动应用
 LOG_CONFIG['handlers']['console'] = {
     'class': 'logging.StreamHandler',
     'formatter': 'standard'
 }
 LOG_CONFIG['loggers']['']['handlers'] = ['file', 'console']  # 同时输出到文件和终端
+
+# 注释：这个配置将由setup_logger在需要时使用，不自动应用
+# logging.config.dictConfig(LOG_CONFIG)  # 不直接应用配置
 
 # 加载配置函数
 def load_config(_=None):
@@ -243,6 +283,7 @@ def load_config(_=None):
             "database": {
                 "uri": DATABASE_URI
             },
+            "DATABASE_URI": DATABASE_URI,
             "web_server": {
                 "host": WEB_HOST,
                 "port": WEB_PORT,
@@ -264,12 +305,13 @@ def load_config(_=None):
         }
         
         # 日志信息
-        logging.info(f"已从环境变量加载配置")
+        logger.info(f"已从环境变量加载配置，DATABASE_URI: {DATABASE_URI[:15]}..." if DATABASE_URI else "已从环境变量加载配置，但DATABASE_URI未设置")
         
         return config
     except Exception as e:
-        logging.error(f"加载配置时出错: {str(e)}")
+        logger.error(f"加载配置时出错: {str(e)}")
         raise
 
 # 为了兼容现有代码，定义CONFIG_FILE变量
-CONFIG_FILE = str(env_file_path)
+# 使用找到的环境变量文件路径或默认路径
+CONFIG_FILE = str(found_env_path)  # 使用找到的环境变量文件路径

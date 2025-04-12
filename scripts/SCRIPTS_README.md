@@ -18,66 +18,87 @@ python token_data_updater.py token SOL So111111111111111111111111111111111111111
 python token_data_updater.py all --limit 100
 ```
 
-详细文档请参考：[../documentation/README_TOKEN_UPDATER.md](../documentation/README_TOKEN_UPDATER.md)
+### hourly_update.py
 
-### update_market_data.py
+**每小时自动更新代币数据脚本**
 
-**代币市场数据更新工具**（已被token_data_updater.py集成）
-
-更新代币的市值、流动性、价格等市场数据。
+实现了代币数据的每小时自动更新，具有智能的API速率限制处理，随机化请求序列以避免被识别为机器人，以及完善的错误处理与重试机制。
 
 ```bash
-# 更新单个代币的市场数据
-python update_market_data.py token SOL So11111111111111111111111111111111111111112
+# 运行每小时更新（限制处理500个代币）
+python scripts/hourly_update.py --limit 500
 
-# 更新所有代币的市场数据
-python update_market_data.py all --limit 100
+# 测试模式，使用较小的批次和较长的延迟
+python scripts/hourly_update.py --test --limit 10
 ```
 
-### update_txn_data.py
+此脚本已被集成到主程序中，会在每小时整点自动执行。
 
-**代币交易数据更新工具**（已被token_data_updater.py集成）
+### update_community_reach.py
 
-更新代币的1小时买入卖出交易数据。
+**代币社群覆盖数据更新工具**
+
+实现了代币社群覆盖人数(community_reach)的自动计算与更新，基于电报频道和群组的成员数量动态计算覆盖范围。
 
 ```bash
-# 更新单个代币的交易数据
-python update_txn_data.py token SOL So11111111111111111111111111111111111111112
+# 更新特定代币的社群覆盖人数
+python scripts/update_community_reach.py --token SOL
 
-# 更新所有代币的交易数据
-python update_txn_data.py all --limit 100
+# 更新所有代币的社群覆盖人数
+python scripts/update_community_reach.py
 ```
 
-详细文档请参考：[../documentation/README_TXN_DATA_UPDATE.md](../documentation/README_TXN_DATA_UPDATE.md)
+### force_update_all_stats.py
 
-### update_volume_1h.py
+**强制更新所有代币统计数据工具**
 
-**代币交易量更新工具**（已被token_data_updater.py集成）
-
-更新所有代币的1小时交易量数据。
+绕过常规检查和限制，强制更新所有代币的统计数据，包括社群覆盖人数、交易数据和持有者数量。适用于需要全面刷新数据的场景。
 
 ```bash
-# 更新代币交易量数据（最多100个代币）
-python update_volume_1h.py --limit 100
+# 更新所有代币的全部统计数据
+python scripts/force_update_all_stats.py
+
+# 更新特定类型的数据
+python scripts/force_update_all_stats.py --skip-community --skip-holders
 ```
 
 ## 系统维护工具
 
-### database_maintenance.py
+### check_env.py
 
-**数据库维护工具**
+**环境变量检查工具**
 
-检查、修复和维护数据库结构，不会修改数据库中的实际数据。
+检查.env文件加载和环境变量设置情况，帮助诊断配置问题。
 
 ```bash
-# 运行基本的数据库维护（检查并添加所有缺失的列）
-python database_maintenance.py
-
-# 初始化数据库（如果不存在）
-python database_maintenance.py --init
+# 检查环境变量配置
+python scripts/check_env.py
 ```
 
-详细文档请参考：[../documentation/README_DB_MAINTENANCE.md](../documentation/README_DB_MAINTENANCE.md)
+### check_supabase.py
+
+**Supabase数据库连接检查工具**
+
+检查与Supabase数据库的连接状态和权限设置。
+
+```bash
+# 检查Supabase连接
+python scripts/check_supabase.py
+```
+
+### auto_reconnect.py
+
+**Telegram API自动重连工具**
+
+当遇到API限流(FloodWaitError)或其他连接问题时，该脚本会自动等待指定时间后重试连接。
+
+```bash
+# 检查API连接状态
+python scripts/auto_reconnect.py test
+
+# 自动等待限流时间并重试连接
+python scripts/auto_reconnect.py wait
+```
 
 ## 频道和群组管理工具
 
@@ -111,20 +132,34 @@ python discover_channels.py auto-add --min-members 1000 --max-channels 5
 
 ## 其他工具
 
-### repair_database.py
+### das_api_example.py
 
-**数据库修复工具**（已被database_maintenance.py集成）
+**DAS API测试工具**
 
-修复数据库结构，添加缺失的列。
+用于测试和展示如何使用DAS API获取Solana代币持有者信息。
 
 ```bash
-# 修复数据库结构
-python repair_database.py
+# 获取代币持有者数量
+python scripts/das_api_example.py --mint So11111111111111111111111111111111111111112 --test count
+
+# 获取代币前十大持有者
+python scripts/das_api_example.py --mint So11111111111111111111111111111111111111112 --test holders
+```
+
+### setup_hourly_task.bat
+
+**Windows下设置自动任务的批处理脚本**
+
+在Windows系统中设置代币数据的每小时自动更新任务。
+
+```
+# 设置Windows计划任务
+scripts\setup_hourly_task.bat
 ```
 
 ## 使用建议
 
 1. 所有脚本应在项目根目录下运行，而不是在scripts目录中运行
-2. 首次使用时，请先运行database_maintenance.py确保数据库结构正确
-3. 对于定期数据更新，推荐使用token_data_updater.py代替旧的单功能更新脚本
-4. 如需设置自动化任务，可将这些脚本加入系统的定时任务（crontab或任务计划程序） 
+2. 首次使用时，请先运行check_env.py确保环境配置正确
+3. 对于定期数据更新，推荐使用token_data_updater.py和hourly_update.py
+4. 如需设置自动化任务，可使用setup_hourly_task.bat或将脚本加入系统的定时任务 

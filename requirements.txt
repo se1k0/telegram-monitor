@@ -18,3 +18,65 @@ aiodns==3.0.0
 chardet==5.2.0
 psycopg2-binary==2.9.9
 tenacity==8.2.3
+
+# 添加缺少的依赖
+# 多处理和调度
+apscheduler==3.10.1
+# 系统相关
+multiprocessing-logging==0.3.4
+# 数据处理和分析
+pandas==2.0.3
+numpy==1.24.4
+# 图形化处理（用于web应用中的图表）
+plotly==5.16.1
+# 安全相关
+cryptography==41.0.1
+# 类型注解支持
+typing-extensions==4.7.1
+# 服务器
+werkzeug==2.3.7
+# WSGI服务器（用于生产环境）
+gunicorn==21.2.0
+# asyncio是Python标准库的一部分，不需要单独安装。
+# 项目中使用了asyncio库进行异步操作，但它是Python 3.4+自带的标准库。
+
+# 添加其他缺失的依赖
+# 数据库连接池
+sqlalchemy==2.0.19
+# 数据可视化
+seaborn==0.12.2
+# 网页解析
+html5lib==1.1
+# URL和请求处理
+urllib3==2.0.4
+yarl==1.9.2
+# 异步HTTP
+httpx==0.24.1
+# JSON处理
+ujson==5.8.0
+# 日期时间处理
+python-dateutil==2.8.2
+# 文件处理
+pathlib==1.0.1
+
+# Web应用相关
+# Flask扩展
+flask-sqlalchemy==3.0.5
+flask-migrate==4.0.4
+flask-wtf==1.1.1
+flask-login==0.6.2
+jinja2==3.1.2
+itsdangerous==2.1.2
+# 表单和身份验证
+wtforms==3.0.1
+bcrypt==4.0.1
+pyjwt==2.8.0
+
+# 测试相关
+pytest==7.4.0
+pytest-asyncio==0.21.1
+
+# 监控和日志
+prometheus-client==0.17.1
+structlog==23.1.0
+rich==13.4.2

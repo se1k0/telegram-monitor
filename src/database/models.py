@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, B
 
 from sqlalchemy.ext.declarative import declarative_base
 
-import config.settings as config
+import config.settings as settings
 
 from dataclasses import dataclass
 
@@ -24,6 +24,9 @@ import platform
 
 from sqlalchemy.pool import QueuePool
 
+
+# 获取日志记录器
+logger = logging.getLogger(__name__)
 
 
 Base = declarative_base()
@@ -53,103 +56,80 @@ sqlite_connect_args = {
 engine = None
 
 
+# 从配置中获取DATABASE_URI
+DATABASE_URI = settings.DATABASE_URI
+
+
+# 确保DATABASE_URI有值，并记录日志
+if not DATABASE_URI:
+    logger.error("DATABASE_URI未设置，请检查config/settings.py文件或环境变量")
+else:
+    logger.info(f"使用数据库连接: {DATABASE_URI[:10]}...")
+
 
 # 跳过Supabase URL的引擎创建，因为SQLAlchemy不支持supabase方言
 
-if config.DATABASE_URI.startswith('supabase:'):
+if DATABASE_URI.startswith('supabase:'):
 
     # 使用Supabase适配器，不需要创建SQLAlchemy引擎
 
-    logging.info("检测到Supabase数据库URI，将使用Supabase适配器")
+    logger.info("检测到Supabase数据库URI，将使用Supabase适配器")
 
     # engine变量保持为None
 
-elif config.DATABASE_URI.startswith('sqlite:'):
+elif DATABASE_URI.startswith('sqlite:'):
 
+    # 【已废弃】以下SQLite代码已不再使用，项目已迁移至Supabase
+    # 保留此代码仅为兼容性目的，不应在新代码中使用SQLite
+    logger.warning("检测到SQLite数据库URI，但项目已不再支持SQLite，请迁移至Supabase")
+    
     # SQLite 不支持标准连接池参数，只使用connect_args
-
     engine = create_engine(
-
-        config.DATABASE_URI, 
-
+        DATABASE_URI, 
         connect_args=sqlite_connect_args,
-
         # 添加更多针对Windows环境的优化参数
-
         echo=False,  # 禁用SQL日志，减少开销
-
         poolclass=QueuePool if not is_windows else None,  # Windows下不使用连接池，避免锁问题
-
         pool_pre_ping=True,  # 自动检测断开的连接
-
         pool_recycle=3600    # 一小时后回收连接
-
     )
     
-
-    # 为SQLite添加优化配置
-
+    # 【已废弃】SQLite优化配置
     @event.listens_for(engine, "connect")
-
     def set_sqlite_pragma(dbapi_connection, connection_record):
-
         cursor = dbapi_connection.cursor()
-
         # 使用WAL模式（Windows中也适用）
-
         cursor.execute("PRAGMA journal_mode=WAL")
-
         # Windows环境下使用更保守的设置
-
         if is_windows:
-
             cursor.execute("PRAGMA synchronous=NORMAL")  # 平衡安全性和性能
-
             cursor.execute("PRAGMA cache_size=-32000")   # 32MB缓存，减少内存使用
-
         else:
-
             cursor.execute("PRAGMA synchronous=NORMAL")
-
             cursor.execute("PRAGMA cache_size=-64000")   # 约64MB缓存
-
         cursor.execute("PRAGMA foreign_keys=ON")
-
         cursor.execute("PRAGMA busy_timeout=60000")      # 增加至60秒，减少锁错误
-
         cursor.execute("PRAGMA temp_store=MEMORY")       # 使用内存存储临时表
-
         cursor.execute("PRAGMA mmap_size=268435456")     # 使用内存映射提高性能(256MB)
-
         cursor.close()
-
         
-
 else:
-
-    # 对于其他数据库（如MySQL, PostgreSQL等），可以使用连接池选项
-
+    # 【已废弃】对于其他数据库的支持，项目已迁移至Supabase
+    logger.warning("检测到非Supabase数据库URI，但项目已只支持Supabase，请更新配置")
     engine = create_engine(
-
-        config.DATABASE_URI,
-
+        DATABASE_URI,
         pool_size=10,
-
         max_overflow=20,
-
         pool_timeout=30,
-
         pool_recycle=3600,
-
         pool_pre_ping=True
-
     )
 
 
 
 class Message(Base):
 
-    """简化的消息表，与 sqlite 实现保持一致"""
+    """简化的消息表，与 Supabase 实现保持一致"""
 
     __tablename__ = 'messages'
 
@@ -224,6 +204,8 @@ class Token(Base):
     from_group = Column(Boolean, default=False)  # 是否来自群组
 
     channel_id = Column(Integer)  # 添加channel_id字段，用于替代channel_name
+    
+    image_url = Column(String(255))  # 代币图标URL
     
 
     # 增强字段 - 价格和市值趋势分析
@@ -443,7 +425,7 @@ def _check_and_add_columns():
     logger = logging.getLogger(__name__)
     
     # 如果使用Supabase，跳过列检查
-    if config.DATABASE_URI.startswith('supabase:'):
+    if DATABASE_URI.startswith('supabase:'):
         logger.info("使用Supabase数据库，跳过列检查")
         return
         
@@ -564,44 +546,33 @@ def _check_and_add_columns():
 
 
 def init_db():
-    """初始化数据库和所需目录"""
-    # 确保数据目录存在
-    os.makedirs('./data', exist_ok=True)
+    """
+    初始化数据库
     
-    # 检查是否使用Supabase
-    if not config.DATABASE_URI.startswith('supabase://'):
-        logging.error("未使用Supabase数据库，请检查配置")
-        logging.error(f"当前DATABASE_URI: {config.DATABASE_URI}")
-        logging.error("DATABASE_URI应以'supabase://'开头")
-        return False
-        
-    logging.info("使用Supabase数据库，跳过本地表创建和列检查")
-    
-    # 检查Supabase连接
+    注意：此函数仅用于兼容性目的，Supabase的表结构通过Supabase控制台管理
+    """
     try:
-        from supabase import create_client
-        supabase_url = config.SUPABASE_URL
-        supabase_key = config.SUPABASE_KEY
+        # 检查环境
+        if not DATABASE_URI.startswith('supabase:'):
+            logger.error("未使用Supabase数据库，请检查配置")
+            logger.error(f"当前DATABASE_URI: {DATABASE_URI}")
+            logger.error("请确保DATABASE_URI以'supabase://'开头")
+            return False
+            
+        logger.info("使用Supabase数据库，无需初始化表结构")
         
-        if not supabase_url or not supabase_key:
-            logging.error("缺少SUPABASE_URL或SUPABASE_KEY环境变量")
+        # 导入数据库适配器功能以确保可用
+        try:
+            from src.database.db_factory import get_db_adapter
+            logger.info("成功导入数据库适配器")
+        except ImportError as e:
+            logger.error(f"无法导入数据库适配器: {e}")
             return False
         
-        # 尝试连接Supabase
-        logging.info(f"尝试连接到Supabase: {supabase_url}")
-        supabase = create_client(supabase_url, supabase_key)
-        
-        # 检查是否可以访问tokens表
-        response = supabase.table('tokens').select('*').limit(1).execute()
-        if hasattr(response, 'data'):
-            logging.info("成功连接到Supabase数据库")
-            return True
-        else:
-            logging.error("无法从Supabase获取数据")
-            return False
+        return True
     except Exception as e:
-        logging.error(f"Supabase连接检查失败: {str(e)}")
+        logger.error(f"数据库初始化失败: {e}")
         import traceback
-        logging.debug(traceback.format_exc())
+        logger.error(traceback.format_exc())
         return False
 

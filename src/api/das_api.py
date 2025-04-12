@@ -124,7 +124,7 @@ class DASAPI:
             mint: 铸币地址键
             owner: 所有者地址键
             page: 返回结果的页码，默认为1
-            limit: 返回结果的最大数量，默认为100
+            limit: 返回结果的最大数量，默认为100，最大值为1000
             cursor: 用于分页的游标
             before: 返回指定游标之前的结果
             after: 返回指定游标之后的结果
@@ -146,7 +146,8 @@ class DASAPI:
             params["owner"] = owner
         
         params["page"] = page
-        params["limit"] = limit
+        # 确保limit不超过API限制
+        params["limit"] = min(limit, 1000)
         
         if cursor:
             params["cursor"] = cursor
@@ -226,8 +227,8 @@ class DASAPI:
             all_holders = []
             total_supply = Decimal(0)
             
-            # 获取第一页数据
-            response = self.get_token_accounts(mint=mint, page=1, limit=1000000)
+            # 获取第一页数据 - 限制为1000条记录
+            response = self.get_token_accounts(mint=mint, page=1, limit=1000)
             
             if "error" in response:
                 logger.error(f"API 错误: {response['error']}")
@@ -245,15 +246,15 @@ class DASAPI:
                     "amount": amount
                 })
             
-            # 如果需要翻页且总数大于100
-            if total > 1000000 and max_pages > 1:
+            # 如果需要翻页且总数大于1000
+            if total > 1000 and max_pages > 1:
                 current_page = 1
                 
                 while current_page < max_pages:
                     current_page += 1
                     
                     try:
-                        page_response = self.get_token_accounts(mint=mint, page=current_page, limit=1000000)
+                        page_response = self.get_token_accounts(mint=mint, page=current_page, limit=1000)
                         
                         if "error" in page_response:
                             logger.error(f"获取第 {current_page} 页时发生错误: {page_response['error']}")
@@ -311,7 +312,7 @@ def get_token_accounts(mint: Optional[str] = None,
         mint: 铸币地址键
         owner: 所有者地址键
         page: 返回结果的页码，默认为1
-        limit: 返回结果的最大数量，默认为100
+        limit: 返回结果的最大数量，默认为100，最大值为1000
         cursor: 用于分页的游标
         before: 返回指定游标之前的结果
         after: 返回指定游标之后的结果
@@ -320,16 +321,14 @@ def get_token_accounts(mint: Optional[str] = None,
     Returns:
         Dict: 包含代币账户信息的字典
     """
-    return das_api.get_token_accounts(
-        mint=mint, 
-        owner=owner, 
-        page=page, 
-        limit=limit, 
-        cursor=cursor,
-        before=before,
-        after=after,
-        show_zero_balance=show_zero_balance
-    ) 
+    # 确保limit不超过API限制
+    limit = min(limit, 1000)
+    
+    # 获取DAS API客户端实例
+    api = DASAPI()
+    
+    # 调用实例方法
+    return api.get_token_accounts(mint, owner, page, limit, cursor, before, after, show_zero_balance)
 
 def get_token_holders_count(mint: str) -> Optional[int]:
     """
@@ -345,15 +344,17 @@ def get_token_holders_count(mint: str) -> Optional[int]:
 
 def get_token_holders_info(mint: str, max_pages: int = 10) -> Tuple[Optional[int], Optional[List[Dict]]]:
     """
-    获取代币持有者数量和前10大持有者信息
+    获取代币持有者数量和持有者信息
     
     Args:
-        mint (str): 代币的mint地址
-        max_pages (int): 获取的最大页数，默认为10
-    
+        mint: 代币mint地址
+        max_pages: 最大获取页数，默认为10
+        
     Returns:
-        Tuple[Optional[int], Optional[List[Dict]]]: 
-            - 持有者总数
-            - 前10大持有者列表，每个持有者包含地址、数量和占比
+        元组: (持有者数量, 持有者列表)
     """
-    return das_api.get_token_holders_info(mint, max_pages) 
+    # 获取DAS API客户端实例
+    api = DASAPI()
+    
+    # 调用实例方法
+    return api.get_token_holders_info(mint, max_pages) 
