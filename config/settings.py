@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+import sys
+from datetime import datetime
 
 # 设置基本日志 - 只设置基础配置，不添加处理器
 logging.basicConfig(
@@ -89,7 +91,7 @@ KEYWORDS_FILE = BASE_DIR / 'config/sensitive_words.txt'
 
 # 日志配置
 LOG_DIR = BASE_DIR / 'logs'
-LOG_FILE = LOG_DIR / 'monitor.log'
+os.makedirs(LOG_DIR, exist_ok=True)  # 确保日志目录存在
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 LOG_MAX_SIZE = int(os.getenv('LOG_MAX_SIZE', str(1024*1024*5)))  # 默认5MB
 LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '3'))
@@ -101,20 +103,27 @@ LOG_CONFIG = {
     'handlers': {
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
-            'filename': LOG_FILE,
+            'filename': str(LOG_DIR / f"{datetime.now().strftime('%Y-%m-%d')}_monitor.log"),  # 使用当天日期
             'maxBytes': LOG_MAX_SIZE,
             'backupCount': LOG_BACKUP_COUNT,
             'formatter': 'standard',
+            'encoding': 'utf-8',
+            'mode': 'a',  # 确保使用追加模式
         },
+        'console': {
+            'class': 'logging.StreamHandler',
+            'stream': sys.stdout,
+            'formatter': 'standard',
+        }
     },
     'formatters': {
         'standard': {
-            'format': '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+            'format': '%(asctime)s [%(levelname)s] %(name)s - %(message)s'
         },
     },
     'loggers': {
         '': {
-            'handlers': ['file'],
+            'handlers': ['file', 'console'],
             'level': LOG_LEVEL,
             'propagate': True
         }
@@ -251,13 +260,6 @@ class EnvConfig:
 
 # 实例化配置对象便于引用
 env_config = EnvConfig()
-
-# 增强日志配置 - 只定义配置，不自动应用
-LOG_CONFIG['handlers']['console'] = {
-    'class': 'logging.StreamHandler',
-    'formatter': 'standard'
-}
-LOG_CONFIG['loggers']['']['handlers'] = ['file', 'console']  # 同时输出到文件和终端
 
 # 注释：这个配置将由setup_logger在需要时使用，不自动应用
 # logging.config.dictConfig(LOG_CONFIG)  # 不直接应用配置

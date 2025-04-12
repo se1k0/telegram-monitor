@@ -215,4 +215,55 @@ def get_token_pools(chain_id: str, token_address: str) -> List[Dict[str, Any]]:
 
 def get_pairs_by_token_address(chain_id: str, token_addresses: Union[str, List[str]]) -> List[Dict[str, Any]]:
     """通过代币地址获取交易对"""
-    return dex_screener.get_pairs_by_token_address(chain_id, token_addresses) 
+    return dex_screener.get_pairs_by_token_address(chain_id, token_addresses)
+
+# 添加缺失的get_pair_info函数
+async def get_pair_info(chain_id: str, token_address: str) -> Dict[str, Any]:
+    """
+    获取代币配对信息
+    
+    Args:
+        chain_id: 区块链ID，例如 "ethereum"
+        token_address: 代币合约地址
+        
+    Returns:
+        Dict: 包含代币配对信息的字典，包含价格、流动性、交易量等数据
+    """
+    try:
+        # 获取代币池数据
+        pools_data = get_token_pools(chain_id, token_address)
+        
+        # 如果发生错误，返回错误信息
+        if isinstance(pools_data, dict) and "error" in pools_data:
+            logger.error(f"获取代币池数据失败: {pools_data['error']}")
+            return {"error": pools_data["error"]}
+        
+        # 处理API返回的数据结构
+        if isinstance(pools_data, dict) and "pairs" in pools_data:
+            pairs = pools_data.get("pairs", [])
+        else:
+            pairs = pools_data
+            
+        if not pairs:
+            logger.warning(f"未找到代币 {chain_id}/{token_address} 的交易对")
+            return {"error": "未找到代币交易对"}
+            
+        # 查找最合适的交易对（通常是流动性最高的）
+        best_pair = None
+        max_liquidity = 0
+        
+        for pair in pairs:
+            liquidity = pair.get("liquidity", {}).get("usd", 0)
+            if liquidity and float(liquidity) > max_liquidity:
+                max_liquidity = float(liquidity)
+                best_pair = pair
+        
+        # 如果没有找到合适的交易对，返回第一个
+        if not best_pair and pairs:
+            best_pair = pairs[0]
+            
+        return best_pair or {"error": "无法确定最佳交易对"}
+        
+    except Exception as e:
+        logger.error(f"获取代币配对信息时出错: {str(e)}")
+        return {"error": str(e)} 

@@ -16,6 +16,7 @@ import argparse
 import platform
 from datetime import datetime
 from typing import Dict, Any, Optional
+from pathlib import Path
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -120,10 +121,51 @@ def setup() -> Dict[str, Any]:
         配置字典
     """
     try:
-        # 设置日志 - 确保只初始化一次
-        if not logging.getLogger().handlers:
-            setup_logger()
-            logger.info("已初始化日志系统")
+        # 确保logs目录存在
+        log_dir = Path(__file__).resolve().parent / 'logs'
+        os.makedirs(log_dir, exist_ok=True)
+        print(f"确保logs目录存在: {log_dir}")
+        
+        # 测试logs目录是否可写
+        test_file = log_dir / "test_write.tmp"
+        try:
+            with open(test_file, 'w') as f:
+                f.write("测试写入权限")
+            os.remove(test_file)
+            print("日志目录写入权限正常")
+        except Exception as e:
+            print(f"日志目录写入权限测试失败: {e}")
+            sys.exit(1)
+        
+        # 重置所有日志处理器
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        
+        # 设置日志 - 强制重新初始化日志系统
+        print("正在初始化日志系统...")
+        logger = setup_logger(__name__)
+        
+        # 立即测试日志文件
+        today = datetime.now().strftime('%Y-%m-%d')
+        log_file = log_dir / f"{today}_monitor.log"
+        if os.path.exists(log_file):
+            print(f"日志文件已创建: {log_file} ({os.path.getsize(log_file)} 字节)")
+        else:
+            print(f"警告: 日志文件未创建: {log_file}")
+            # 尝试直接写入
+            try:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [INFO] MAIN - 手动创建日志文件\n")
+                print(f"已手动创建日志文件: {log_file}")
+            except Exception as e:
+                print(f"手动创建日志文件失败: {e}")
+        
+        # 记录重要的系统信息
+        logger.info(f"日志系统初始化完成")
+        logger.info(f"操作系统: {platform.system()} {platform.release()}")
+        logger.info(f"Python版本: {sys.version}")
+        logger.info(f"工作目录: {os.getcwd()}")
         logger.info("正在初始化 Telegram 监控服务...")
         
         # 加载配置
