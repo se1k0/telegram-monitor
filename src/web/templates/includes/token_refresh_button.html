@@ -1,0 +1,14 @@
+<!-- Token刷新按钮 -->
+<button class="btn btn-sm btn-outline-primary token-refresh-btn" 
+        data-chain="{{ token.chain }}" 
+        data-contract="{{ token.contract }}"
+        data-token-symbol="{{ token.token_symbol }}"
+        title="刷新代币数据"
+        onclick="refreshTokenData(this)">
+    <i class="fas fa-sync-alt"></i>
+</button>
+
+<!-- 刷新中的加载图标 (初始隐藏) -->
+<span class="refresh-spinner d-none" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}">
+    <i class="fas fa-spinner fa-spin text-primary"></i>
+</span> 

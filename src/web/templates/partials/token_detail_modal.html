@@ -1,0 +1,121 @@
+<!-- Token详情弹出层 -->
+<div class="modal fade" id="tokenDetailModal" tabindex="-1" aria-labelledby="tokenDetailModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="tokenDetailModalLabel">代币详情</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <!-- 加载指示器 -->
+        <div id="tokenDetailLoader" class="text-center py-5">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+          </div>
+          <p class="mt-2">正在加载代币数据...</p>
+        </div>
+        
+        <!-- 代币详情内容区域 -->
+        <div id="tokenDetailContent" class="d-none">
+          <!-- 基本信息部分 -->
+          <div class="row mb-4">
+            <div class="col-md-6">
+              <div class="d-flex align-items-center mb-3">
+                <div id="tokenLogoContainer" class="me-3">
+                  <div class="token-placeholder">
+                    <span id="tokenSymbolShort"></span>
+                  </div>
+                </div>
+                <div>
+                  <h4 id="tokenSymbol"></h4>
+                  <p class="text-muted mb-0">
+                    <span id="tokenChain" class="badge bg-secondary me-2"></span>
+                    <span id="tokenContract" class="small"></span>
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="card h-100">
+                <div class="card-body">
+                  <h6 class="card-title">市场数据</h6>
+                  <div class="row">
+                    <div class="col-6">
+                      <p class="mb-1">市值：</p>
+                      <h5 id="tokenMarketCap"></h5>
+                    </div>
+                    <div class="col-6">
+                      <p class="mb-1">24h变化：</p>
+                      <h5 id="tokenPriceChange"></h5>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 市值变化图表 -->
+          <div class="row mb-4">
+            <div class="col-md-12">
+              <div class="card">
+                <div class="card-header">
+                  市值变化趋势
+                </div>
+                <div class="card-body">
+                  <div class="chart-container" style="position: relative; height:300px; width:100%">
+                    <canvas id="marketCapChart"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 社群提及记录 -->
+          <div class="row">
+            <div class="col-md-12">
+              <div class="card">
+                <div class="card-header">
+                  社群提及记录
+                </div>
+                <div class="card-body">
+                  <div id="mentionHistoryEmpty" class="text-center py-3 d-none">
+                    <p class="text-muted">暂无提及记录</p>
+                  </div>
+                  <div id="mentionHistoryTable" class="table-responsive">
+                    <table class="table table-sm table-hover">
+                      <thead>
+                        <tr>
+                          <th>频道/群组</th>
+                          <th>提及时间</th>
+                          <th>当时市值</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="mentionHistoryBody">
+                        <!-- 动态填充内容 -->
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 错误显示区域 -->
+        <div id="tokenDetailError" class="d-none">
+          <div class="alert alert-danger">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <span id="errorMessage">加载数据时出错</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+        <a id="viewDexscreenerBtn" href="#" target="_blank" class="btn btn-primary">
+          <i class="bi bi-graph-up me-1"></i> 查看DEX详情
+        </a>
+      </div>
+    </div>
+  </div>
+</div> 

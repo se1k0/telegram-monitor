@@ -219,6 +219,17 @@ async def update_token_with_retry(chain: str, contract: str, symbol: str, token_
                     if key in api_result:
                         result["details"][key] = api_result[key]
                 
+                # 检查API更新是否包含市值数据
+                if "marketCap" in api_result and api_result["marketCap"] > 0:
+                    market_cap = api_result["marketCap"]
+                    market_cap_1h = api_result.get("marketCap1h", 0)
+                    logger.info(f"市值已更新: {market_cap_1h} -> {market_cap}")
+                
+                    # 计算市值变化百分比
+                    if market_cap_1h and market_cap_1h > 0:
+                        change_pct = (market_cap - market_cap_1h) / market_cap_1h * 100
+                        logger.info(f"市值变化百分比: {change_pct:+.2f}%")
+                
                 # 单独查询DEX Screener API获取交易数据
                 try:
                     from src.api.dex_screener_api import get_token_pools

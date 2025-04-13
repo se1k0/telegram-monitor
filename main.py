@@ -34,6 +34,8 @@ from src.utils.scheduler import scheduler
 from src.api.token_updater import hourly_update
 # 导入数据库工厂
 from src.database.db_factory import get_db_adapter
+# 导入代币历史数据调度器
+from src.utils.token_history_scheduler import register_token_history_tasks
 
 # 设置日志
 logger = get_logger(__name__)
@@ -344,6 +346,18 @@ async def start_scheduler(config: Dict[str, Any]) -> None:
         
         # 注册每小时整点执行的代币更新任务
         logger.info("注册每小时整点代币数据更新任务...")
+        
+        # 确保token_updater模块被正确导入
+        try:
+            from src.api.token_updater import hourly_update
+            logger.info("成功导入hourly_update函数")
+        except Exception as e:
+            logger.error(f"导入hourly_update函数失败: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return
+            
+        # 设置每小时更新任务
         scheduler.schedule_hourly_task(
             'hourly_token_update',
             hourly_update,
@@ -351,6 +365,20 @@ async def start_scheduler(config: Dict[str, Any]) -> None:
         )
         
         logger.info(f"代币数据更新任务已注册，每小时整点执行，限制更新数量: {token_limit}")
+        
+        # 注册每天0点和12点执行的token历史数据记录任务
+        logger.info("注册每天0点和12点token历史数据记录任务...")
+        try:
+            from src.utils.token_history_scheduler import register_token_history_tasks
+            register_success = register_token_history_tasks()
+            if register_success:
+                logger.info("token历史数据记录任务注册成功")
+            else:
+                logger.error("token历史数据记录任务注册失败")
+        except Exception as e:
+            logger.error(f"注册token历史数据记录任务时出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
         
     except Exception as e:
         logger.error(f"启动调度器和定时任务失败: {str(e)}")

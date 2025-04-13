@@ -1355,19 +1355,19 @@ class TelegramListener:
                         logger.info(f"错误计数减少: {self.error_count+1} -> {self.error_count}")
                 
                 # 检查系统资源
-                try:
-                    import psutil
-                    process = psutil.Process(os.getpid())
-                    memory_usage_mb = process.memory_info().rss / 1024 / 1024
-                    logger.info(f"当前内存使用: {memory_usage_mb:.2f} MB")
+                # try:
+                #     import psutil
+                #     process = psutil.Process(os.getpid())
+                #     memory_usage_mb = process.memory_info().rss / 1024 / 1024
+                #     logger.info(f"当前内存使用: {memory_usage_mb:.2f} MB")
                     
-                    # 如果内存使用超过1GB，记录警告
-                    if memory_usage_mb > 1024:
-                        logger.warning(f"内存使用较高: {memory_usage_mb:.2f} MB")
-                except ImportError:
-                    logger.info("psutil未安装，无法获取系统资源信息")
-                except Exception as e:
-                    logger.error(f"获取系统资源信息出错: {str(e)}")
+                #     # 如果内存使用超过1GB，记录警告
+                #     if memory_usage_mb > 1024:
+                #         logger.warning(f"内存使用较高: {memory_usage_mb:.2f} MB")
+                # except ImportError:
+                #     logger.info("psutil未安装，无法获取系统资源信息")
+                # except Exception as e:
+                #     logger.error(f"获取系统资源信息出错: {str(e)}")
                 
                 # 健康检查成功
                 active_channel_count = len(self.channel_manager.get_active_channels())

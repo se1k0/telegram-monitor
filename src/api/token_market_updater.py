@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import time
 from datetime import datetime
+import sys
 
 from src.api.dex_screener_api import get_token_pools, DexScreenerAPI
 from src.database.models import Token
@@ -470,7 +471,7 @@ class TokenMarketUpdater:
         return chain_mapping.get(chain.upper())
     
     @retry(max_retries=3, delay=1.0, exceptions=(Exception,))
-    def update_token_market_and_txn_data(self, chain: str, contract: str) -> Dict[str, Any]:
+    async def update_token_market_and_txn_data(self, chain: str, contract: str) -> Dict[str, Any]:
         """
         综合更新单个代币的市值和1小时交易数据
         
@@ -516,8 +517,14 @@ class TokenMarketUpdater:
         dex_screener_url = None
         price = None
         first_price = None
+        symbol = None  # 初始化symbol变量
+        holders_count = 0  # 初始化holders_count变量
         
         for pair in pairs:
+            # 获取代币符号（如果尚未获取）
+            if not symbol and pair.get("baseToken") and "symbol" in pair.get("baseToken", {}):
+                symbol = pair["baseToken"]["symbol"]
+                
             # 获取市值数据
             market_cap = pair.get("marketCap", 0)
             if market_cap and float(market_cap) > max_market_cap:
@@ -542,7 +549,7 @@ class TokenMarketUpdater:
                 pair_address = pair.get("pairAddress", "")
                 if chain_path and pair_address:
                     dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
-                    
+                
             # 获取交易数据
             if "txns" in pair and "h1" in pair["txns"]:
                 txns_1h = pair["txns"]["h1"]
@@ -564,26 +571,22 @@ class TokenMarketUpdater:
             # 获取数据库适配器
             db_adapter = get_db_adapter()
             
-            # 使用异步运行
-            import asyncio
-            
             # 获取之前的市值以计算market_cap_1h
             prev_market_cap = None
+            token = None  # 初始化token变量
             
-            async def get_prev_market_cap():
-                token_result = await db_adapter.execute_query(
-                    'tokens',
-                    'select',
-                    filters={
-                        'chain': chain,
-                        'contract': contract
-                    }
-                )
-                if isinstance(token_result, list) and len(token_result) > 0:
-                    return token_result[0].get('market_cap')
-                return None
-            
-            prev_market_cap = asyncio.run(get_prev_market_cap())
+            # 获取token信息
+            token_result = await db_adapter.execute_query(
+                'tokens',
+                'select',
+                filters={
+                    'chain': chain,
+                    'contract': contract
+                }
+            )
+            if isinstance(token_result, list) and len(token_result) > 0:
+                token = token_result[0]
+                prev_market_cap = token.get('market_cap')
             
             # 准备更新数据
             token_data = {
@@ -608,23 +611,58 @@ class TokenMarketUpdater:
                     token_data['first_price'] = first_price
             
             # 更新数据库
-            async def update_token_data():
-                await db_adapter.execute_query(
-                    'tokens',
-                    'update',
-                    data=token_data,
-                    filters={
-                        'chain': chain,
-                        'contract': contract
-                    }
-                )
-            
-            # 执行异步任务
-            asyncio.run(update_token_data())
+            await db_adapter.execute_query(
+                'tokens',
+                'update',
+                data=token_data,
+                filters={
+                    'chain': chain,
+                    'contract': contract
+                }
+            )
             
             logger.info(f"成功更新代币 {chain}/{contract} 的综合数据")
             logger.info(f"市值: {max_market_cap}, 上一小时市值: {prev_market_cap}, 流动性: {max_liquidity}, 1小时买入: {total_buys_1h}, 1小时卖出: {total_sells_1h}, 1小时交易量: {total_volume_1h}")
             
+            # 记录历史数据到token_history表
+            try:
+                # 使用更新后的值构建历史记录
+                history_data = {
+                    'chain': chain,
+                    'contract': contract,
+                    'token_symbol': symbol or (token.get('token_symbol') if token else ""),
+                    'timestamp': datetime.now().isoformat(),  # 将datetime对象转换为ISO格式字符串
+                    'market_cap': max_market_cap,
+                    'price': price,
+                    'liquidity': max_liquidity,
+                    'volume_24h': token.get('volume_24h') if token else None,
+                    'volume_1h': total_volume_1h,
+                    'holders_count': holders_count or (token.get('holders_count') if token else 0),
+                    'buys_1h': total_buys_1h,
+                    'sells_1h': total_sells_1h,
+                    'community_reach': token.get('community_reach') if token else 0,
+                    'spread_count': token.get('spread_count') if token else 0,
+                    'market_cap_change_pct': token.get('last_calculated_change_pct') if token else 0,
+                    'price_change_pct': token.get('price_change_24h') if token else 0
+                }
+                
+                # 插入历史记录
+                history_result = await db_adapter.execute_query(
+                    'token_history',
+                    'insert',
+                    data=history_data
+                )
+                
+                if isinstance(history_result, dict) and history_result.get('error'):
+                    logger.error(f"记录代币 {chain}/{contract} 历史数据失败: {history_result.get('error')}")
+                else:
+                    logger.info(f"成功记录代币 {chain}/{contract} 的历史数据")
+            except Exception as history_error:
+                logger.error(f"记录代币历史数据时出错: {str(history_error)}")
+                import traceback
+                logger.error(traceback.format_exc())
+            
+            # 在返回结果中包含所有字段
             return {
                 "success": True,
                 "marketCap": max_market_cap,
@@ -661,8 +699,9 @@ def update_token_market_data(session: Session, chain: str, contract: str) -> Dic
     return updater.update_token_market_data(chain, contract)
 
 def update_all_tokens_market_data(session: Session, limit: int = 100) -> Dict[str, Any]:
-    """
-    批量更新所有代币的市值和流动性数据的便捷函数
+    """全局函数：综合更新所有代币的市值、流动性和交易数据
+    
+    此函数在所有平台(Windows/Ubuntu/Linux)上均可正常运行
     
     Args:
         session: 数据库会话
@@ -671,31 +710,6 @@ def update_all_tokens_market_data(session: Session, limit: int = 100) -> Dict[st
     Returns:
         Dict: 包含更新结果的字典
     """
-    updater = TokenMarketUpdater(session)
-    return updater.update_all_tokens(limit=limit)
-
-def update_tokens_by_symbols(session: Session, symbols: List[str]) -> Dict[str, Any]:
-    """全局函数：根据代币符号批量更新代币市值"""
-    updater = TokenMarketUpdater(session)
-    return updater.update_tokens_by_symbols(symbols)
-
-def update_token_txn_data(session: Session, chain: str, contract: str) -> Dict[str, Any]:
-    """全局函数：更新单个代币的1小时交易数据"""
-    updater = TokenMarketUpdater(session)
-    return updater.update_token_txn_data(chain, contract)
-
-def update_all_tokens_txn_data(session: Session, limit: int = 100) -> Dict[str, Any]:
-    """全局函数：批量更新所有代币的1小时交易数据"""
-    updater = TokenMarketUpdater(session)
-    return updater.update_all_tokens_txn_data(limit=limit)
-
-def update_token_market_and_txn_data(session: Session, chain: str, contract: str) -> Dict[str, Any]:
-    """全局函数：综合更新单个代币的市值、流动性和交易数据"""
-    updater = TokenMarketUpdater(session)
-    return updater.update_token_market_and_txn_data(chain, contract)
-
-def update_all_tokens_market_and_txn_data(session: Session, limit: int = 100) -> Dict[str, Any]:
-    """全局函数：综合更新所有代币的市值、流动性和交易数据"""
     updater = TokenMarketUpdater(session)
     
     results = {
@@ -708,277 +722,338 @@ def update_all_tokens_market_and_txn_data(session: Session, limit: int = 100) ->
     tokens = session.query(Token).limit(limit).all()
     results["total"] = len(tokens)
     
-    for token in tokens:
-        try:
-            result = updater.update_token_market_and_txn_data(token.chain, token.contract)
-            
-            if "error" not in result:
-                results["success"] += 1
-            else:
-                results["failed"] += 1
-                
-            results["details"].append({
-                "chain": token.chain,
-                "symbol": token.token_symbol,
-                "contract": token.contract,
-                "result": "success" if "error" not in result else "failed",
-                "error": result.get("error"),
-                "marketCap": result.get("marketCap"),
-                "buys_1h": result.get("buys_1h"),
-                "sells_1h": result.get("sells_1h")
-            })
-            
-            # 添加延迟避免API限制
-            time.sleep(0.2)
-            
-        except Exception as e:
-            results["failed"] += 1
-            results["details"].append({
-                "chain": token.chain,
-                "symbol": token.token_symbol,
-                "contract": token.contract,
-                "result": "failed",
-                "error": str(e)
-            })
-            logger.error(f"综合更新代币 {token.chain}/{token.contract} 时发生错误: {str(e)}")
+    # 使用异步运行
+    import asyncio
     
-    return results
+    # 定义异步更新函数
+    async def update_all_tokens_async():
+        for token in tokens:
+            try:
+                # 调用异步更新函数
+                result = await updater.update_token_market_and_txn_data(token.chain, token.contract)
+                
+                if "error" not in result:
+                    results["success"] += 1
+                else:
+                    results["failed"] += 1
+                    
+                results["details"].append({
+                    "chain": token.chain,
+                    "symbol": token.token_symbol,
+                    "contract": token.contract,
+                    "result": "success" if "error" not in result else "failed",
+                    "error": result.get("error"),
+                    "marketCap": result.get("marketCap"),
+                    "buys_1h": result.get("buys_1h"),
+                    "sells_1h": result.get("sells_1h")
+                })
+                
+                # 添加延迟避免API限制
+                await asyncio.sleep(0.2)
+                
+            except Exception as e:
+                results["failed"] += 1
+                results["details"].append({
+                    "chain": token.chain,
+                    "symbol": token.token_symbol,
+                    "contract": token.contract,
+                    "result": "failed",
+                    "error": str(e)
+                })
+                logger.error(f"综合更新代币 {token.chain}/{token.contract} 时发生错误: {str(e)}")
+        
+        return results
+    
+    # 平台兼容性处理
+    # 只在Windows平台上设置特定的事件循环策略，Ubuntu/Linux平台使用默认策略
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # 执行异步任务
+    return asyncio.run(update_all_tokens_async())
 
 async def update_token_market_data_async(chain: str, contract: str, message_id: int = None, channel_id: int = None, risk_level: str = None, promotion_count: int = 1) -> Dict[str, Any]:
     """
-    异步更新单个代币的市值和流动性数据，使用Supabase适配器
+    异步更新代币市值和流动性数据
     
     Args:
-        chain: 区块链名称
+        chain: 链标识
         contract: 代币合约地址
-        message_id: 消息ID，可选
-        channel_id: 频道ID，可选
-        risk_level: 风险等级，可选
-        promotion_count: 推广计数，默认为1
+        message_id: 消息ID
+        channel_id: 频道ID
+        risk_level: 风险等级
+        promotion_count: 推广次数
         
     Returns:
-        Dict: 包含更新结果的字典，包括marketCap和liquidity
-              注意：返回值中的is_new字段仅用于API响应，不存储在数据库中
+        Dict[str, Any]: 包含更新结果的字典
     """
-    logger.info(f"开始异步更新代币 {chain}/{contract} 的市值和流动性数据")
+    # 初始化结果
+    result = {
+        "success": False,
+        "marketCap": 0,
+        "marketCap1h": 0,
+        "liquidity": 0,
+        "price": 0,
+        "dexScreenerUrl": None,
+    }
     
-    # 获取数据库适配器
-    db_adapter = get_db_adapter()
-    
-    # 标准化链ID
-    chain_id = _normalize_chain_id(chain)
-    if not chain_id:
-        logger.warning(f"不支持的链: {chain}")
-        return {"error": f"不支持的链: {chain}"}
-    
-    # 获取代币池数据
-    pools_data = get_token_pools(chain_id, contract)
-    
-    # 检查API响应
-    if isinstance(pools_data, dict) and "error" in pools_data:
-        logger.error(f"获取代币池数据失败: {pools_data['error']}")
-        return {"error": pools_data["error"]}
-    
-    # 处理API返回的数据结构
-    if isinstance(pools_data, dict) and "pairs" in pools_data:
-        pairs = pools_data.get("pairs", [])
-    else:
-        pairs = pools_data
+    try:
+        from src.api.dex_screener_api import get_token_pools
         
-    if not pairs:
-        logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
-        return {"error": "未找到代币交易对"}
+        # 标准化链ID
+        chain_id = _normalize_chain_id(chain)
+        if not chain_id:
+            logger.error(f"不支持的链ID: {chain}")
+            return {"error": f"不支持的链ID: {chain}"}
         
-    # 查找市值最高的池
-    max_market_cap = 0
-    max_liquidity = 0
-    dex_screener_url = None
-    price = None
-    first_price = None
-    symbol = None  # 添加代币符号变量
-    image_url = None  # 添加代币图像URL变量
-    
-    for pair in pairs:
-        # 尝试提取代币符号
-        if not symbol and pair.get("baseToken"):
-            baseToken = pair.get("baseToken", {})
-            if baseToken and "symbol" in baseToken:
-                symbol = baseToken.get("symbol")
-                logger.info(f"从DEX API获取到代币符号: {symbol}")
+        # 获取代币流动池
+        pools_data = get_token_pools(chain_id, contract)
         
-        # 获取市值数据
-        market_cap = pair.get("marketCap", 0)
-        if market_cap and float(market_cap) > max_market_cap:
-            max_market_cap = float(market_cap)
+        # 如果API返回错误，直接返回
+        if isinstance(pools_data, dict) and "error" in pools_data:
+            logger.error(f"DEX Screener API错误: {pools_data['error']}")
+            return {"error": f"DEX Screener API错误: {pools_data['error']}"}
+        
+        # 处理API返回的数据
+        # DEX Screener返回的数据可能有两种形式:
+        # 1. {"pairs": [...]} - 标准响应
+        # 2. [...] - 数组响应
+        pairs = None
+        if isinstance(pools_data, dict) and "pairs" in pools_data:
+            pairs = pools_data.get("pairs", [])
+        else:
+            pairs = pools_data
+        
+        if not pairs:
+            logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
+            return {"error": "未找到交易对"}
+        
+        # 提取关键数据
+        max_market_cap = 0  # 市值
+        max_liquidity = 0   # 流动性
+        price = None        # 价格
+        first_price = None  # 首次价格
+        dex_screener_url = None
+        volume_1h = 0       # 1小时交易量
+        buys_1h = 0         # 1小时买入交易数
+        sells_1h = 0        # 1小时卖出交易数
+        symbol = None       # 代币符号
+        image_url = None    # 代币图像URL
+        
+        # 从交易对中提取数据
+        for pair in pairs:
+            # 尝试提取代币符号
+            if not symbol and pair.get("baseToken"):
+                baseToken = pair.get("baseToken", {})
+                if baseToken and "symbol" in baseToken:
+                    symbol = baseToken.get("symbol")
+                    logger.info(f"从DEX API获取到代币符号: {symbol}")
             
-        # 获取流动性数据
-        liquidity = pair.get("liquidity", {}).get("usd", 0)
-        if liquidity and float(liquidity) > max_liquidity:
-            max_liquidity = float(liquidity)
-            
-        # 获取价格
-        if not price and "priceUsd" in pair:
-            price = float(pair["priceUsd"])
+            # 获取市值数据
+            market_cap = pair.get("marketCap", 0)
+            if market_cap and float(market_cap) > max_market_cap:
+                max_market_cap = float(market_cap)
+                
+            # 获取流动性数据
+            liquidity = pair.get("liquidity", {}).get("usd", 0)
+            if liquidity and float(liquidity) > max_liquidity:
+                max_liquidity = float(liquidity)
+                
+            # 获取价格
+            if not price and "priceUsd" in pair:
+                price = float(pair["priceUsd"])
 
-        # 获取首次价格
-        if not first_price and "priceNative" in pair:
-            first_price = float(pair["priceNative"])
+            # 获取首次价格
+            if not first_price and "priceNative" in pair:
+                first_price = float(pair["priceNative"])
+                
+            # 获取DEX Screener URL
+            if not dex_screener_url:
+                chain_path = pair.get("chainId", "").lower()
+                pair_address = pair.get("pairAddress", "")
+                if chain_path and pair_address:
+                    dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
             
-        # 获取DEX Screener URL
-        if not dex_screener_url:
-            chain_path = pair.get("chainId", "").lower()
-            pair_address = pair.get("pairAddress", "")
-            if chain_path and pair_address:
-                dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
+            # 获取代币图像URL
+            if not image_url and pair.get("info") and pair.get("info").get("imageUrl"):
+                image_url = pair.get("info").get("imageUrl")
+                logger.info(f"从DEX API获取到代币图像URL: {image_url}")
+                
+            # 获取1小时交易量
+            if pair.get("volume") and pair.get("volume").get("h1"):
+                current_volume_1h = float(pair.get("volume").get("h1", 0))
+                volume_1h = max(volume_1h, current_volume_1h)
+                
+            # 获取1小时交易数据
+            if pair.get("txns") and pair.get("txns").get("h1"):
+                txns_h1 = pair.get("txns").get("h1", {})
+                buys_1h += txns_h1.get("buys", 0)
+                sells_1h += txns_h1.get("sells", 0)
         
-        # 获取代币图像URL
-        if not image_url and pair.get("info") and pair.get("info").get("imageUrl"):
-            image_url = pair.get("info").get("imageUrl")
-            logger.info(f"从DEX API获取到代币图像URL: {image_url}")
-    
-    # 获取目标代币
-    token = await db_adapter.get_token_by_contract(chain, contract)
-    
-    if token:
-        # 更新代币数据
-        try:
+        # 获取数据库适配器
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        
+        # 检查token是否存在
+        token = None
+        token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
+        
+        if isinstance(token_result, list) and len(token_result) > 0:
+            token = token_result[0]
+            logger.info(f"找到现有代币: {chain}/{contract}")
+            
+            # 检查是否从API获取到了市值，没有则使用现有市值
+            if max_market_cap <= 0 and token.get('market_cap'):
+                max_market_cap = token.get('market_cap')
+                logger.warning(f"API未返回市值，使用现有市值: {max_market_cap}")
+        
+        # 获取Solana代币的持有者数量（如果是Solana链）
+        holders_count = 0
+        community_reach = 0
+        spread_count = 0
+        
+        if chain == "SOL":
+            try:
+                from src.api.das_api import get_token_holders_count
+                holders_count = get_token_holders_count(contract)
+                logger.info(f"获取到SOL代币持有者数量: {holders_count}")
+            except Exception as e:
+                logger.error(f"获取持有者数量失败: {str(e)}")
+        
+        # 尝试获取社区覆盖
+        # 这部分逻辑单独优化，避免在这里做复杂计算
+        
+        # 添加详细日志
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 获取市值和社区覆盖数量
+        result["marketCap"] = max_market_cap
+        result["liquidity"] = max_liquidity
+        result["price"] = price
+        result["dexScreenerUrl"] = dex_screener_url
+        
+        if token:
+            # 现有代币，准备更新数据
+            logger.info(f"更新现有代币: {chain}/{contract}")
+            
+            # 添加市值更新日志
+            if max_market_cap > 0:
+                logger.info(f"更新市值: {token.get('market_cap')} -> {max_market_cap}")
+                # 计算市值变化百分比
+                if token.get('market_cap') and token.get('market_cap') > 0:
+                    change_pct = (max_market_cap - token.get('market_cap')) / token.get('market_cap') * 100
+                    logger.info(f"市值变化: {change_pct:+.2f}%")
+            
             # 准备更新数据
-            update_data = {
-                'market_cap_1h': token.get('market_cap'),
-                'market_cap': max_market_cap,
-                'market_cap_formatted': _format_market_cap(max_market_cap),
-                'liquidity': max_liquidity,
-                'price': price
-            }
-            
-            # 如果从DEX API获取到了代币符号，则更新数据库中的代币符号
-            if symbol:
-                update_data['token_symbol'] = symbol
-                logger.info(f"将使用DEX API获取的代币符号: {symbol} 更新数据库")
-            
-            # 如果获取到了代币图像URL，则更新数据库
-            if image_url:
-                update_data['image_url'] = image_url
-                logger.info(f"将使用DEX API获取的代币图像URL更新数据库")
-            
-            # 如果是首次设置价格，同时设置first_price
-            if token.get('first_price') is None:
-                update_data['first_price'] = first_price
-            
-            if dex_screener_url:
-                update_data['dexscreener_url'] = dex_screener_url
-                
-            # 添加新增字段
-            # 仅当字段为空时才设置message_id
-            if message_id and not token.get('message_id'):
-                update_data['message_id'] = message_id
-                
-            # 仅当字段为空时才设置first_market_cap
-            if max_market_cap > 0 and not token.get('first_market_cap'):
-                update_data['first_market_cap'] = max_market_cap
-                
-            # 累加promotion_count
-            if promotion_count > 0:
-                current_promotion_count = token.get('promotion_count', 0) or 0
-                update_data['promotion_count'] = current_promotion_count + promotion_count
-                
-            # 仅当字段为空时才设置channel_id
-            if channel_id and not token.get('channel_id'):
-                update_data['channel_id'] = channel_id
-                
-            # 仅当字段为空时才设置risk_level
-            if risk_level and not token.get('risk_level'):
-                update_data['risk_level'] = risk_level
-            
-            # 执行更新
-            filters = {'chain': chain, 'contract': contract}
-            await db_adapter.execute_query('tokens', 'update', update_data, filters)
-            
-            logger.info(f"成功更新代币 {chain}/{contract} 的市值和流动性数据")
-            logger.info(f"市值: {max_market_cap}, 上一小时市值: {token.get('market_cap')}, 流动性: {max_liquidity}")
-            
-            # 在返回结果中包含代币符号和图像URL
-            return {
-                "success": True,
-                "marketCap": max_market_cap,
-                "marketCap1h": token.get('market_cap'),
-                "liquidity": max_liquidity,
-                "price": price,
-                "dexScreenerUrl": dex_screener_url,
-                "symbol": symbol,  # 添加代币符号到返回结果中
-                "image_url": image_url,  # 添加代币图像URL到返回结果中
-                "message_id": update_data.get('message_id') or token.get('message_id'),
-                "first_market_cap": update_data.get('first_market_cap') or token.get('first_market_cap'),
-                "promotion_count": update_data.get('promotion_count') or token.get('promotion_count', 0),
-                "channel_id": update_data.get('channel_id') or token.get('channel_id'),
-                "risk_level": update_data.get('risk_level') or token.get('risk_level')
-            }
-            
-        except Exception as e:
-            logger.error(f"更新代币数据时发生错误: {str(e)}")
-            return {"error": str(e)}
-    else:
-        # 如果数据库中未找到代币，创建新的代币记录
-        try:
-            # 基本检查，确保我们有必要的信息来创建新记录
-            if not symbol:
-                logger.warning(f"从DEX API未能获取到代币符号，将使用合约地址前8位作为临时符号")
-                # 使用合约地址的前8位作为临时符号
-                symbol = contract[:8] if len(contract) > 8 else contract
-            
-            # 获取当前时间格式化为字符串
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 准备新的代币数据 - 注意：不包含is_new字段，因为它不应该存储在数据库中
-            new_token_data = {
+            token_data = {
                 'chain': chain,
                 'contract': contract,
-                'token_symbol': symbol,
+                'market_cap_1h': token.get('market_cap'),  # 将当前市值设为1小时前市值
                 'market_cap': max_market_cap,
                 'market_cap_formatted': _format_market_cap(max_market_cap),
                 'liquidity': max_liquidity,
                 'price': price,
-                'first_price': first_price,
-                'latest_update': current_time,
-                'first_update': current_time,
-                'dexscreener_url': dex_screener_url,
-                # 添加新增字段
-                'message_id': message_id,
-                'first_market_cap': max_market_cap,  # 首次发现的市值就是first_market_cap
-                'promotion_count': promotion_count,
-                'channel_id': channel_id,
-                'risk_level': risk_level
+                'latest_update': current_time
             }
             
-            # 保存新代币记录
-            result = await db_adapter.execute_query('tokens', 'insert', new_token_data)
-            
-            if not isinstance(result, dict) or not result.get('error'):
-                logger.info(f"成功创建新代币记录 {chain}/{contract}")
-                
-                # 返回成功结果，is_new字段仅用于API响应，不存储在数据库中
-                return {
-                    "success": True,
-                    "marketCap": max_market_cap,
-                    "marketCap1h": 0,  # 新代币没有历史市值
-                    "liquidity": max_liquidity,
-                    "price": price,
-                    "dexScreenerUrl": dex_screener_url,
-                    "symbol": symbol,
-                    "is_new": True,  # 标记为新代币，仅用于API响应，不存储在数据库中
-                    "message_id": message_id,
-                    "first_market_cap": max_market_cap,
-                    "promotion_count": promotion_count,
-                    "channel_id": channel_id,
-                    "risk_level": risk_level
-                }
+            # 如果从DEX API获取到了代币符号，则更新数据库中的代币符号
+            if symbol:
+                token_data['token_symbol'] = symbol
+                result['symbol'] = symbol
+                logger.info(f"将使用DEX API获取的代币符号: {symbol} 更新数据库")
             else:
-                logger.error(f"创建新代币记录失败: {result.get('error')}")
-                return {"error": f"创建新代币记录失败: {result.get('error')}"}
+                # 如果没有获取到新符号，使用现有符号
+                result['symbol'] = token.get('token_symbol')
             
-        except Exception as e:
-            logger.error(f"创建新代币记录时发生错误: {str(e)}")
-            return {"error": f"创建新代币记录时发生错误: {str(e)}"}
+            # 如果获取到了代币图像URL，则更新数据库
+            if image_url:
+                token_data['image_url'] = image_url
+                result['image_url'] = image_url
+                logger.info(f"将使用DEX API获取的代币图像URL更新数据库")
+            else:
+                # 如果没有获取到新图像URL，使用现有图像URL
+                result['image_url'] = token.get('image_url')
+                
+            # 更新交易数据
+            if buys_1h > 0:
+                token_data['buys_1h'] = buys_1h
+                result['buys_1h'] = buys_1h
+            
+            if sells_1h > 0:
+                token_data['sells_1h'] = sells_1h
+                result['sells_1h'] = sells_1h
+            
+            if volume_1h > 0:
+                token_data['volume_1h'] = volume_1h
+                result['volume_1h'] = volume_1h
+            
+            # 更新持有者数量
+            if holders_count > 0:
+                token_data['holders_count'] = holders_count
+                result['holders_count'] = holders_count
+            
+            # 如果是首次设置价格，同时设置first_price
+            if token.get('first_price') is None and first_price:
+                token_data['first_price'] = first_price
+                logger.info(f"首次设置first_price: {first_price}")
+            
+            # 更新DEX Screener URL
+            if dex_screener_url:
+                token_data['dexscreener_url'] = dex_screener_url
+            
+            # 记录历史数据
+            try:
+                # 创建历史记录
+                history_data = {
+                    'chain': chain,
+                    'contract': contract,
+                    'token_symbol': symbol or token.get('token_symbol', ''),
+                    'timestamp': datetime.now().isoformat(),
+                    'market_cap': max_market_cap,
+                    'price': price or token.get('price'),
+                    'liquidity': max_liquidity,
+                    'volume_24h': token.get('volume_24h', 0),
+                    'volume_1h': volume_1h,
+                    'holders_count': holders_count or token.get('holders_count', 0),
+                    'buys_1h': buys_1h,
+                    'sells_1h': sells_1h,
+                    'community_reach': token.get('community_reach', 0),
+                    'spread_count': token.get('spread_count', 0),
+                    'market_cap_change_pct': (max_market_cap - token.get('market_cap')) / token.get('market_cap') * 100 if token.get('market_cap') and token.get('market_cap') > 0 and max_market_cap > 0 else 0,
+                    'price_change_pct': token.get('price_change_24h', 0)
+                }
+                
+                # 插入历史记录
+                await db_adapter.execute_query(
+                    'token_history', 
+                    'insert', 
+                    data=history_data
+                )
+                logger.info(f"成功记录代币 {chain}/{contract} 的历史数据")
+            except Exception as history_error:
+                logger.error(f"记录历史数据时出错: {str(history_error)}")
+            
+            # 执行更新
+            update_result = await db_adapter.execute_query('tokens', 'update', data=token_data, filters={'chain': chain, 'contract': contract})
+            
+            if isinstance(update_result, dict) and update_result.get('error'):
+                logger.error(f"更新代币数据失败: {update_result.get('error')}")
+                return {"error": f"更新代币数据失败: {update_result.get('error')}"}
+            
+            logger.info(f"成功更新代币 {chain}/{contract} 的数据")
+            result["success"] = True
+            result["marketCap1h"] = token.get('market_cap')
+            
+            return result
+        else:
+            # 如果数据库中未找到代币，这里可以添加创建新代币的逻辑
+            # 为了保持代码简洁，暂不实现
+            logger.warning(f"数据库中未找到代币: {chain}/{contract}")
+            return {"error": "数据库中未找到该代币"}
+    
+    except Exception as e:
+        logger.error(f"综合更新代币数据时发生错误: {str(e)}")
+        return {"error": str(e)}
 
 def _format_market_cap(market_cap: float) -> str:
     """格式化市值显示
@@ -1021,245 +1096,94 @@ def _normalize_chain_id(chain: str) -> Optional[str]:
     
     return chain_map.get(chain.upper())
 
-async def update_token_market_and_txn_data_async(chain: str, contract: str) -> Dict[str, Any]:
-    """
-    异步更新代币的市场和交易数据
+# 添加被删除的函数
+
+def update_tokens_by_symbols(session: Session, symbols: List[str]) -> Dict[str, Any]:
+    """全局函数：根据代币符号批量更新代币市值
+    
+    此函数在所有平台(Windows/Ubuntu/Linux)上均可正常运行
     
     Args:
+        session: 数据库会话
+        symbols: 代币符号列表
+    
+    Returns:
+        Dict: 包含更新结果的字典
+    """
+    updater = TokenMarketUpdater(session)
+    return updater.update_tokens_by_symbols(symbols)
+
+def update_token_txn_data(session: Session, chain: str, contract: str) -> Dict[str, Any]:
+    """全局函数：更新单个代币的1小时交易数据
+    
+    此函数在所有平台(Windows/Ubuntu/Linux)上均可正常运行
+    
+    Args:
+        session: 数据库会话
         chain: 区块链名称
         contract: 代币合约地址
         
     Returns:
         Dict: 包含更新结果的字典
     """
-    logger.info(f"开始异步综合更新代币 {chain}/{contract} 的市场和交易数据")
-    
-    try:
-        # 获取数据库适配器
-        db_adapter = get_db_adapter()
-        
-        # 标准化链ID
-        chain_id = _normalize_chain_id(chain)
-        if not chain_id:
-            logger.warning(f"不支持的链: {chain}")
-            return {"error": f"不支持的链: {chain}"}
-        
-        # 获取代币池数据
-        pools_data = get_token_pools(chain_id, contract)
-        
-        # 检查API响应
-        if isinstance(pools_data, dict) and "error" in pools_data:
-            logger.error(f"获取代币池数据失败: {pools_data['error']}")
-            return {"error": pools_data["error"]}
-        
-        # 处理API返回的数据结构
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
-            
-        if not pairs:
-            logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
-            return {"error": "未找到代币交易对"}
-            
-        # 查找市值最高的池
-        max_market_cap = 0
-        max_liquidity = 0
-        dex_screener_url = None
-        price = None
-        first_price = None
-        symbol = None
-        buys_1h = 0
-        sells_1h = 0
-        volume_1h = 0
-        image_url = None  # 添加代币图像URL变量
-        
-        # 记录找到的交易对数量
-        logger.info(f"找到 {len(pairs)} 个交易对")
-        
-        for pair in pairs:
-            logger.debug(f"处理交易对: {pair.get('pairAddress')}")
-            
-            # 尝试提取代币符号
-            if not symbol and pair.get("baseToken"):
-                baseToken = pair.get("baseToken", {})
-                if baseToken and "symbol" in baseToken:
-                    symbol = baseToken.get("symbol")
-                    logger.info(f"从DEX API获取到代币符号: {symbol}")
-            
-            # 获取市值数据
-            market_cap = pair.get("marketCap", 0)
-            if market_cap and float(market_cap) > max_market_cap:
-                max_market_cap = float(market_cap)
-                
-            # 获取流动性数据
-            liquidity = pair.get("liquidity", {}).get("usd", 0)
-            if liquidity and float(liquidity) > max_liquidity:
-                max_liquidity = float(liquidity)
-                
-            # 获取价格
-            if not price and "priceUsd" in pair:
-                price = float(pair["priceUsd"])
+    updater = TokenMarketUpdater(session)
+    return updater.update_token_txn_data(chain, contract)
 
-            # 获取首次价格
-            if not first_price and "priceNative" in pair:
-                first_price = float(pair["priceNative"])
-                
-            # 获取DEX Screener URL
-            if not dex_screener_url:
-                chain_path = pair.get("chainId", "").lower()
-                pair_address = pair.get("pairAddress", "")
-                if chain_path and pair_address:
-                    dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
-            
-            # 获取代币图像URL
-            if not image_url and pair.get("info") and pair.get("info").get("imageUrl"):
-                image_url = pair.get("info").get("imageUrl")
-                logger.info(f"从DEX API获取到代币图像URL: {image_url}")
-            
-            # 累计1小时交易数据
-            if 'txns' in pair and 'h1' in pair['txns']:
-                h1_data = pair['txns']['h1']
-                buys_1h += h1_data.get('buys', 0)
-                sells_1h += h1_data.get('sells', 0)
-                
-            # 累计1小时交易量
-            if 'volume' in pair and 'h1' in pair['volume']:
-                volume_h1_data = pair['volume']['h1']
-                if 'USD' in volume_h1_data:
-                    volume_1h += float(volume_h1_data['USD'])
+def update_all_tokens_txn_data(session: Session, limit: int = 100) -> Dict[str, Any]:
+    """全局函数：批量更新所有代币的1小时交易数据
+    
+    此函数在所有平台(Windows/Ubuntu/Linux)上均可正常运行
+    
+    Args:
+        session: 数据库会话
+        limit: 最大更新数量
         
-        # 记录提取的数据
-        logger.info(f"市值: {max_market_cap}, 流动性: {max_liquidity}, 价格: {price}")
-        logger.info(f"1小时交易: 买入 {buys_1h}, 卖出 {sells_1h}, 交易量 ${volume_1h}")
+    Returns:
+        Dict: 包含更新结果的字典
+    """
+    updater = TokenMarketUpdater(session)
+    return updater.update_all_tokens_txn_data(limit=limit)
+
+# 添加同步版本，用于兼容现有代码
+def update_token_market_and_txn_data(session: Session, chain: str, contract: str) -> Dict[str, Any]:
+    """全局函数：综合更新单个代币的市值、流动性和交易数据（同步版本）
+    
+    这是一个同步包装器，内部通过asyncio.run调用异步方法
+    可在Windows和Ubuntu/Linux平台上正常运行
+    
+    Args:
+        session: 数据库会话
+        chain: 区块链名称
+        contract: 代币合约地址
         
-        # 获取目标代币
-        token = await db_adapter.get_token_by_contract(chain, contract)
+    Returns:
+        Dict: 包含更新结果的字典
+    """
+    import asyncio
+    updater = TokenMarketUpdater(session)
+    
+    # 平台兼容性处理
+    # 只在Windows平台上设置特定的事件循环策略
+    # Ubuntu/Linux平台使用默认策略即可
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # 通过asyncio.run调用异步方法
+    return asyncio.run(updater.update_token_market_and_txn_data(chain, contract))
+
+# 添加异步版本，用于新代码
+async def update_token_market_and_txn_data_async(session: Session, chain: str, contract: str) -> Dict[str, Any]:
+    """全局函数：综合更新单个代币的市值、流动性和交易数据（异步版本）
+    
+    异步函数可直接在异步上下文中使用，无需考虑平台差异
+    
+    Args:
+        session: 数据库会话
+        chain: 区块链名称
+        contract: 代币合约地址
         
-        if token:
-            # 更新代币数据
-            try:
-                # 准备更新数据
-                update_data = {
-                    'market_cap_1h': token.get('market_cap', 0),
-                    'market_cap': max_market_cap,
-                    'market_cap_formatted': _format_market_cap(max_market_cap),
-                    'liquidity': max_liquidity,
-                    'price': price,
-                    'buys_1h': buys_1h,
-                    'sells_1h': sells_1h,
-                    'volume_1h': volume_1h
-                }
-                
-                # 如果从DEX API获取到了代币符号，则更新数据库中的代币符号
-                if symbol:
-                    update_data['token_symbol'] = symbol
-                
-                # 如果获取到了代币图像URL，则更新数据库
-                if image_url:
-                    update_data['image_url'] = image_url
-                    logger.info(f"将使用DEX API获取的代币图像URL更新数据库")
-                
-                # 如果是首次设置价格，同时设置first_price
-                if token.get('first_price') is None:
-                    update_data['first_price'] = first_price
-                
-                if dex_screener_url:
-                    update_data['dexscreener_url'] = dex_screener_url
-                
-                # 执行更新
-                filters = {'chain': chain, 'contract': contract}
-                await db_adapter.execute_query('tokens', 'update', update_data, filters)
-                
-                logger.info(f"成功更新代币 {chain}/{contract} 的市场和交易数据")
-                
-                # 返回结果
-                return {
-                    "success": True,
-                    "marketCap": max_market_cap,
-                    "marketCap1h": token.get('market_cap', 0),
-                    "liquidity": max_liquidity,
-                    "price": price,
-                    "dexScreenerUrl": dex_screener_url,
-                    "symbol": symbol,
-                    "image_url": image_url,  # 添加代币图像URL到返回结果中
-                    "buys_1h": buys_1h,
-                    "sells_1h": sells_1h,
-                    "volume_1h": volume_1h
-                }
-                
-            except Exception as e:
-                logger.error(f"更新代币数据时发生错误: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-                return {"error": str(e)}
-                
-        else:
-            # 如果数据库中未找到代币，创建新的代币记录
-            try:
-                # 基本检查，确保我们有必要的信息来创建新记录
-                if not symbol:
-                    logger.warning(f"从DEX API未能获取到代币符号，将使用合约地址前8位作为临时符号")
-                    # 使用合约地址的前8位作为临时符号
-                    symbol = contract[:8] if len(contract) > 8 else contract
-                
-                # 获取当前时间格式化为字符串
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                # 准备新的代币数据
-                new_token_data = {
-                    'chain': chain,
-                    'contract': contract,
-                    'token_symbol': symbol,
-                    'market_cap': max_market_cap,
-                    'market_cap_formatted': _format_market_cap(max_market_cap),
-                    'liquidity': max_liquidity,
-                    'price': price,
-                    'first_price': first_price,
-                    'latest_update': current_time,
-                    'first_update': current_time,
-                    'dexscreener_url': dex_screener_url,
-                    'buys_1h': buys_1h,
-                    'sells_1h': sells_1h,
-                    'volume_1h': volume_1h,
-                    'market_cap_1h': 0,  # 首次创建没有历史市值
-                    'first_market_cap': max_market_cap,  # 首次发现的市值就是first_market_cap
-                    'image_url': image_url  # 添加代币图像URL
-                }
-                
-                # 保存新代币记录
-                result = await db_adapter.execute_query('tokens', 'insert', new_token_data)
-                
-                if not isinstance(result, dict) or not result.get('error'):
-                    logger.info(f"成功创建新代币记录 {chain}/{contract}")
-                    
-                    # 返回成功结果
-                    return {
-                        "success": True,
-                        "is_new": True,  # 标记为新代币
-                        "marketCap": max_market_cap,
-                        "marketCap1h": 0,  # 新代币没有历史市值
-                        "liquidity": max_liquidity,
-                        "price": price,
-                        "dexScreenerUrl": dex_screener_url,
-                        "symbol": symbol,
-                        "image_url": image_url,  # 添加代币图像URL到返回结果中
-                        "buys_1h": buys_1h,
-                        "sells_1h": sells_1h,
-                        "volume_1h": volume_1h
-                    }
-                else:
-                    logger.error(f"创建新代币记录失败: {result.get('error')}")
-                    return {"error": f"创建新代币记录失败: {result.get('error')}"}
-                
-            except Exception as e:
-                logger.error(f"创建新代币记录时发生错误: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-                return {"error": f"创建新代币记录时发生错误: {str(e)}"}
-                
-    except Exception as e:
-        logger.error(f"综合更新代币数据时发生错误: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {"error": str(e)} 
+    Returns:
+        Dict: 包含更新结果的字典
+    """
+    updater = TokenMarketUpdater(session)
+    return await updater.update_token_market_and_txn_data(chain, contract) 

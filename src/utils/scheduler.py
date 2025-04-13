@@ -308,4 +308,192 @@ class TaskScheduler:
         return self.tasks
 
 # 创建全局调度器实例
-scheduler = TaskScheduler() 
+scheduler = TaskScheduler()
+
+# 添加每天凌晨备份token表数据的任务
+def daily_token_backup():
+    """每天凌晨备份token表数据"""
+    try:
+        logger.info("开始每日token数据备份")
+        
+        # 获取数据库适配器
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        
+        # 获取所有token数据
+        tokens = asyncio.run(db_adapter.execute_query('tokens', 'select'))
+        
+        if not tokens or not isinstance(tokens, list):
+            logger.warning("获取代币列表失败或结果为空，无法备份")
+            return
+            
+        # 生成备份文件名
+        import os
+        import json
+        from datetime import datetime
+        from pathlib import Path
+        
+        backup_date = datetime.now().strftime('%Y%m%d')
+        backup_dir = Path(__file__).resolve().parent.parent.parent / 'data' / 'backups'
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        backup_file = backup_dir / f"tokens_backup_{backup_date}.json"
+        
+        # 保存到文件
+        with open(backup_file, 'w', encoding='utf-8') as f:
+            json.dump(tokens, f, ensure_ascii=False, indent=2)
+            
+        logger.info(f"代币数据备份完成: {backup_file}")
+        
+        # 清理旧备份，只保留最近30天
+        backup_files = sorted(list(backup_dir.glob("tokens_backup_*.json")))
+        if len(backup_files) > 30:
+            for old_file in backup_files[:-30]:
+                os.remove(old_file)
+                logger.info(f"清理旧备份文件: {old_file}")
+                
+    except Exception as e:
+        logger.error(f"代币数据备份失败: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+# 添加每小时监控token数据异常变化的任务
+def hourly_token_monitor():
+    """每小时监控token数据异常变化"""
+    try:
+        logger.info("开始每小时token数据监控")
+        
+        # 导入监控脚本
+        import sys
+        import os
+        import importlib.util
+        from pathlib import Path
+        
+        # 获取脚本路径
+        script_path = Path(__file__).resolve().parent.parent.parent / 'scripts' / 'monitor_token_data.py'
+        
+        if not script_path.exists():
+            logger.error(f"监控脚本不存在: {script_path}")
+            return
+            
+        # 加载脚本模块
+        spec = importlib.util.spec_from_file_location("monitor_token_data", script_path)
+        monitor_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(monitor_module)
+        
+        # 执行监控
+        result = asyncio.run(monitor_module.main_async())
+        
+        if result == 0:
+            logger.info("token数据监控任务成功完成")
+        else:
+            logger.error(f"token数据监控任务失败: {result}")
+            
+    except Exception as e:
+        logger.error(f"执行token数据监控任务时出错: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+# 添加每6小时记录token历史数据的任务
+async def record_token_history():
+    """每6小时记录token历史数据到专用历史表中"""
+    try:
+        logger.info("开始记录token历史数据")
+        
+        # 获取数据库适配器
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        
+        # 获取所有token数据
+        tokens = await db_adapter.execute_query('tokens', 'select')
+        
+        if not tokens or not isinstance(tokens, list):
+            logger.warning("获取代币列表失败或结果为空，无法记录历史数据")
+            return
+        
+        # 记录成功和失败的计数
+        success_count = 0
+        fail_count = 0
+        current_time = datetime.now()  # 直接使用datetime对象
+        
+        # 记录每个token的历史数据
+        for token in tokens:
+            try:
+                # 提取需要记录的数据
+                history_data = {
+                    'chain': token.get('chain'),
+                    'contract': token.get('contract'),
+                    'token_symbol': token.get('token_symbol'),
+                    'timestamp': current_time,  # 使用datetime对象
+                    'market_cap': token.get('market_cap'),
+                    'price': token.get('price'),
+                    'liquidity': token.get('liquidity'),
+                    'volume_24h': token.get('volume_24h'),
+                    'volume_1h': token.get('volume_1h'),
+                    'holders_count': token.get('holders_count'),
+                    'buys_1h': token.get('buys_1h'),
+                    'sells_1h': token.get('sells_1h'),
+                    'community_reach': token.get('community_reach'),
+                    'spread_count': token.get('spread_count'),
+                    'market_cap_change_pct': token.get('last_calculated_change_pct'),
+                    'price_change_pct': token.get('price_change_24h')
+                }
+                
+                # 确保存在必要的字段
+                if not history_data['chain'] or not history_data['contract']:
+                    logger.warning(f"跳过记录历史数据: 代币 {token.get('token_symbol')} 缺少必要字段")
+                    fail_count += 1
+                    continue
+                
+                # 插入历史记录
+                insert_result = await db_adapter.execute_query(
+                    'token_history',
+                    'insert',
+                    data=history_data
+                )
+                
+                if isinstance(insert_result, dict) and insert_result.get('error'):
+                    logger.error(f"记录代币 {token.get('token_symbol')} 历史数据失败: {insert_result.get('error')}")
+                    fail_count += 1
+                else:
+                    success_count += 1
+                    
+            except Exception as e:
+                logger.error(f"记录代币 {token.get('token_symbol')} 历史数据时出错: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                fail_count += 1
+        
+        logger.info(f"Token历史数据记录完成: 成功 {success_count} 条, 失败 {fail_count} 条")
+        
+    except Exception as e:
+        logger.error(f"记录token历史数据失败: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+# 注册任务 - 每天0点执行备份
+scheduler.schedule_task(
+    task_id='daily_token_backup',
+    func=daily_token_backup,
+    run_at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1 if datetime.now().hour >= 0 else 0),
+    hourly=False,
+    interval=24*60*60  # 每24小时执行一次
+)
+
+# 注册任务 - 每小时执行监控（在每小时的15分钟执行）
+scheduler.schedule_task(
+    task_id='hourly_token_monitor',
+    func=hourly_token_monitor,
+    run_at=datetime.now().replace(minute=15, second=0, microsecond=0) + timedelta(hours=1 if datetime.now().minute >= 15 else 0),
+    hourly=True
+)
+
+# 注册任务 - 每6小时记录一次历史数据（在每个整点的0分钟执行）
+# 注意：该定时任务已被禁用，现在系统在监听到代币时会立即记录历史数据到token_history表中
+# scheduler.schedule_task(
+#     task_id='record_token_history',
+#     func=record_token_history,
+#     run_at=datetime.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1),
+#     hourly=False,
+#     interval=6*60*60  # 每6小时执行一次
+# ) 

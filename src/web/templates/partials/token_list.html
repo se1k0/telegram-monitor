@@ -6,7 +6,11 @@
                 <th>链</th>
                 <th>当前市值</th>
                 <th>涨跌幅</th>
+                <th>1h交易量</th>
+                <th>买入/卖出(1h)</th>
                 <th>持有者数量</th>
+                <th>社群覆盖</th>
+                <th>传播次数</th>
                 <th>首次推荐</th>
                 <th>操作</th>
             </tr>
@@ -23,7 +27,7 @@
                             <div class="token-placeholder me-2">{{ token.token_symbol[:1] }}</div>
                             {% endif %}
                             <div>
-                                <div class="fw-bold">{{ token.token_symbol }}</div>
+                                <div class="fw-bold token-name-link" onclick="openTokenDetailModal('{{ token.chain }}', '{{ token.contract }}')">{{ token.token_symbol }}</div>
                                 <div class="small text-muted">{{ token.contract[:10] }}...</div>
                             </div>
                         </div>
@@ -33,6 +37,8 @@
                     <td class="{% if token.change_pct_value and token.change_pct_value > 0 %}text-success{% elif token.change_pct_value and token.change_pct_value < 0 %}text-danger{% endif %}">
                         {{ token.change_percentage }}
                     </td>
+                    <td>{{ token.volume_1h_formatted if token.volume_1h_formatted else '$0' }}</td>
+                    <td>{{ token.buys_1h|default(0) }}/{{ token.sells_1h|default(0) }}</td>
                     <td>
                         {% if token.holders_count %}
                             {{ token.holders_count }}
@@ -40,6 +46,8 @@
                             <span class="text-muted">未知</span>
                         {% endif %}
                     </td>
+                    <td>{{ token.community_reach|default(0) }}</td>
+                    <td>{{ token.spread_count|default(0) }}</td>
                     <td>{{ token.first_update_formatted }}</td>
                     <td>
                         <div class="btn-group">
@@ -49,28 +57,38 @@
                             <button class="btn btn-sm btn-outline-success like-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}">
                                 <i class="bi bi-heart"></i> <span class="like-count">{{ token.likes_count }}</span>
                             </button>
-                            <a href="/token/{{ token.chain }}/{{ token.contract }}" class="btn btn-sm btn-outline-info">
+                            <button class="btn btn-sm btn-outline-info token-detail-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}" onclick="openTokenDetailModal('{{ token.chain }}', '{{ token.contract }}')">
                                 <i class="bi bi-info-circle"></i>
-                            </a>
+                            </button>
+                            
+                            <button class="btn btn-sm btn-outline-warning token-refresh-btn" 
+                                    data-chain="{{ token.chain }}" 
+                                    data-contract="{{ token.contract }}" 
+                                    data-token-symbol="{{ token.token_symbol }}"
+                                    onclick="refreshTokenData(this)" 
+                                    title="刷新代币数据">
+                                <i class="bi bi-arrow-clockwise"></i>
+                                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                            </button>
                         </div>
                     </td>
                 </tr>
                 {% endfor %}
             {% else %}
                 <tr>
-                    <td colspan="7" class="text-center">没有找到代币数据</td>
+                    <td colspan="11" class="text-center">没有找到代币数据</td>
                 </tr>
             {% endif %}
         </tbody>
     </table>
 </div>
 
-{% if pagination and pagination.pages > 1 %}
+{% if pagination and pagination.get('pages', 0) > 1 %}
 <nav aria-label="Page navigation">
     <ul class="pagination justify-content-center">
-        {% if pagination.has_prev %}
+        {% if pagination.get('has_prev', False) %}
         <li class="page-item">
-            <a class="page-link" href="?page={{ pagination.prev_num }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Previous">
+            <a class="page-link" href="?page={{ pagination.get('prev_num') }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Previous">
                 <span aria-hidden="true">&laquo;</span>
             </a>
         </li>
@@ -82,9 +100,11 @@
         </li>
         {% endif %}
 
-        {% for page in pagination.iter_pages() %}
+        {% set page_items = pagination.get('iter_pages', []) %}
+        
+        {% for page in page_items %}
             {% if page %}
-                {% if page != pagination.page %}
+                {% if page != pagination.get('page') %}
                 <li class="page-item">
                     <a class="page-link" href="?page={{ page }}&chain={{ chain_filter }}&search={{ search_query }}">{{ page }}</a>
                 </li>
@@ -100,9 +120,9 @@
             {% endif %}
         {% endfor %}
 
-        {% if pagination.has_next %}
+        {% if pagination.get('has_next', False) %}
         <li class="page-item">
-            <a class="page-link" href="?page={{ pagination.next_num }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Next">
+            <a class="page-link" href="?page={{ pagination.get('next_num') }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Next">
                 <span aria-hidden="true">&raquo;</span>
             </a>
         </li>
@@ -115,4 +135,31 @@
         {% endif %}
     </ul>
 </nav>
-{% endif %} 
+{% endif %}
+
+<style>
+    .token-name-link {
+        cursor: pointer;
+        color: #0d6efd;
+        text-decoration: none;
+    }
+    .token-name-link:hover {
+        text-decoration: underline;
+    }
+    .token-img {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+    }
+    .token-placeholder {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: #e9ecef;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        color: #495057;
+    }
+</style> 

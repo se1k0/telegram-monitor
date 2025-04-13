@@ -16,6 +16,8 @@ import threading
 from typing import Dict, List, Any, Optional, Union, Tuple
 from dotenv import load_dotenv
 from decimal import Decimal
+import asyncio
+import aiohttp
 
 # 加载环境变量
 load_dotenv()
@@ -358,3 +360,36 @@ def get_token_holders_info(mint: str, max_pages: int = 10) -> Tuple[Optional[int
     
     # 调用实例方法
     return api.get_token_holders_info(mint, max_pages) 
+
+async def async_get_token_holders_info(mint: str, max_pages: int = 10) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    异步获取代币持有者数量和前10大持有者信息
+    
+    Args:
+        mint (str): 代币的mint地址
+        max_pages (int): 获取的最大页数，默认为10
+    
+    Returns:
+        Tuple[Dict[str, Any], List[Dict[str, Any]]]: 
+            - 持有者统计信息，包含总数、总供应量等
+            - 前10大持有者列表，每个持有者包含地址、数量和占比
+    """
+    try:
+        # 创建一个事件循环中执行同步函数
+        loop = asyncio.get_event_loop()
+        # 在事件循环中调用同步版本的函数
+        holders_count, top_holders = await loop.run_in_executor(
+            None, get_token_holders_info, mint, max_pages
+        )
+        
+        # 构造返回结果
+        holders_info = {
+            "count": holders_count,
+            "mint": mint
+        }
+        
+        return holders_info, top_holders
+    except Exception as e:
+        logger.error(f"异步获取代币持有者信息时出错: {str(e)}")
+        # 返回空数据
+        return {"count": 0, "mint": mint}, [] 
