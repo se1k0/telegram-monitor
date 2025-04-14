@@ -165,35 +165,61 @@
                 marketCapCell.textContent = tokenData.market_cap_formatted;
             }
             
-            // 计算并更新涨跌幅
+            // 更新涨跌幅 - 优先使用服务器计算的结果
             const changePctCell = row.querySelector('td:nth-child(4)');
-            if (changePctCell && tokenData.market_cap && tokenData.market_cap_1h) {
-                const changePct = tokenData.market_cap_1h > 0 ? 
-                    ((tokenData.market_cap - tokenData.market_cap_1h) / tokenData.market_cap_1h * 100) : 0;
-                
-                changePctCell.textContent = changePct > 0 ? `+${changePct.toFixed(2)}%` : `${changePct.toFixed(2)}%`;
-                
-                // 更新颜色
-                changePctCell.className = '';  // 清除现有类
-                if (changePct > 0) {
-                    changePctCell.classList.add('text-success');
-                } else if (changePct < 0) {
-                    changePctCell.classList.add('text-danger');
+            if (changePctCell) {
+                // 优先使用服务器返回的已格式化涨跌幅
+                if (tokenData.change_percentage && tokenData.change_percentage !== "0.00%") {
+                    changePctCell.textContent = tokenData.change_percentage;
+                    
+                    // 更新颜色
+                    changePctCell.className = '';  // 清除现有类
+                    if (tokenData.change_pct_value > 0) {
+                        changePctCell.classList.add('text-success');
+                    } else if (tokenData.change_pct_value < 0) {
+                        changePctCell.classList.add('text-danger');
+                    }
+                } 
+                // 如果没有服务器返回的格式化数据，尝试自己计算
+                else if (tokenData.market_cap && tokenData.market_cap_1h && tokenData.market_cap_1h > 0) {
+                    const changePct = ((tokenData.market_cap - tokenData.market_cap_1h) / tokenData.market_cap_1h * 100);
+                    
+                    // 仅当计算结果不为0时更新
+                    if (Math.abs(changePct) > 0.01) {
+                        changePctCell.textContent = changePct > 0 ? `+${changePct.toFixed(2)}%` : `${changePct.toFixed(2)}%`;
+                        
+                        // 更新颜色
+                        changePctCell.className = '';  // 清除现有类
+                        if (changePct > 0) {
+                            changePctCell.classList.add('text-success');
+                        } else if (changePct < 0) {
+                            changePctCell.classList.add('text-danger');
+                        }
+                    }
                 }
+                // 否则不更新涨跌幅，保留现有值
             }
             
-            // 更新交易量
+            // 更新交易量 - 优先使用服务器格式化的结果
             const volumeCell = row.querySelector('td:nth-child(5)');
-            if (volumeCell && tokenData.volume_1h) {
-                let formatted = '';
-                if (tokenData.volume_1h >= 1000000) {
-                    formatted = `$${(tokenData.volume_1h / 1000000).toFixed(2)}M`;
-                } else if (tokenData.volume_1h >= 1000) {
-                    formatted = `$${(tokenData.volume_1h / 1000).toFixed(2)}K`;
-                } else {
-                    formatted = `$${tokenData.volume_1h.toFixed(2)}`;
+            if (volumeCell) {
+                // 优先使用服务器返回的已格式化交易量
+                if (tokenData.volume_1h_formatted && tokenData.volume_1h_formatted !== "$0.00" && tokenData.volume_1h > 0) {
+                    volumeCell.textContent = tokenData.volume_1h_formatted;
+                } 
+                // 如果没有格式化数据，但有原始数据，则自己格式化
+                else if (tokenData.volume_1h && tokenData.volume_1h > 0) {
+                    let formatted = '';
+                    if (tokenData.volume_1h >= 1000000) {
+                        formatted = `$${(tokenData.volume_1h / 1000000).toFixed(2)}M`;
+                    } else if (tokenData.volume_1h >= 1000) {
+                        formatted = `$${(tokenData.volume_1h / 1000).toFixed(2)}K`;
+                    } else {
+                        formatted = `$${tokenData.volume_1h.toFixed(2)}`;
+                    }
+                    volumeCell.textContent = formatted;
                 }
-                volumeCell.textContent = formatted;
+                // 否则不更新交易量，保留现有值
             }
             
             // 更新买入/卖出

@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional, Union, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 
 from src.api.dex_screener_api import get_token_pools, DexScreenerAPI
@@ -588,6 +588,27 @@ class TokenMarketUpdater:
             if isinstance(token_result, list) and len(token_result) > 0:
                 token = token_result[0]
                 prev_market_cap = token.get('market_cap')
+                
+                # 查询1小时前的历史记录来获取真实的1小时前市值
+                one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
+                history_result = await db_adapter.execute_query(
+                    'token_history',
+                    'select',
+                    filters={
+                        'chain': chain,
+                        'contract': contract,
+                        'timestamp': {'$lte': one_hour_ago}
+                    },
+                    order_by={'timestamp': 'desc'},
+                    limit=1
+                )
+                
+                # 如果找到了1小时前的记录，使用它的市值作为market_cap_1h
+                if isinstance(history_result, list) and len(history_result) > 0:
+                    one_hour_ago_record = history_result[0]
+                    if 'market_cap' in one_hour_ago_record and one_hour_ago_record['market_cap'] > 0:
+                        logger.info(f"从历史记录中获取到1小时前的市值: {one_hour_ago_record['market_cap']}")
+                        prev_market_cap = one_hour_ago_record['market_cap']
             
             # 准备更新数据
             token_data = {
@@ -600,6 +621,29 @@ class TokenMarketUpdater:
                 'volume_1h': total_volume_1h,
                 'price': price
             }
+            
+            # 计算并添加涨跌幅数据
+            if prev_market_cap is not None and max_market_cap is not None and prev_market_cap > 0 and max_market_cap > 0:
+                change_pct = ((max_market_cap - prev_market_cap) / prev_market_cap) * 100
+                token_data['change_pct_value'] = change_pct
+                token_data['change_percentage'] = f"{'+' if change_pct > 0 else ''}{change_pct:.2f}%"
+                token_data['last_calculated_change_pct'] = change_pct
+                logger.info(f"计算涨跌幅: {token_data['change_percentage']} (现在: {max_market_cap}, 1小时前: {prev_market_cap})")
+            else:
+                logger.info(f"无法计算涨跌幅: prev_market_cap={prev_market_cap}, max_market_cap={max_market_cap}")
+            
+            # 格式化交易量数据
+            if total_volume_1h is not None and total_volume_1h > 0:
+                if total_volume_1h >= 1000000:
+                    volume_formatted = f"${total_volume_1h / 1000000:.2f}M"
+                elif total_volume_1h >= 1000:
+                    volume_formatted = f"${total_volume_1h / 1000:.2f}K"
+                else:
+                    volume_formatted = f"${total_volume_1h:.2f}"
+                token_data['volume_1h_formatted'] = volume_formatted
+            else:
+                logger.info(f"交易量为空或为零: total_volume_1h={total_volume_1h}")
+                token_data['volume_1h_formatted'] = '$0.00'
             
             # 如果有其他数据，也添加到更新数据中
             if dex_screener_url:
@@ -627,7 +671,7 @@ class TokenMarketUpdater:
             
             # 记录历史数据到token_history表
             try:
-                # 使用更新后的值构建历史记录
+                # 创建历史记录
                 history_data = {
                     'chain': chain,
                     'contract': contract,

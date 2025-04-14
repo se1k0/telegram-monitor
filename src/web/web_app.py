@@ -1286,47 +1286,61 @@ async def update_token_data_background(chain, contract, cache_key):
         # 更新市场数据和交易数据
         try:
             from src.api.dex_screener_api import get_token_pools
-            pools = get_token_pools(chain.lower(), contract)
+            from src.api.token_market_updater import _normalize_chain_id
             
-            if pools and 'pairs' in pools and pools['pairs']:
-                # 汇总所有交易对的交易数据
-                buys_1h = 0
-                sells_1h = 0
-                volume_1h = 0
+            normalized_chain = _normalize_chain_id(chain)
+            if normalized_chain:
+                pools = get_token_pools(normalized_chain, contract)
                 
-                # 获取市值和流动性数据
-                market_cap = 0
-                liquidity = 0
-                
-                for pair in pools['pairs']:
-                    if 'txns' in pair and 'h1' in pair['txns']:
-                        h1_data = pair['txns']['h1']
-                        buys_1h += h1_data.get('buys', 0)
-                        sells_1h += h1_data.get('sells', 0)
-                        
-                    if 'volume' in pair and 'h1' in pair['volume']:
-                        volume_1h += float(pair['volume']['h1'] or 0)
-                        
-                    # 提取市值和流动性数据
-                    if 'fdv' in pair:
-                        current_pair_cap = float(pair['fdv'] or 0)
-                        if current_pair_cap > market_cap:
-                            market_cap = current_pair_cap
-                        
-                    if 'liquidity' in pair and 'usd' in pair['liquidity']:
-                        liquidity += float(pair['liquidity']['usd'] or 0)
-                
-                updated_buys_1h = buys_1h
-                updated_sells_1h = sells_1h
-                updated_volume_1h = volume_1h
-                
-                if market_cap > 0:
-                    updated_market_cap = market_cap
-                    logger.info(f"后台更新: 更新市值: ${market_cap}")
+                # 修正API返回数据的处理
+                # API返回的是数组而不是包含'pairs'字段的对象
+                if pools and isinstance(pools, list) and len(pools) > 0:
+                    # 提取交易数据
+                    buys_1h = 0
+                    sells_1h = 0
+                    volume_1h = 0
+                    volume_24h = 0
                     
-                if liquidity > 0:
-                    updated_liquidity = liquidity
-                    logger.info(f"后台更新: 更新流动性: ${liquidity}")
+                    # 直接遍历返回的数组
+                    for pair in pools:
+                        # 提取1小时交易数据
+                        if 'txns' in pair and 'h1' in pair['txns']:
+                            h1_data = pair['txns']['h1']
+                            buys_1h += h1_data.get('buys', 0)
+                            sells_1h += h1_data.get('sells', 0)
+                        
+                        # 提取交易量数据
+                        if 'volume' in pair:
+                            if 'h1' in pair['volume']:
+                                volume_1h += float(pair['volume']['h1'] or 0)
+                            if 'h24' in pair['volume']:
+                                volume_24h += float(pair['volume']['h24'] or 0)
+                    
+                    # 更新交易数据
+                    txn_data = {}
+                    if buys_1h > 0:
+                        txn_data['buys_1h'] = buys_1h
+                    if sells_1h > 0:
+                        txn_data['sells_1h'] = sells_1h
+                    if volume_1h > 0:
+                        txn_data['volume_1h'] = volume_1h
+                    if volume_24h > 0:
+                        txn_data['volume_24h'] = volume_24h
+                    
+                    if txn_data:
+                        txn_result = await db_adapter.execute_query(
+                            'tokens',
+                            'update',
+                            data=txn_data,
+                            filters={'chain': chain, 'contract': contract}
+                        )
+                        txn_updated = True
+                        logger.info(f"成功更新 {token.get('token_symbol')} 的交易数据")
+                # 记录API结果调试信息
+                else:
+                    logger.warning(f"从DEX API获取到的数据格式不正确或为空: {pools}")
+                    if pools:
+                        logger.debug(f"API返回类型: {type(pools)}, 内容: {pools[:200]}...")
         except Exception as e:
             logger.error(f"后台更新: 获取代币市场数据时出错: {str(e)}")
             import traceback
@@ -1987,14 +2001,17 @@ async def api_refresh_token(chain, contract):
             if normalized_chain:
                 pools = get_token_pools(normalized_chain, contract)
                 
-                if pools and 'pairs' in pools and pools['pairs']:
+                # 修正API返回数据的处理
+                # API返回的是数组而不是包含'pairs'字段的对象
+                if pools and isinstance(pools, list) and len(pools) > 0:
                     # 提取交易数据
                     buys_1h = 0
                     sells_1h = 0
                     volume_1h = 0
                     volume_24h = 0
                     
-                    for pair in pools['pairs']:
+                    # 直接遍历返回的数组
+                    for pair in pools:
                         # 提取1小时交易数据
                         if 'txns' in pair and 'h1' in pair['txns']:
                             h1_data = pair['txns']['h1']
@@ -2028,6 +2045,11 @@ async def api_refresh_token(chain, contract):
                         )
                         txn_updated = True
                         logger.info(f"成功更新 {token_symbol} 的交易数据")
+                # 记录API结果调试信息
+                else:
+                    logger.warning(f"从DEX API获取到的数据格式不正确或为空: {pools}")
+                    if pools:
+                        logger.debug(f"API返回类型: {type(pools)}, 内容: {pools[:200]}...")
             else:
                 txn_error = f"不支持的链: {chain}"
                 logger.warning(txn_error)
@@ -2078,12 +2100,56 @@ async def api_refresh_token(chain, contract):
         updated_token = updated_token_data[0] if updated_token_data and len(updated_token_data) > 0 else {}
         
         # 检查市值是否更新
-        new_market_cap = updated_token.get('market_cap', 0)
+        new_market_cap = updated_token.get('market_cap')
         market_cap_change = 0
-        if current_market_cap and current_market_cap > 0 and new_market_cap and new_market_cap > 0:
+        if current_market_cap is not None and new_market_cap is not None and current_market_cap > 0 and new_market_cap > 0:
             market_cap_change = ((new_market_cap - current_market_cap) / current_market_cap) * 100
             logger.info(f"{token_symbol} 市值变化: {current_market_cap} -> {new_market_cap} ({market_cap_change:+.2f}%)")
         
+        # 确保保留之前的涨跌幅数据，如果没有新数据
+        if 'change_pct_value' not in updated_token or updated_token.get('change_pct_value') == 0:
+            updated_token['change_pct_value'] = token.get('change_pct_value', 0)
+            updated_token['change_percentage'] = token.get('change_percentage', '0.00%')
+            logger.info(f"保留 {token_symbol} 之前的涨跌幅数据: {updated_token['change_percentage']}")
+        
+        # 计算新的涨跌幅并添加到返回数据中（如果有市值和1小时前市值）
+        market_cap_1h = updated_token.get('market_cap_1h')
+        market_cap = updated_token.get('market_cap')
+        if market_cap is not None and market_cap_1h is not None and market_cap > 0 and market_cap_1h > 0:
+            # 计算涨跌幅
+            change_pct = ((market_cap - market_cap_1h) / market_cap_1h) * 100
+            # 更新到token数据中
+            updated_token['change_pct_value'] = change_pct
+            updated_token['change_percentage'] = f"{'+' if change_pct > 0 else ''}{change_pct:.2f}%"
+            logger.info(f"计算 {token_symbol} 的新涨跌幅: {updated_token['change_percentage']}")
+        else:
+            logger.info(f"无法计算涨跌幅: market_cap={market_cap}, market_cap_1h={market_cap_1h}")
+        
+        # 确保保留之前的交易量数据，如果没有新数据
+        if 'volume_1h' not in updated_token or updated_token.get('volume_1h', 0) == 0:
+            updated_token['volume_1h'] = token.get('volume_1h', 0)
+            updated_token['volume_1h_formatted'] = token.get('volume_1h_formatted', '$0.00')
+            logger.info(f"保留 {token_symbol} 之前的交易量数据: {updated_token['volume_1h_formatted']}")
+        else:
+            # 格式化交易量数据
+            volume_1h = updated_token.get('volume_1h')
+            # 确保volume_1h不是None且大于0
+            if volume_1h is not None and volume_1h > 0:
+                volume_formatted = ''
+                if volume_1h >= 1000000:
+                    volume_formatted = f"${volume_1h / 1000000:.2f}M"
+                elif volume_1h >= 1000:
+                    volume_formatted = f"${volume_1h / 1000:.2f}K"
+                else:
+                    volume_formatted = f"${volume_1h:.2f}"
+                updated_token['volume_1h_formatted'] = volume_formatted
+                logger.info(f"格式化 {token_symbol} 的新交易量: {updated_token['volume_1h_formatted']}")
+            else:
+                # 如果是None或0，设置默认格式化值
+                updated_token['volume_1h'] = 0
+                updated_token['volume_1h_formatted'] = '$0.00'
+                logger.info(f"交易量数据为空或为0，设置默认值")
+            
         # 更新缓存数据
         cache_key = f"token_detail:{chain}:{contract}"
         with API_LOCK:

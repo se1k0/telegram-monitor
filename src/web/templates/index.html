@@ -515,37 +515,57 @@ function refreshTokenData(buttonElement) {
 
 // 更新表格中的token行数据
 function updateTokenRowWithNewData(chain, contract, tokenData) {
-    // 找到对应的行
-    const tokenRow = document.querySelector(`table tbody tr[data-chain="${chain}"][data-contract="${contract}"]`);
+    // 找到对应的行 - 修正选择器
+    const tokenRow = document.querySelector(`tr[data-chain="${chain}"][data-contract="${contract}"]`);
     if (!tokenRow) {
-        console.warn(`找不到要更新的token行: ${chain}-${contract}`);
-        return;
+        console.warn(`找不到要更新的token行: ${chain}-${contract}，尝试使用备用选择器`);
+        // 尝试备用选择器
+        const backupTokenRow = document.querySelector(`#token-list-body tr[data-chain="${chain}"][data-contract="${contract}"]`);
+        if (!backupTokenRow) {
+            console.error(`完全无法找到token行: ${chain}-${contract}`);
+            return;
+        }
+        return updateTokenRowWithNewData2(backupTokenRow, tokenData);
     }
+    
+    console.log("更新token行数据:", tokenData);
     
     // 更新行数据
     // 市值
     const marketCapCell = tokenRow.querySelector('td:nth-child(3)');
-    if (marketCapCell) marketCapCell.textContent = tokenData.market_cap_formatted;
+    if (marketCapCell && tokenData.market_cap_formatted) {
+        marketCapCell.textContent = tokenData.market_cap_formatted;
+    }
     
     // 涨跌幅
     const changeCell = tokenRow.querySelector('td:nth-child(4)');
-    if (changeCell) {
-        changeCell.textContent = tokenData.change_percentage;
-        changeCell.className = tokenData.change_pct_value > 0 ? 'text-success' : 
-                               tokenData.change_pct_value < 0 ? 'text-danger' : '';
+    if (changeCell && tokenData.change_percentage) {
+        // 只有当change_percentage不为"0.00%"或者change_pct_value不为0时才更新
+        if (tokenData.change_percentage !== "0.00%" || tokenData.change_pct_value !== 0) {
+            changeCell.textContent = tokenData.change_percentage;
+            changeCell.className = tokenData.change_pct_value > 0 ? 'text-success' : 
+                                 tokenData.change_pct_value < 0 ? 'text-danger' : '';
+        }
     }
     
     // 1h交易量
     const volumeCell = tokenRow.querySelector('td:nth-child(5)');
-    if (volumeCell) volumeCell.textContent = tokenData.volume_1h_formatted || '$0';
+    if (volumeCell && tokenData.volume_1h_formatted) {
+        // 只有当volume_1h_formatted不为"$0.00"或volume_1h不为0时才更新
+        if (tokenData.volume_1h_formatted !== "$0.00" && tokenData.volume_1h !== 0) {
+            volumeCell.textContent = tokenData.volume_1h_formatted;
+        }
+    }
     
     // 买入/卖出
     const buysSellsCell = tokenRow.querySelector('td:nth-child(6)');
-    if (buysSellsCell) buysSellsCell.textContent = `${tokenData.buys_1h || 0}/${tokenData.sells_1h || 0}`;
+    if (buysSellsCell && (tokenData.buys_1h !== undefined || tokenData.sells_1h !== undefined)) {
+        buysSellsCell.textContent = `${tokenData.buys_1h || 0}/${tokenData.sells_1h || 0}`;
+    }
     
     // 持有者数量
     const holdersCell = tokenRow.querySelector('td:nth-child(7)');
-    if (holdersCell) {
+    if (holdersCell && tokenData.holders_count !== undefined) {
         holdersCell.innerHTML = tokenData.holders_count ? 
             `${tokenData.holders_count}` : 
             '<span class="text-muted">未知</span>';
@@ -560,6 +580,62 @@ function updateTokenRowWithNewData(chain, contract, tokenData) {
     }, 5000);
     
     console.log(`成功更新token行数据: ${chain}-${contract}`);
+}
+
+// 添加备用函数，直接使用DOM元素
+function updateTokenRowWithNewData2(tokenRow, tokenData) {
+    console.log("使用备用方法更新token行数据:", tokenData);
+    
+    // 更新行数据
+    // 市值
+    const marketCapCell = tokenRow.querySelector('td:nth-child(3)');
+    if (marketCapCell && tokenData.market_cap_formatted) {
+        marketCapCell.textContent = tokenData.market_cap_formatted;
+    }
+    
+    // 涨跌幅
+    const changeCell = tokenRow.querySelector('td:nth-child(4)');
+    if (changeCell && tokenData.change_percentage) {
+        // 只有当change_percentage不为"0.00%"或者change_pct_value不为0时才更新
+        if (tokenData.change_percentage !== "0.00%" || tokenData.change_pct_value !== 0) {
+            changeCell.textContent = tokenData.change_percentage;
+            changeCell.className = tokenData.change_pct_value > 0 ? 'text-success' : 
+                               tokenData.change_pct_value < 0 ? 'text-danger' : '';
+        }
+    }
+    
+    // 1h交易量
+    const volumeCell = tokenRow.querySelector('td:nth-child(5)');
+    if (volumeCell && tokenData.volume_1h_formatted) {
+        // 只有当volume_1h_formatted不为"$0.00"或volume_1h不为0时才更新
+        if (tokenData.volume_1h_formatted !== "$0.00" && tokenData.volume_1h !== 0) {
+            volumeCell.textContent = tokenData.volume_1h_formatted;
+        }
+    }
+    
+    // 买入/卖出
+    const buysSellsCell = tokenRow.querySelector('td:nth-child(6)');
+    if (buysSellsCell && (tokenData.buys_1h !== undefined || tokenData.sells_1h !== undefined)) {
+        buysSellsCell.textContent = `${tokenData.buys_1h || 0}/${tokenData.sells_1h || 0}`;
+    }
+    
+    // 持有者数量
+    const holdersCell = tokenRow.querySelector('td:nth-child(7)');
+    if (holdersCell && tokenData.holders_count !== undefined) {
+        holdersCell.innerHTML = tokenData.holders_count ? 
+            `${tokenData.holders_count}` : 
+            '<span class="text-muted">未知</span>';
+    }
+    
+    // 添加短暂的高亮效果
+    tokenRow.classList.add('new-token-highlight');
+    
+    // 5秒后移除高亮效果
+    setTimeout(() => {
+        tokenRow.classList.remove('new-token-highlight');
+    }, 5000);
+    
+    console.log(`成功更新token行数据`);
 }
 </script>
 {% endblock %}
