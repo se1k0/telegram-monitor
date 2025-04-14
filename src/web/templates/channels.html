@@ -46,7 +46,10 @@
             <div class="card">
                 <div class="card-header bg-secondary d-flex justify-content-between align-items-center channel-header">
                     <h5 class="mb-0"><strong>频道列表</strong></h5>
-                    <a href="/channels/update" class="btn btn-sm btn-light update-button">更新频道状态</a>
+                    <button class="btn btn-sm btn-light update-button" disabled title="该功能暂未开放">
+                        <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                        更新频道状态
+                    </button>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
@@ -92,9 +95,10 @@
                                     <td>
                                         <div class="btn-group">
                                             {% if channel.is_active %}
-                                            <a href="/channels/remove/{{ channel.channel_username }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('确定要停止监控此频道吗？')">
-                                                <i class="bi bi-x-circle"></i> 停止监控
-                                            </a>
+                                            <button class="btn btn-sm btn-outline-secondary" disabled title="该功能暂未开放">
+                                                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                                                停止监控
+                                            </button>
                                             {% else %}
                                             <a href="/channels/activate/{{ channel.channel_username }}" class="btn btn-sm btn-outline-success">
                                                 <i class="bi bi-check-circle"></i> 激活
