@@ -11,6 +11,9 @@ let loadingDelay = 300;       // 每条代币加载的延迟时间（毫秒）
 let batchSize = 100;           // 每批加载的代币数量，从5改为20，加快加载速度
 let totalLoaded = 0;          // 已加载的代币总数
 const maxTokensToAutoLoad = 200; // 最大自动加载的代币数量，避免过多加载
+let highestTokenId = 0;       // 记录当前已加载的最高token ID，用于检查新token
+let pollingInterval = null;   // 轮询定时器
+const POLL_INTERVAL = 30000;  // 轮询间隔，默认30秒
 
 // DOM 元素
 let tokenListBody;            // 代币列表的tbody元素
@@ -40,6 +43,249 @@ function initTokenStreamLoader() {
     
     // 添加滚动加载事件
     window.addEventListener('scroll', checkAndLoadMoreTokens);
+    
+    // 启动定期轮询检查新token
+    startPollingForNewTokens();
+}
+
+/**
+ * 启动定期轮询检查新token
+ */
+function startPollingForNewTokens() {
+    console.log("启动定期轮询检查新token");
+    
+    // 清除可能存在的旧定时器
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+    }
+    
+    // 设置新的定时器
+    pollingInterval = setInterval(checkForNewTokens, POLL_INTERVAL);
+}
+
+/**
+ * 检查是否有新的token
+ */
+function checkForNewTokens() {
+    console.log("检查新token...");
+    
+    // 如果没有设置highestTokenId，无法检查新token
+    if (highestTokenId <= 0) {
+        console.log("尚未加载任何token，跳过检查");
+        return;
+    }
+    
+    // 获取当前URL中的筛选参数
+    const urlParams = new URLSearchParams(window.location.search);
+    const chain = urlParams.get('chain') || 'all';
+    const search = urlParams.get('search') || '';
+    
+    // 构建API请求URL
+    const url = `/?check_new=1&last_id=${highestTokenId}&chain=${chain}&search=${search}&ajax=1`;
+    
+    console.log(`正在检查新token: ${url}`);
+    
+    // 发送API请求
+    fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`请求失败: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (!data.success) {
+                throw new Error(data.error || '检查新token失败');
+            }
+            
+            console.log(`检查到 ${data.new_tokens.length} 个新token`);
+            
+            // 如果有新token，添加到表格顶部
+            if (data.new_tokens && data.new_tokens.length > 0) {
+                // 更新highestTokenId
+                data.new_tokens.forEach(token => {
+                    if (token.id > highestTokenId) {
+                        highestTokenId = token.id;
+                    }
+                });
+                
+                // 将新token添加到表格顶部
+                addNewTokensToTop(data.new_tokens);
+            }
+        })
+        .catch(error => {
+            console.error('检查新token时出错:', error);
+        });
+}
+
+/**
+ * 将新token添加到表格顶部
+ * @param {Array} tokens 新token数据数组
+ */
+function addNewTokensToTop(tokens) {
+    console.log(`添加 ${tokens.length} 个新token到顶部`);
+    
+    // 从后往前添加，使最新的token显示在最上面
+    for (let i = tokens.length - 1; i >= 0; i--) {
+        const token = tokens[i];
+        
+        // 检查token是否已存在
+        const existingRow = document.querySelector(`tr[data-id="${token.id}"]`);
+        if (existingRow) {
+            console.log(`token ${token.id} 已存在，更新现有行`);
+            updateTokenRowWithNewData(token.chain, token.contract, token);
+            continue;
+        }
+        
+        // 创建新的表格行
+        const row = document.createElement('tr');
+        row.className = `${token.is_profit ? 'table-profit' : 'table-loss'} token-fade-in new-token-highlight`;
+        row.style.opacity = '0';  // 初始设置为不可见，用于淡入动画
+        row.dataset.id = token.id;
+        row.dataset.chain = token.chain;
+        row.dataset.contract = token.contract;
+        
+        // 设置行内容
+        row.innerHTML = `
+            <td>
+                <div class="d-flex align-items-center">
+                    ${token.image_url ? 
+                    `<img src="${token.image_url}" class="me-2 token-img" alt="${token.token_symbol}">` : 
+                    `<div class="token-placeholder me-2">${token.token_symbol.charAt(0)}</div>`}
+                    <div>
+                        <div class="fw-bold token-name-link" onclick="openTokenDetailModal('${token.chain}', '${token.contract}')">${token.token_symbol}</div>
+                        <div class="small text-muted">${token.contract.substring(0, 10)}...</div>
+                    </div>
+                </div>
+            </td>
+            <td>${token.chain}</td>
+            <td>${token.market_cap_formatted}</td>
+            <td class="${token.change_pct_value > 0 ? 'text-success' : token.change_pct_value < 0 ? 'text-danger' : ''}">
+                ${token.change_percentage}
+            </td>
+            <td>${token.volume_1h_formatted || '$0'}</td>
+            <td>${token.buys_1h || 0}/${token.sells_1h || 0}</td>
+            <td>
+                ${token.holders_count ? token.holders_count : '<span class="text-muted">未知</span>'}
+            </td>
+            <td class="community-reach-cell">${token.community_reach || 0}</td>
+            <td class="spread-count-cell">${token.spread_count || 0}</td>
+            <td>${token.first_update_formatted}</td>
+            <td>
+                <div class="btn-group">
+                    <a href="${getDexscreenerUrl(token.chain, token.contract)}" target="_blank" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-graph-up"></i>
+                    </a>
+                    <button class="btn btn-sm btn-outline-success like-btn" data-chain="${token.chain}" data-contract="${token.contract}">
+                        <i class="bi bi-heart"></i> <span class="like-count">${token.likes_count || 0}</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-info token-detail-btn" data-chain="${token.chain}" data-contract="${token.contract}">
+                        <i class="bi bi-info-circle"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning token-refresh-btn" 
+                            data-chain="${token.chain}" 
+                            data-contract="${token.contract}" 
+                            data-token-symbol="${token.token_symbol}"
+                            onclick="refreshTokenData(this)" 
+                            title="刷新代币数据">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                    </button>
+                </div>
+            </td>
+        `;
+        
+        // 添加到表格顶部
+        if (tokenListBody.firstChild) {
+            tokenListBody.insertBefore(row, tokenListBody.firstChild);
+        } else {
+            tokenListBody.appendChild(row);
+        }
+        
+        // 添加淡入效果
+        setTimeout(() => {
+            row.style.opacity = '1';
+        }, 10);
+        
+        // 绑定事件
+        bindTokenRowEvents(row);
+        
+        // 播放新token添加提示音
+        playNewTokenSound();
+        
+        // 10秒后移除高亮效果
+        setTimeout(() => {
+            row.classList.remove('new-token-highlight');
+        }, 10000);
+    }
+}
+
+/**
+ * 播放新token添加提示音
+ */
+function playNewTokenSound() {
+    try {
+        // 方式1: 优先使用up.mp3文件
+        const audio = new Audio('/static/sounds/up.mp3');
+        audio.volume = 0.5;
+        
+        // 添加错误处理，如果文件无法播放则尝试备用方式
+        audio.onerror = function() {
+            console.log('无法播放up.mp3文件，尝试备用方式');
+            playFallbackSound();
+        };
+        
+        // 播放音频
+        audio.play().catch(e => {
+            console.log('播放up.mp3时出错:', e);
+            playFallbackSound();
+        });
+    } catch (e) {
+        console.log('播放提示音时出错:', e);
+        playFallbackSound();
+    }
+}
+
+/**
+ * 播放备用提示音（当主要提示音无法播放时）
+ */
+function playFallbackSound() {
+    try {
+        // 备用方式1: 创建内置提示音
+        const context = new (window.AudioContext || window.webkitAudioContext)();
+        if (context) {
+            const oscillator = context.createOscillator();
+            const gainNode = context.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(context.destination);
+            
+            // 配置音调
+            oscillator.type = 'sine';
+            oscillator.frequency.value = 880; // A5音
+            gainNode.gain.value = 0.1; // 音量
+            
+            // 播放短暂的提示音
+            oscillator.start();
+            setTimeout(() => {
+                oscillator.stop();
+            }, 200);
+            
+            return;
+        }
+        
+        // 备用方式2: 尝试使用HTML5音频API和base64编码音频
+        const fallbackAudio = new Audio();
+        fallbackAudio.volume = 0.5;
+        
+        // base64编码的短音频数据
+        const soundData = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj2n7/+jTuKt1Pl4KCMzw/z/SgAYN/r/qyEMFMv//5sGCRvX//+RBg4k4P//fAMSLOX//20BFTPq//9lABk46P//XwAfP+j//1gAJEPq//9OACpH7P//QAAvTOL//zQAM07O//8vADlRv///LQA/U6///ysARlSg//8qAEtVj///JwBSVoD//yYAWld2//8iAGFYaP//IABnWlr//xsAb1tL//8WAHZcPv//EgB8XjH//w8AhF8m//8JAIxgGf//BQCUYg3//wEAmWQF//8AAJ5k////AACiZf///wAApWb+//8AAKhn/v//AACrac///wAArmf7//8AALBn+v//AACzaPj//wAAtmj3//8AALlp9v//AAC8afX//wAAwWr0//8AAMNq8v//AADHavH//wAAymrw//8AAM1r7///AADRa+7//wAA02vt//8AANZs6///AADYbOn//wAA3Gzo//8AAN5s5///AADhbOb//wAA5Gzl//8AAOds5P//AADpbOP//wAA7G3i//8AAO5t4f//AADwbeD//wAA8m7f//8AAPRu3v//AAD2bt3//wAA+G7c//8AAPpu3P//AAD8b9v//wAA/m/a//8AAP9v2v//AAAA';
+
+        fallbackAudio.src = soundData;
+        fallbackAudio.play().catch(e => console.log('无法播放备用提示音:', e));
+    } catch (e) {
+        console.log('播放备用提示音时出错:', e);
+    }
 }
 
 /**
@@ -98,6 +344,13 @@ function loadTokensBatch() {
             
             // 逐条添加代币到表格
             if (data.tokens.length > 0) {
+                // 更新highestTokenId，用于检查新token
+                data.tokens.forEach(token => {
+                    if (token.id > highestTokenId) {
+                        highestTokenId = token.id;
+                    }
+                });
+                
                 addTokensSequentially(data.tokens);
             } else {
                 // 如果没有获取到代币，显示全部加载完成
