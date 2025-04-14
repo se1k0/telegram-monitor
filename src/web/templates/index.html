@@ -131,16 +131,6 @@
     .new-token-highlight {
         animation: newTokenHighlight 5s ease-out;
     }
-    /* 添加无限滚动加载提示样式 */
-    .infinite-scroll-loader {
-        text-align: center;
-        padding: 20px;
-        display: none;
-    }
-    .infinite-scroll-loader .spinner-border {
-        width: 2rem;
-        height: 2rem;
-    }
     /* Token名称和详情按钮样式 */
     .token-name-link {
         cursor: pointer;
@@ -157,9 +147,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid py-3" 
-     data-has-more="{% if pagination and pagination.has_more %}true{% else %}false{% endif %}"
-     data-next-page="{% if pagination and pagination.next_page %}{{ pagination.next_page }}{% else %}0{% endif %}">
+<div class="container-fluid py-3">
     <!-- 搜索和筛选区域 -->
     <div class="search-container">
         <div class="row">
@@ -199,27 +187,18 @@
     </div>
     {% endif %}
 
+    <!-- 添加加载方式提示 -->
+    <div class="alert alert-success mb-3 new-feature-alert">
+        <div class="d-flex align-items-center">
+            <i class="bi bi-lightning-fill me-2"></i>
+            <strong>页面加载已优化!</strong>
+            <button type="button" class="btn-close ms-auto" data-bs-dismiss="alert" aria-label="关闭"></button>
+        </div>
+        <p class="mb-0 mt-1">页面现在会立即显示，不用等待所有数据加载完成。数据将在后台自动加载，提供更流畅的体验。</p>
+    </div>
+
     <!-- 使用token_list.html模板展示代币列表 -->
     {% include 'partials/token_list.html' %}
-
-    <!-- 如果没有数据，显示提示信息 -->
-    {% if not tokens or tokens|length == 0 %}
-    <div class="row">
-        <div class="col-12 text-center py-5">
-            <i class="bi bi-search display-1 text-muted"></i>
-            <h3 class="mt-3">暂无代币数据</h3>
-            <p class="text-muted">请使用搜索功能查找代币，或等待系统收集更多数据</p>
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- 添加无限滚动加载提示 -->
-    <div class="infinite-scroll-loader" id="infinite-scroll-loader">
-        <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">加载中...</span>
-        </div>
-        <div class="mt-2">正在加载更多代币...</div>
-    </div>
 </div>
 
 <!-- 添加Token详情弹出层模板 -->
@@ -233,86 +212,53 @@
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0/dist/chartjs-adapter-moment.min.js"></script>
 <!-- 添加Token详情弹出层脚本 -->
 <script src="{{ url_for('static', filename='js/token_detail_modal.js') }}"></script>
+<!-- 添加Token流式加载脚本 -->
+<script src="{{ url_for('static', filename='js/token_stream_loader.js') }}"></script>
 
 <script>
-// 定义全局变量，确保在所有函数中可用
-let isLoading = false;
-let hasMorePages = false;
-let nextPage = 0;
-
-// 防抖实现 - 限制同一代币短时间内多次点击
-const debounceTimers = {};
-const clickCooldowns = {};
-const COOLDOWN_PERIOD = 1000; // 1秒冷却时间
-
+// 复制文本到剪贴板
 function copyToClipboard(text, label) {
     navigator.clipboard.writeText(text).then(function() {
         alert(label + " 已复制到剪贴板");
     });
 }
 
-function debounce(func, wait, chainContract) {
-    return function() {
-        const context = this;
-        const args = arguments;
-        
-        // 检查该代币是否在冷却期内
-        const now = Date.now();
-        if (clickCooldowns[chainContract] && (now - clickCooldowns[chainContract] < COOLDOWN_PERIOD)) {
-            console.log(`点击过于频繁: ${chainContract}, 剩余冷却时间: ${Math.ceil((COOLDOWN_PERIOD - (now - clickCooldowns[chainContract])) / 1000)}秒`);
-            // 显示冷却提示
-            const cooldownMsg = document.createElement('div');
-            cooldownMsg.className = 'alert alert-warning alert-dismissible fade show';
-            cooldownMsg.style.position = 'fixed';
-            cooldownMsg.style.top = '10px';
-            cooldownMsg.style.right = '10px';
-            cooldownMsg.style.zIndex = '9999';
-            cooldownMsg.innerHTML = `
-                <strong>请勿频繁点击!</strong> 请等待数据加载完成。
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            `;
-            document.body.appendChild(cooldownMsg);
-            
-            // 5秒后自动移除提示
-            setTimeout(() => {
-                cooldownMsg.remove();
-            }, 5000);
-            
-            return;
-        }
-        
-        clearTimeout(debounceTimers[chainContract]);
-        debounceTimers[chainContract] = setTimeout(function() {
-            func.apply(context, args);
-            // 设置点击冷却时间
-            clickCooldowns[chainContract] = Date.now();
-        }, wait);
-    };
-}
-
-// 页面加载完成后注册事件
+// 处理新功能提示
 document.addEventListener('DOMContentLoaded', function() {
-    console.log("页面加载完成，初始化事件处理...");
+    const featureAlert = document.querySelector('.new-feature-alert');
+    if (!featureAlert) return;
     
-    // 从DOM元素的data属性中获取分页信息
-    const container = document.querySelector('.container-fluid.py-3');
-    if (container) {
-        hasMorePages = container.dataset.hasMore === 'true';
-        nextPage = parseInt(container.dataset.nextPage || '0');
-        console.log(`初始分页状态: hasMorePages=${hasMorePages}, nextPage=${nextPage}`);
+    // 检查是否已经显示过此提示
+    const featureAlertShown = localStorage.getItem('fastLoadFeatureAlertShown');
+    const currentTime = new Date().getTime();
+    
+    // 如果已经显示过并且没有超过7天，则隐藏
+    if (featureAlertShown) {
+        const lastShownTime = parseInt(featureAlertShown);
+        const daysPassed = (currentTime - lastShownTime) / (1000 * 60 * 60 * 24);
+        
+        if (daysPassed < 7) {
+            featureAlert.classList.add('d-none');
+        } else {
+            // 超过7天，更新时间戳
+            localStorage.setItem('fastLoadFeatureAlertShown', currentTime.toString());
+        }
+    } else {
+        // 首次显示，记录时间戳
+        localStorage.setItem('fastLoadFeatureAlertShown', currentTime.toString());
     }
     
-    // 添加滚动事件监听器，实现无限滚动
-    window.addEventListener('scroll', function() {
-        if (hasMorePages && !isLoading) {
-            // 当用户滚动到距离底部200px时，加载更多内容
-            if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
-                console.log("触发无限滚动加载");
-                loadMoreTokens();
-            }
-        }
-    });
+    // 点击关闭按钮时隐藏并记录
+    const closeBtn = featureAlert.querySelector('.btn-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function() {
+            localStorage.setItem('fastLoadFeatureAlertShown', currentTime.toString());
+        });
+    }
+});
 
+// 添加强制刷新功能
+document.addEventListener('DOMContentLoaded', function() {
     // 添加强制刷新功能
     const refreshBtn = document.getElementById('refreshDataBtn');
     if (refreshBtn) {
@@ -454,207 +400,166 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.body.appendChild(errorMsg);
             });
         });
-                } else {
+    } else {
         console.warn("未找到刷新按钮!");
     }
 });
 
-// 加载更多token
-function loadMoreTokens() {
-    console.log(`开始加载更多代币: isLoading=${isLoading}, hasMorePages=${hasMorePages}, nextPage=${nextPage}`);
+// 刷新单个token数据的函数
+function refreshTokenData(buttonElement) {
+    if (!buttonElement) return;
     
-    if (isLoading || !hasMorePages) {
-        console.log("忽略加载请求: 正在加载中或没有更多页面");
+    const chain = buttonElement.getAttribute('data-chain');
+    const contract = buttonElement.getAttribute('data-contract');
+    const tokenSymbol = buttonElement.getAttribute('data-token-symbol');
+    
+    if (!chain || !contract) {
+        console.error("刷新token数据失败：缺少chain或contract参数");
         return;
     }
     
-    isLoading = true;
+    // 显示加载状态
+    const spinnerElement = buttonElement.querySelector('.spinner-border');
+    const iconElement = buttonElement.querySelector('.bi-arrow-clockwise');
     
-    // 确保加载提示元素存在
-    let loader = document.getElementById('infinite-scroll-loader');
+    if (spinnerElement) spinnerElement.classList.remove('d-none');
+    if (iconElement) iconElement.classList.add('d-none');
     
-    // 如果加载提示元素不存在，创建一个新的
-    if (!loader) {
-        loader = document.createElement('div');
-        loader.id = 'infinite-scroll-loader';
-        loader.className = 'infinite-scroll-loader text-center my-3';
-        loader.innerHTML = `
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">加载中...</span>
-            </div>
-            <div class="mt-2">正在加载更多代币...</div>
-        `;
+    buttonElement.disabled = true;
+    
+    console.log(`开始刷新token数据: ${chain}-${contract}`);
+    
+    // 发送刷新请求
+    fetch(`/api/refresh_token/${chain}/${contract}`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log("刷新token响应:", data);
         
-        // 将加载提示添加到容器末尾
-        const container = document.querySelector('.container-fluid.py-3');
-        if (container) {
-            container.appendChild(loader);
-        }
-    }
-    
-    // 显示加载提示
-    if (loader) {
-        loader.style.display = 'block';
-    }
-    
-    // 从当前URL获取参数，而不是使用模板变量
-    const urlParams = new URLSearchParams(window.location.search);
-    const chain = urlParams.get('chain') || 'all';
-    const search = urlParams.get('search') || '';
-    
-    // 构建请求URL
-    const url = `/?page=${nextPage}&chain=${chain}&search=${search}&ajax=1`;
-    console.log(`正在请求下一页数据: ${url}`);
-    
-    // 发送AJAX请求获取下一页数据
-    fetch(url)
-        .then(response => response.json())
-        .then(data => {
-            console.log("加载更多代币响应:", data);
+        // 恢复按钮状态
+        if (spinnerElement) spinnerElement.classList.add('d-none');
+        if (iconElement) iconElement.classList.remove('d-none');
+        buttonElement.disabled = false;
+        
+        if (data.success) {
+            // 显示成功提示
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-success alert-dismissible fade show';
+            notification.style.position = 'fixed';
+            notification.style.top = '10px';
+            notification.style.right = '10px';
+            notification.style.zIndex = '9999';
+            notification.innerHTML = `
+                <strong>刷新成功!</strong> ${tokenSymbol || '代币'} 数据已更新。
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.body.appendChild(notification);
             
-            if (data.success) {
-                // 添加新的代币行到表格中
-                const tokensTable = document.querySelector('.table tbody');
-                
-                if (tokensTable && data.tokens && data.tokens.length > 0) {
-                    console.log(`添加 ${data.tokens.length} 个新代币到列表`);
-                
-                data.tokens.forEach(token => {
-                        // 创建新行
-                        const row = document.createElement('tr');
-                        
-                        // 设置行样式和数据属性
-                        row.className = token.is_profit ? 'table-profit' : 'table-loss';
-                        row.dataset.chain = token.chain;
-                        row.dataset.contract = token.contract;
-                        row.dataset.id = token.id;
-                        
-                        // 生成行内容 - 确保匹配当前token_list.html中的列数和结构
-                        row.innerHTML = `
-                        <td>
-                            <div class="d-flex align-items-center">
-                                ${token.image_url ? 
-                                `<img src="${token.image_url}" class="me-2 token-img" alt="${token.token_symbol}">` : 
-                                `<div class="token-placeholder me-2">${token.token_symbol.charAt(0)}</div>`}
-                                <div>
-                                    <div class="fw-bold token-name-link" onclick="openTokenDetailModal('${token.chain}', '${token.contract}')">${token.token_symbol}</div>
-                                    <div class="small text-muted">${token.contract.substring(0, 10)}...</div>
-                                </div>
-                            </div>
-                        </td>
-                        <td>${token.chain}</td>
-                        <td>${token.market_cap_formatted}</td>
-                        <td class="${token.change_pct_value > 0 ? 'text-success' : token.change_pct_value < 0 ? 'text-danger' : ''}">
-                            ${token.change_percentage}
-                        </td>
-                        <td>${token.volume_1h_formatted || '$0'}</td>
-                        <td>${token.buys_1h || 0}/${token.sells_1h || 0}</td>
-                        <td>
-                            ${token.holders_count ? token.holders_count : '<span class="text-muted">未知</span>'}
-                        </td>
-                        <td>${token.community_reach || 0}</td>
-                        <td>${token.spread_count || 0}</td>
-                        <td>${token.first_update_formatted}</td>
-                        <td>
-                            <div class="btn-group">
-                                <a href="${getDexscreenerUrl(token.chain, token.contract)}" target="_blank" class="btn btn-sm btn-outline-primary">
-                                    <i class="bi bi-graph-up"></i>
-                                </a>
-                                <button class="btn btn-sm btn-outline-success like-btn" data-chain="${token.chain}" data-contract="${token.contract}">
-                                    <i class="bi bi-heart"></i> <span class="like-count">${token.likes_count || 0}</span>
-                                </button>
-                                <button class="btn btn-sm btn-outline-info token-detail-btn" data-chain="${token.chain}" data-contract="${token.contract}">
-                                    <i class="bi bi-info-circle"></i>
-                                </button>
-                            </div>
-                        </td>
-                        `;
-                        
-                        // 添加到表格
-                        tokensTable.appendChild(row);
-                    });
-                    
-                    // 重新绑定新添加行的事件
-                    document.querySelectorAll('.token-detail-btn:not([data-event-bound])').forEach(btn => {
-                        btn.setAttribute('data-event-bound', 'true');
-                        btn.addEventListener('click', function(event) {
-                            event.preventDefault();
-                            const chain = this.getAttribute('data-chain');
-                            const contract = this.getAttribute('data-contract');
-                            
-                            if (chain && contract) {
-                                openTokenDetailModal(chain, contract);
-                            }
-                        });
-                    });
-                    
-                    // 更新分页状态
-                    if (data.pagination) {
-                        nextPage = data.pagination.next_page || 0;
-                        hasMorePages = data.pagination.has_more || false;
-                        console.log(`更新分页状态: nextPage=${nextPage}, hasMorePages=${hasMorePages}`);
-                    } else {
-                        console.warn("响应中缺少分页信息");
-                    }
-                } else {
-                    console.warn(`没有代币或找不到表格: tokensTable=${!!tokensTable}, tokens=${data.tokens?.length || 0}`);
-                    hasMorePages = false;
-                }
-            } else {
-                console.error('加载更多代币失败:', data.error);
-                
-                // 显示错误提示
-                const errorDiv = document.createElement('div');
-                errorDiv.className = 'alert alert-danger mt-3';
-                errorDiv.textContent = '加载更多代币失败: ' + (data.error || '未知错误');
-                
-                const container = document.querySelector('.container-fluid.py-3');
-                if (container && loader) {
-                    container.insertBefore(errorDiv, loader);
-                    
-                    // 5秒后自动移除错误提示
-                    setTimeout(() => errorDiv.remove(), 5000);
-                }
+            // 5秒后自动移除提示
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+            
+            // 如果返回了更新后的token数据，更新页面上的对应行
+            if (data.token) {
+                updateTokenRowWithNewData(chain, contract, data.token);
             }
-        })
-        .catch(error => {
-            console.error('发生错误:', error);
-            
+        } else {
             // 显示错误提示
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'alert alert-danger mt-3';
-            errorDiv.textContent = '加载数据时出错: ' + error.message;
+            const notification = document.createElement('div');
+            notification.className = 'alert alert-danger alert-dismissible fade show';
+            notification.style.position = 'fixed';
+            notification.style.top = '10px';
+            notification.style.right = '10px';
+            notification.style.zIndex = '9999';
+            notification.innerHTML = `
+                <strong>刷新失败!</strong> ${data.error || '未知错误'}。
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            document.body.appendChild(notification);
             
-            const container = document.querySelector('.container-fluid.py-3');
-            if (container && loader) {
-                container.insertBefore(errorDiv, loader);
-                
-                // 5秒后自动移除错误提示
-                setTimeout(() => errorDiv.remove(), 5000);
-            }
-        })
-        .finally(() => {
-            isLoading = false;
-            // 隐藏加载提示
-            if (loader) {
-                // 不要移除元素，只隐藏它，以便下次使用
-                loader.style.display = 'none';
-            }
-            console.log("完成加载更多代币");
-        });
+            // 5秒后自动移除提示
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+        }
+    })
+    .catch(error => {
+        console.error("刷新token数据出错:", error);
+        
+        // 恢复按钮状态
+        if (spinnerElement) spinnerElement.classList.add('d-none');
+        if (iconElement) iconElement.classList.remove('d-none');
+        buttonElement.disabled = false;
+        
+        // 显示错误提示
+        const notification = document.createElement('div');
+        notification.className = 'alert alert-danger alert-dismissible fade show';
+        notification.style.position = 'fixed';
+        notification.style.top = '10px';
+        notification.style.right = '10px';
+        notification.style.zIndex = '9999';
+        notification.innerHTML = `
+            <strong>刷新失败!</strong> ${error.message || '网络错误'}。
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        `;
+        document.body.appendChild(notification);
+        
+        // 5秒后自动移除提示
+        setTimeout(() => {
+            notification.remove();
+        }, 5000);
+    });
 }
 
-// 辅助函数 - 生成DexScreener URL
-function getDexscreenerUrl(chain, contract) {
-    if (chain === 'SOL') {
-        return `https://dexscreener.com/solana/${contract}`;
-    } else if (chain === 'ETH') {
-        return `https://dexscreener.com/ethereum/${contract}`;
-    } else if (chain === 'BSC') {
-        return `https://dexscreener.com/bsc/${contract}`;
-    } else {
-        return `https://dexscreener.com/${chain.toLowerCase()}/${contract}`;
+// 更新表格中的token行数据
+function updateTokenRowWithNewData(chain, contract, tokenData) {
+    // 找到对应的行
+    const tokenRow = document.querySelector(`table tbody tr[data-chain="${chain}"][data-contract="${contract}"]`);
+    if (!tokenRow) {
+        console.warn(`找不到要更新的token行: ${chain}-${contract}`);
+        return;
     }
+    
+    // 更新行数据
+    // 市值
+    const marketCapCell = tokenRow.querySelector('td:nth-child(3)');
+    if (marketCapCell) marketCapCell.textContent = tokenData.market_cap_formatted;
+    
+    // 涨跌幅
+    const changeCell = tokenRow.querySelector('td:nth-child(4)');
+    if (changeCell) {
+        changeCell.textContent = tokenData.change_percentage;
+        changeCell.className = tokenData.change_pct_value > 0 ? 'text-success' : 
+                               tokenData.change_pct_value < 0 ? 'text-danger' : '';
+    }
+    
+    // 1h交易量
+    const volumeCell = tokenRow.querySelector('td:nth-child(5)');
+    if (volumeCell) volumeCell.textContent = tokenData.volume_1h_formatted || '$0';
+    
+    // 买入/卖出
+    const buysSellsCell = tokenRow.querySelector('td:nth-child(6)');
+    if (buysSellsCell) buysSellsCell.textContent = `${tokenData.buys_1h || 0}/${tokenData.sells_1h || 0}`;
+    
+    // 持有者数量
+    const holdersCell = tokenRow.querySelector('td:nth-child(7)');
+    if (holdersCell) {
+        holdersCell.innerHTML = tokenData.holders_count ? 
+            `${tokenData.holders_count}` : 
+            '<span class="text-muted">未知</span>';
+    }
+    
+    // 添加短暂的高亮效果
+    tokenRow.classList.add('new-token-highlight');
+    
+    // 5秒后移除高亮效果
+    setTimeout(() => {
+        tokenRow.classList.remove('new-token-highlight');
+    }, 5000);
+    
+    console.log(`成功更新token行数据: ${chain}-${contract}`);
 }
 </script>
 {% endblock %}

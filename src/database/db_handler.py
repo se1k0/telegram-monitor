@@ -67,6 +67,216 @@ db_performance_stats = {
     'total_retries': 0
 }
 
+# 添加常量定义 - 支持的区块链及其代码
+CHAINS = {
+    'SOL': ['solana', 'sol', '索拉纳', '索兰纳', 'raydium', 'orca', 'jupiter'],
+    'ETH': ['ethereum', 'eth', '以太坊', '以太', 'uniswap', 'sushiswap'],
+    'BSC': ['binance', 'bsc', 'bnb', '币安', 'pancakeswap', 'poocoin'],
+    'ARB': ['arbitrum', 'arb', '阿比特龙', '아비트럼'],
+    'BASE': ['base', 'basechain', 'coinbase', '贝斯链', '베이스'],
+    'AVAX': ['avalanche', 'avax', '雪崩链', '아발란체'],
+    'MATIC': ['polygon', 'matic', '波利冈', '폴리곤'],
+    'OP': ['optimism', 'op', '乐观链', '옵티미즘']
+}
+
+# 添加EVM链列表常量
+EVM_CHAINS = ['ETH', 'BSC', 'ARB', 'BASE', 'MATIC', 'AVAX', 'OP']
+NON_EVM_CHAINS = ['SOL']
+
+# 链的区块浏览器
+CHAIN_EXPLORERS = {
+    'SOL': ['solscan.io', 'explorer.solana.com'],
+    'ETH': ['etherscan.io'],
+    'BSC': ['bscscan.com'],
+    'ARB': ['arbiscan.io'],
+    'BASE': ['basescan.org'],
+    'AVAX': ['snowtrace.io'],
+    'MATIC': ['polygonscan.com'],
+    'OP': ['optimistic.etherscan.io']
+}
+
+# DEX平台URL匹配
+DEX_PATTERNS = {
+    'SOL': [r'raydium\.io', r'orca\.so', r'jup\.ag'],
+    'ETH': [r'uniswap\.org', r'app\.uniswap\.org', r'sushi\.com'],
+    'BSC': [r'pancakeswap\.finance', r'poocoin\.app']
+}
+
+# 推特账号与链的映射
+TWITTER_CHAIN_MAP = {
+    'cz_binance': 'BSC',
+    'binance': 'BSC',
+    'bnbchain': 'BSC',
+    'ethereum': 'ETH',
+    'vitalikbuterin': 'ETH',
+    'solana': 'SOL',
+    'arbitrum': 'ARB',
+    'optimism': 'OP',
+    'avalancheavax': 'AVAX',
+    'polygonlabs': 'MATIC',
+    'base': 'BASE'
+}
+
+# URL正则表达式模式
+URL_PATTERNS = [
+    r'https?://\S+',  # 标准HTTP/HTTPS URL
+    r'www\.\S+',      # 以www开头的URL
+    r't\.me/\S+',     # Telegram链接
+    r'twitter\.com/\S+',  # Twitter链接
+    r'x\.com/\S+'     # X.com链接
+]
+
+# 合约地址匹配模式
+CONTRACT_PATTERNS = [
+    # 带标记的合约地址
+    r'(?:📝|合约[：:]|[Cc]ontract[：:])[ ]*([0-9a-fA-FxX]{8,})',
+    r'合约地址[：:][ ]*([0-9a-fA-FxX]{8,})',
+    r'地址[：:][ ]*([0-9a-fA-FxX]{8,})',
+    # 标准以太坊地址格式
+    r'\b(0x[0-9a-fA-F]{40})\b',
+    # 其他可能的合约地址格式
+    r'\b([a-zA-Z0-9]{32,50})\b'
+]
+
+# 辅助函数：查找文本中的所有URL
+def find_urls_in_text(text: str) -> List[str]:
+    """
+    从文本中提取所有URL
+    
+    Args:
+        text: 要处理的文本
+        
+    Returns:
+        List[str]: 提取出的URL列表
+    """
+    if not text:
+        return []
+    
+    # 合并所有URL模式
+    combined_pattern = '|'.join(URL_PATTERNS)
+    
+    # 提取所有URL
+    urls = re.findall(combined_pattern, text)
+    
+    # 清理URL
+    clean_urls = []
+    for url in urls:
+        # 处理URL末尾可能的标点符号
+        markers = [' ', '\n', '\t', ',', ')', ']', '}', '"', "'", '。', '，', '：', '；']
+        end_idx = len(url)
+        for marker in markers:
+            marker_idx = url.find(marker)
+            if marker_idx > 0 and marker_idx < end_idx:
+                end_idx = marker_idx
+        
+        clean_url = url[:end_idx].strip()
+        if clean_url:
+            clean_urls.append(clean_url)
+    
+    return clean_urls
+
+# 辅助函数：根据URL判断链
+def get_chain_from_url(url: str) -> Optional[str]:
+    """
+    从URL中判断区块链类型
+    
+    Args:
+        url: URL字符串
+        
+    Returns:
+        Optional[str]: 链名称或None
+    """
+    url_lower = url.lower()
+    
+    # DexScreener URL格式
+    dexscreener_match = re.search(r'(?:https?://)?(?:www\.)?dexscreener\.com/([a-zA-Z0-9]+)(?:/[^/\s]+)?', url_lower)
+    if dexscreener_match:
+        chain_str = dexscreener_match.group(1).upper()
+        dexscreener_map = {
+            'SOLANA': 'SOL',
+            'ETHEREUM': 'ETH',
+            'BSC': 'BSC',
+            'ARBITRUM': 'ARB',
+            'BASE': 'BASE',
+            'AVALANCHE': 'AVAX',
+            'POLYGON': 'MATIC',
+            'OPTIMISM': 'OP'
+        }
+        if chain_str in dexscreener_map:
+            return dexscreener_map[chain_str]
+    
+    # GMGN.ai URL格式
+    gmgn_match = re.search(r'gmgn\.ai(?:/[^/]+)?/([^/]+)/token/', url_lower)
+    if gmgn_match:
+        chain_id = gmgn_match.group(1).upper()
+        if chain_id in ['BSC', 'ETH', 'ARBITRUM', 'BASE', 'POLYGON', 'OPTIMISM']:
+            if chain_id == 'ARBITRUM':
+                return 'ARB'
+            elif chain_id == 'POLYGON':
+                return 'MATIC'
+            elif chain_id == 'OPTIMISM':
+                return 'OP'
+            return chain_id
+    
+    # 检查区块浏览器域名
+    for chain, explorers in CHAIN_EXPLORERS.items():
+        for explorer in explorers:
+            if explorer in url_lower:
+                return chain
+    
+    # 检查DEX域名
+    for chain, patterns in DEX_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, url_lower):
+                return chain
+    
+    # 检查常见关键词
+    for chain, keywords in CHAINS.items():
+        for keyword in keywords:
+            if keyword.lower() in url_lower:
+                return chain
+    
+    # 推特账号判断
+    twitter_match = re.search(r'(?:twitter\.com|x\.com)/([^/\s]+)', url_lower)
+    if twitter_match:
+        twitter_user = twitter_match.group(1).lower()
+        if twitter_user in TWITTER_CHAIN_MAP:
+            return TWITTER_CHAIN_MAP[twitter_user]
+    
+    return None
+
+# 辅助函数：判断地址格式对应的链
+def get_chain_from_address(address: str) -> Optional[str]:
+    """
+    根据合约地址格式判断可能的链
+    
+    Args:
+        address: 合约地址
+        
+    Returns:
+        Optional[str]: 链名称、'EVM'表示以太坊风格地址(需要进一步确定具体链)，或None
+    """
+    if not address:
+        return None
+        
+    # EVM格式地址(以太坊、BSC等) - 0x开头的42位16进制数
+    if re.match(r'^0x[a-fA-F0-9]{40}$', address):
+        return 'EVM'
+    
+    # Solana格式地址 - Base58编码，不以0x开头，通常32-44位
+    if re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', address) and not address.startswith('0x'):
+        return 'SOL'
+    
+    # 检查是否可能是不完整的EVM地址
+    if address.startswith('0x') and len(address) >= 10:
+        logger.warning(f"发现可能不完整的EVM格式地址: {address}")
+        return 'EVM_PARTIAL'
+    
+    # 针对特殊格式的地址，可以扩展更多判断
+    # 例如: Arweave、NEAR、Cosmos等
+    
+    return None
+
 @contextmanager
 def session_scope():
     """提供事务范围的会话上下文管理器
@@ -559,121 +769,187 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
         cleaned_text = re.sub(r'\s+', ' ', message_text)
         cleaned_text = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', cleaned_text)  # 移除零宽字符
         
-        # 如果未提供链信息，尝试从消息中提取
+        # 获取所有URL
+        urls = find_urls_in_text(cleaned_text)
+        
+        # 首先尝试从URL判断链信息
+        chain_from_url = None
+        for url in urls:
+            detected_chain = get_chain_from_url(url)
+            if detected_chain:
+                logger.info(f"从URL '{url}' 检测到链信息: {detected_chain}")
+                chain_from_url = detected_chain
+                break
+        
+        # 如果从URL发现了链信息，优先使用
+        if chain_from_url:
+            chain = chain_from_url
+        
+        # 如果未提供链信息或为UNKNOWN，尝试从消息中提取
         if not chain or chain == "UNKNOWN":
-            # 先尝试检测市值单位，这是最可靠的链标识
-            mc_pattern = re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)', cleaned_text, re.IGNORECASE)
-            if mc_pattern:
-                logger.info(f"从市值单位(BNB)判断为BSC链")
+            # 先检查消息中的市值单位来判断链
+            if re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)', cleaned_text, re.IGNORECASE):
+                logger.info("从市值单位(BNB)判断为BSC链")
                 chain = 'BSC'
+            elif re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:eth|ETH)', cleaned_text, re.IGNORECASE):
+                logger.info("从市值单位(ETH)判断为ETH链")
+                chain = 'ETH'
+            elif re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:sol|SOL)', cleaned_text, re.IGNORECASE):
+                logger.info("从市值单位(SOL)判断为SOL链")
+                chain = 'SOL'
             else:
-                # 不是BSC，尝试其他链的提取
+                # 试图从整个消息文本中提取链信息
                 chain_from_message = extract_chain_from_message(message_text)
                 if chain_from_message:
                     logger.info(f"从消息中提取到链信息: {chain_from_message}")
                     chain = chain_from_message
         
         # 提取代币符号
-        # 寻找常见格式的代币符号，如$XYZ
         token_symbol = None
         symbol_match = re.search(r'\$([A-Za-z0-9_]{1,20})\b', cleaned_text)
         if symbol_match:
             token_symbol = symbol_match.group(1).upper()
             logger.info(f"从消息中提取到代币符号: {token_symbol}")
+        else:
+            # 尝试从第一行或其他格式中提取代币符号
+            first_line = cleaned_text.split('\n')[0] if '\n' in cleaned_text else cleaned_text
+            # 查找引号、星号或其他标记之间的潜在代币符号
+            symbol_patterns = [
+                r'["\']([A-Za-z0-9_]{1,10})["\']', # 引号中的符号
+                r'\*\*([A-Za-z0-9_]{1,10})\*\*',   # Markdown加粗中的符号
+                r'`([A-Za-z0-9_]{1,10})`'          # 代码块中的符号
+            ]
+            
+            for pattern in symbol_patterns:
+                match = re.search(pattern, first_line)
+                if match:
+                    potential_symbol = match.group(1).upper()
+                    # 确保提取的不是常见词
+                    common_words = ['NEW', 'TOKEN', 'CONTRACT', 'ADDRESS', 'LINK', 'ALPHA']
+                    if potential_symbol not in common_words and len(potential_symbol) >= 2:
+                        token_symbol = potential_symbol
+                        logger.info(f"从消息格式中提取到代币符号: {token_symbol}")
+                        break
         
         # 专注于提取合约地址
         contract_address = None
         
-        # 使用增强的合约地址提取模式
-        contract_patterns = [
-            # 带标记的合约地址
-            r'(?:📝|合约[：:]|[Cc]ontract[：:])[ ]*([0-9a-fA-FxX]{8,})',
-            r'合约地址[：:][ ]*([0-9a-fA-FxX]{8,})',
-            r'地址[：:][ ]*([0-9a-fA-FxX]{8,})',
-            # 标准以太坊地址格式
-            r'\b(0x[0-9a-fA-F]{40})\b',
-            # 其他可能的合约地址格式
-            r'\b([a-zA-Z0-9]{32,50})\b'
-        ]
+        # 1. 首先尝试从URL中提取合约地址
+        for url in urls:
+            contract_from_url, chain_from_url = extract_contract_from_url(url)
+            if contract_from_url:
+                contract_address = contract_from_url
+                # 如果从URL中获取到了链信息，且当前链未确定，则使用
+                if chain_from_url and (not chain or chain == "UNKNOWN"):
+                    chain = chain_from_url
+                logger.info(f"从URL提取到合约地址: {contract_address}, 链: {chain}")
+                break
         
-        # 尝试所有模式提取合约地址
-        for pattern in contract_patterns:
-            match = re.search(pattern, cleaned_text)
-            if match:
-                potential_address = match.group(1) if '(' in pattern else match.group(0)
-                logger.info(f"从消息中提取到潜在合约地址: {potential_address}")
-                
-                # 验证地址格式
-                if re.match(r'^0x[a-fA-F0-9]{40}$', potential_address):
-                    contract_address = potential_address
-                    if not chain or chain == "UNKNOWN":
-                        # 检查是否有明确的链指示器
-                        if re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)', cleaned_text, re.IGNORECASE):
-                            logger.info("从市值单位(BNB)判断为BSC链")
-                            chain = 'BSC'
-                        elif re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:eth|ETH)', cleaned_text, re.IGNORECASE):
-                            logger.info("从市值单位(ETH)判断为ETH链")
-                            chain = 'ETH'
-                        elif 'bsc' in cleaned_text.lower() or 'bnb' in cleaned_text.lower() or 'pancake' in cleaned_text.lower() or 'binance' in cleaned_text.lower():
-                            logger.info("从上下文关键词判断为BSC链")
-                            chain = 'BSC'
-                        elif 'eth' in cleaned_text.lower() or 'ethereum' in cleaned_text.lower() or 'uniswap' in cleaned_text.lower():
-                            logger.info("从上下文关键词判断为ETH链")
-                            chain = 'ETH'
-                        else:
-                            logger.info("检测到EVM类地址，但无法确定具体链，尝试通过DEX API确定具体链")
-                    break
-                elif re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', potential_address):
-                    contract_address = potential_address
-                    if not chain or chain == "UNKNOWN":
-                        logger.info("检测到类似SOL的地址，设置链为SOL")
-                        chain = "SOL"
-                    break
-                elif potential_address.startswith('0x'):
-                    # 尝试修正不完整的EVM地址
-                    full_address = re.search(r'0x[0-9a-fA-F]{40}', cleaned_text)
-                    if full_address:
-                        contract_address = full_address.group(0)
-                        break
-        
-        # 如果未找到合约地址，尝试从URL中提取
+        # 2. 如果URL没有提供合约地址，尝试从文本中直接提取
         if not contract_address:
-            urls = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', cleaned_text)
-            for url in urls:
-                url_clean = url.strip()
-                # 处理URL末尾可能的标点符号
-                for marker in [' ', '\n', '\t', ',', ')', ']', '}', '"', "'", '。', '，', '：', '；']:
-                    if marker in url_clean:
-                        url_clean = url_clean.split(marker)[0]
-                
-                contract_from_url, chain_from_url = extract_contract_from_url(url_clean)
-                if contract_from_url:
-                    contract_address = contract_from_url
-                    if chain_from_url and (not chain or chain == "UNKNOWN"):
-                        chain = chain_from_url
-                    logger.info(f"从URL提取到合约地址: {contract_address}, 链: {chain}")
-                    break
+            # 使用正则表达式模式查找合约地址
+            for pattern in CONTRACT_PATTERNS:
+                match = re.search(pattern, cleaned_text)
+                if match:
+                    potential_address = match.group(1) if '(' in pattern else match.group(0)
+                    logger.info(f"从消息中提取到潜在合约地址: {potential_address}")
+                    
+                    # 判断地址类型并验证
+                    address_chain = get_chain_from_address(potential_address)
+                    if address_chain == 'EVM':  # EVM格式地址
+                        if not re.match(r'^0x[a-fA-F0-9]{40}$', potential_address):
+                            # 尝试寻找完整的EVM地址
+                            full_match = re.search(r'0x[a-fA-F0-9]{40}', cleaned_text)
+                            if full_match:
+                                potential_address = full_match.group(0)
+                        
+                        contract_address = potential_address
+                        
+                        # 确保EVM地址与链类型匹配
+                        if chain and chain not in EVM_CHAINS:
+                            logger.warning(f"检测到EVM格式地址但当前链为{chain}，这是不匹配的。重置链信息")
+                            chain = None
+                            
+                        # 如果链未确定，尝试从上下文确定
+                        if not chain or chain == "UNKNOWN":
+                            chain_from_text = extract_chain_from_message(cleaned_text)
+                            if chain_from_text and chain_from_text in EVM_CHAINS:
+                                chain = chain_from_text
+                                logger.info(f"从上下文确定EVM地址为{chain}链")
+                            else:
+                                # 默认选择最可能的EVM链
+                                # 先尝试从文本关键词判断
+                                for evm_chain in ['ETH', 'BSC', 'ARB']:  # 按流行度排序的前三个EVM链
+                                    for keyword in CHAINS.get(evm_chain, []):
+                                        if keyword.lower() in cleaned_text.lower():
+                                            logger.info(f"从关键词判断EVM地址为{evm_chain}链")
+                                            chain = evm_chain
+                                            break
+                                    if chain:  # 如果已经确定了链，跳出循环
+                                        break
+                                
+                                # 如果仍未确定，默认设为BSC（作为最常见的EVM链）
+                                if not chain or chain == "UNKNOWN":
+                                    logger.warning(f"无法确定EVM地址的链类型，默认设为BSC")
+                                    chain = 'BSC'
+                        break
+                    elif address_chain == 'SOL':  # Solana格式地址
+                        contract_address = potential_address
+                        if chain and chain != 'SOL':
+                            logger.warning(f"检测到SOL地址格式，但当前链为{chain}，存在不匹配")
+                        
+                        # SOL地址必然是SOL链
+                        logger.info("检测到SOL地址格式，设置链为SOL")
+                        chain = 'SOL'
+                        break
         
         # 如果找到了合约地址，创建并返回PromotionInfo对象
         if contract_address:
-            # 如果在此阶段仍然没有确定链，并且是EVM地址，再尝试一次从消息上下文推断
-            if (not chain or chain == "UNKNOWN") and contract_address.startswith('0x'):
-                chain_from_context = extract_chain_from_message(message_text)
-                if chain_from_context:
-                    chain = chain_from_context
-                    logger.info(f"从上下文推断合约地址 {contract_address} 所在链为: {chain}")
-                else:
-                    # 仍然无法确定链，分析上下文中是否有明确的BSC/ETH关键词
-                    text_lower = cleaned_text.lower()
-                    if 'bsc' in text_lower or 'bnb' in text_lower or 'pancake' in text_lower or 'binance' in text_lower:
+            # 最终地址格式与链类型一致性验证
+            address_chain = get_chain_from_address(contract_address)
+            
+            # 优化后的链类型一致性检查逻辑
+            if address_chain == 'EVM':
+                # 只有当链不是EVM体系时才需要修正
+                if chain not in EVM_CHAINS:
+                    # 检查是否有更多上下文线索
+                    for evm_chain in EVM_CHAINS:
+                        for keyword in CHAINS.get(evm_chain, []):
+                            if keyword.lower() in cleaned_text.lower():
+                                logger.warning(f"最终检查: 合约地址{contract_address}是EVM格式，但链为{chain}，上下文暗示应为{evm_chain}链")
+                                chain = evm_chain
+                                break
+                        if chain in EVM_CHAINS:  # 如果已确定是EVM链，跳出循环
+                            break
+                    
+                    # 如果仍不是EVM链，默认设为BSC
+                    if chain not in EVM_CHAINS:
+                        logger.warning(f"最终检查: 合约地址{contract_address}是EVM格式，但链为{chain}，这不匹配。修正为BSC")
                         chain = 'BSC'
-                        logger.info(f"从关键词判断合约地址 {contract_address} 所在链为BSC")
-                    elif 'eth' in text_lower or 'ethereum' in text_lower or 'uniswap' in text_lower:
-                        chain = 'ETH'
-                        logger.info(f"从关键词判断合约地址 {contract_address} 所在链为ETH")
-                    else:
-                        logger.warning(f"无法确定合约地址 {contract_address} 所在的链，设置为UNKNOWN")
-                        chain = "UNKNOWN"
+            elif address_chain == 'SOL':
+                # SOL地址必然是SOL链
+                if chain != 'SOL':
+                    logger.warning(f"最终检查: 合约地址{contract_address}是SOL格式，但链为{chain}，这不匹配。修正为SOL")
+                    chain = 'SOL'
+            elif not chain or chain == 'UNKNOWN':
+                # 根据地址格式设置默认链
+                if address_chain == 'EVM':
+                    # 先尝试通过关键词识别具体的EVM链
+                    for evm_chain in EVM_CHAINS:
+                        for keyword in CHAINS.get(evm_chain, []):
+                            if keyword.lower() in cleaned_text.lower():
+                                logger.info(f"通过关键词将EVM地址归类为{evm_chain}链")
+                                chain = evm_chain
+                                break
+                        if chain and chain != 'UNKNOWN':
+                            break
+                    
+                    # 如果没有找到匹配的关键词，则默认为BSC
+                    if not chain or chain == 'UNKNOWN':
+                        chain = 'BSC'
+                        logger.info("没有找到匹配的EVM链关键词，默认设置为BSC")
+                elif address_chain == 'SOL':
+                    chain = 'SOL'
             
             logger.info(f"成功提取合约地址: {contract_address}, 链: {chain}")
             
@@ -686,7 +962,7 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
                 first_trending_time=date
             )
             
-            # 添加新的必要字段
+            # 添加必要字段
             info.message_id = message_id
             info.channel_id = channel_id
             
@@ -718,15 +994,17 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
             market_cap_text = re.search(r'([Mm]arket\s*[Cc]ap|市值|[Mm][Cc])[：:]\s*[`\'"]?([^,\n]+)', cleaned_text)
             if market_cap_text:
                 mc_value = market_cap_text.group(2).strip()
+                # 清理市值字符串，仅保留数值部分
+                mc_clean = re.sub(r'(创建时间|[Cc]reated|[Ll]aunch).*$', '', mc_value).strip()
                 try:
-                    parsed_mc = parse_market_cap(mc_value)
+                    parsed_mc = parse_market_cap(mc_clean)
                     if parsed_mc:
                         info.market_cap = str(parsed_mc)
                         # 第一次见到的市值就是first_market_cap
                         info.first_market_cap = parsed_mc
                         
                         # 从市值单位判断链
-                        mc_lower = mc_value.lower()
+                        mc_lower = mc_clean.lower()
                         if 'bnb' in mc_lower and (not chain or chain == "UNKNOWN"):
                             info.chain = 'BSC'
                             logger.info("从市值单位(BNB)修正链信息为BSC")
@@ -736,8 +1014,19 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
                         elif 'sol' in mc_lower and (not chain or chain == "UNKNOWN"):
                             info.chain = 'SOL'
                             logger.info("从市值单位(SOL)修正链信息为SOL")
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"解析市值出错: {mc_value}, 错误: {str(e)}")
+                    # 尝试进一步清理市值字符串
+                    try:
+                        # 尝试只保留数字部分和单位
+                        mc_numeric = re.search(r'([\d.,]+\s*[KkMmBb]?)', mc_clean)
+                        if mc_numeric:
+                            parsed_mc = parse_market_cap(mc_numeric.group(1))
+                            if parsed_mc:
+                                info.market_cap = str(parsed_mc)
+                                info.first_market_cap = parsed_mc
+                    except Exception as e2:
+                        logger.debug(f"二次解析市值失败: {str(e2)}")
             
             return info
             
@@ -758,175 +1047,141 @@ def extract_chain_from_message(message_text: str) -> Optional[str]:
     Returns:
         str: 提取到的链名称，未找到则返回None
     """
+    if not message_text:
+        return None
+        
     # 清理消息文本，便于匹配
     text = message_text.lower()
     
-    # 定义不同链的关键词匹配规则
-    chain_patterns = {
-        'SOL': [r'\bsol\b', r'\bsolana\b', r'@solana', r'solanas', r'솔라나', r'索拉纳', 
-                r'solscan\.io', r'explorer\.solana\.com', r'solana_trojanbot', r'sol链'],
-        'BSC': [r'\bbsc\b', r'\bbinance smart chain\b', r'\bbnb\b', r'\bbnb chain\b', r'币安链', r'바이낸스', 
-                r'bscscan\.com', r'pancakeswap', r'poocoin', r'bsc链', r'\bbnb:'],
-        'ETH': [r'\beth\b', r'\bethereum\b', r'@ethereum', r'以太坊', r'이더리움', 
-                r'etherscan\.io', r'uniswap', r'sushiswap', r'eth链', r'\beth:'],
-        'ARB': [r'\barb\b', r'\barbitrum\b', r'arbitrums', r'阿比特龙', r'아비트럼', 
-                r'arbiscan\.io', r'arb链'],
-        'BASE': [r'\bbase\b', r'basechain', r'coinbase', r'贝斯链', r'베이스', 
-                 r'basescan\.org', r'base链'],
-        'AVAX': [r'\bavax\b', r'\bavalanche\b', r'雪崩链', r'아발란체', 
-                 r'snowtrace\.io', r'traderjoe', r'avax链'],
-        'MATIC': [r'\bmatic\b', r'\bpolygon\b', r'波利冈', r'폴리곤', 
-                  r'polygonscan\.com', r'matic链'],
-        'OP': [r'\boptimism\b', r'\bop\b', r'乐观链', r'옵티미즘', 
-               r'optimistic\.etherscan\.io', r'op链']
+    # 首先检查URL中是否包含链信息，这通常最可靠
+    urls = find_urls_in_text(text)
+    for url in urls:
+        chain = get_chain_from_url(url)
+        if chain:
+            logger.info(f"从URL '{url}' 检测到链: {chain}")
+            return chain
+    
+    # 通过市值单位判断链（高优先级判断）
+    mc_patterns = {
+        'BSC': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)',
+        'ETH': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:eth|ETH)',
+        'SOL': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:sol|SOL)',
+        'ARB': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:arb|ARB)',
+        'AVAX': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:avax|AVAX)',
+        'MATIC': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:matic|MATIC|polygon)',
+        'OP': r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:op|OP|optimism)'
     }
     
-    # 优先检查是否明确提到市值单位为BNB，这是BSC链的最明确标志
-    if re.search(r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)', text, re.IGNORECASE):
-        logger.info("从市值单位(BNB)判断为BSC链")
-        return 'BSC'
+    for chain, pattern in mc_patterns.items():
+        if re.search(pattern, text, re.IGNORECASE):
+            logger.info(f"从市值单位判断为{chain}链")
+            return chain
     
-    # 提取dexscreener URL并解析，这是比匹配简单关键词更明确的信息
-    # 处理格式: dexscreener.com/solana/xxx 或 dexscreener.com/ethereum/xxx等
-    dexscreener_match = re.search(r'(?:https?://)?(?:www\.)?dexscreener\.com/([a-zA-Z0-9]+)(?:/[^/\s]+)?', text)
-    if dexscreener_match:
-        chain_str = dexscreener_match.group(1).upper()
-        # 映射DEX Screener URL路径到链标识
-        dexscreener_map = {
-            'SOLANA': 'SOL',
-            'ETHEREUM': 'ETH',
-            'BSC': 'BSC',
-            'ARBITRUM': 'ARB',
-            'BASE': 'BASE',
-            'AVALANCHE': 'AVAX',
-            'POLYGON': 'MATIC',
-            'OPTIMISM': 'OP'
-        }
-        if chain_str in dexscreener_map:
-            logger.info(f"从DEX Screener URL提取到链信息: {dexscreener_map[chain_str]}")
-            return dexscreener_map[chain_str]
+    # 检查推特账号关键词
+    twitter_match = re.search(r'(?:twitter\.com|x\.com)/([^/\s]+)', text)
+    if twitter_match:
+        twitter_user = twitter_match.group(1).lower()
+        if twitter_user in TWITTER_CHAIN_MAP:
+            logger.info(f"从推特账号 '{twitter_user}' 识别链为: {TWITTER_CHAIN_MAP[twitter_user]}")
+            return TWITTER_CHAIN_MAP[twitter_user]
     
-    # 处理更复杂的dexscreener URL格式，例如完整的交易对地址URL
-    complex_dexscreener = re.search(r'dexscreener\.com/([a-zA-Z0-9]+)/[a-zA-Z0-9]{10,}', text, re.IGNORECASE)
-    if complex_dexscreener:
-        chain_str = complex_dexscreener.group(1).upper()
-        dexscreener_map = {
-            'SOLANA': 'SOL',
-            'ETHEREUM': 'ETH',
-            'BSC': 'BSC',
-            'ARBITRUM': 'ARB',
-            'BASE': 'BASE',
-            'AVALANCHE': 'AVAX',
-            'POLYGON': 'MATIC',
-            'OPTIMISM': 'OP'
-        }
-        if chain_str in dexscreener_map:
-            logger.info(f"从复杂的DEX Screener URL提取到链信息: {dexscreener_map[chain_str]}")
-            return dexscreener_map[chain_str]
-    
-    # 检查区块浏览器链接，这也是强有力的证据
-    explorer_patterns = {
-        'SOL': [r'solscan\.io', r'explorer\.solana\.com'],
-        'ETH': [r'etherscan\.io'],
-        'BSC': [r'bscscan\.com'],
-        'ARB': [r'arbiscan\.io'],
-        'BASE': [r'basescan\.org'],
-        'AVAX': [r'snowtrace\.io'],
-        'MATIC': [r'polygonscan\.com'],
-        'OP': [r'optimistic\.etherscan\.io']
-    }
-    
-    for chain, patterns in explorer_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, text):
-                logger.info(f"从区块浏览器URL提取到链信息: {chain}, 匹配模式: {pattern}")
-                return chain
-    
-    # 检查特定的DEX关键词
-    dex_patterns = {
-        'SOL': [r'raydium', r'orca\.so', r'jupiter'],
-        'ETH': [r'uniswap', r'sushiswap'],
-        'BSC': [r'pancakeswap', r'poocoin']
-    }
-    
-    for chain, patterns in dex_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, text):
-                logger.info(f"从DEX关键词提取到链信息: {chain}, 匹配模式: {pattern}")
-                return chain
-    
-    # 最后再检查一般关键词匹配，这个优先级较低
-    for chain, patterns in chain_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, text):
-                logger.info(f"从关键词匹配提取到链信息: {chain}, 匹配模式: {pattern}")
-                return chain
-    
-    # 处理中文环境
-    chinese_chains = {
-        'SOL': ['solana', 'sol', '索拉纳', '索兰纳'],
-        'ETH': ['ethereum', 'eth', '以太坊', '以太'],
-        'BSC': ['binance', 'bsc', 'bnb', '币安'],
-        'AVAX': ['avalanche', 'avax', '雪崩'],
-        'MATIC': ['polygon', 'matic', '波利冈']
-    }
-    
-    for chain, keywords in chinese_chains.items():
-        for keyword in keywords:
-            if keyword in text:
-                logger.info(f"从中文环境提取到链信息: {chain}, 关键词: {keyword}")
-                return chain
-    
-    # 检查是否包含特定的机器人引用
+    # 检查机器人引用或频道名称
     bot_patterns = {
-        'SOL': [r'solana_trojanbot'],
-        'BSC': [r'ape\.bot', r'sigma_buybot.*bsc', r'pancakeswap_bot'],
-        'ETH': [r'uniswap_bot', r'sigma_buybot.*eth']
+        'SOL': [r'solana_trojanbot', r'solana.*bot', r'sol.*alert'],
+        'BSC': [r'ape\.bot', r'sigma_buybot.*bsc', r'pancakeswap_bot', r'bnb.*bot', r'bsc.*alert'],
+        'ETH': [r'uniswap_bot', r'sigma_buybot.*eth', r'eth.*alert', r'ethereum.*bot'],
+        'ARB': [r'arb.*bot', r'arbitrum.*alert'],
+        'AVAX': [r'avax.*bot', r'avalanche.*alert'],
+        'MATIC': [r'polygon.*bot', r'matic.*alert'],
+        'BASE': [r'base.*bot', r'base.*alert'],
+        'OP': [r'optimism.*bot', r'op.*alert']
     }
     
     for chain, patterns in bot_patterns.items():
         for pattern in patterns:
-            if re.search(pattern, text):
-                logger.info(f"从机器人引用提取到链信息: {chain}, 匹配模式: {pattern}")
+            if re.search(pattern, text, re.IGNORECASE):
+                logger.info(f"从机器人/频道名称引用提取到链信息: {chain}, 匹配模式: {pattern}")
                 return chain
     
-    # 尝试从MC（市值）单位判断链
-    mc_patterns = {
-        'ETH': [r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:eth|ETH)'],
-        'BSC': [r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:bnb|BNB)'],
-        'SOL': [r'(\bmc\b|\bmarket\s*cap\b|市值)[：:]*\s*[`\'"]*\d+(?:\.\d+)?\s*(?:sol|SOL)']
+    # 检查明确的链标识符（如#BSC、#ETH、#SOL等)
+    tag_patterns = {
+        'BSC': r'(?:^|\s)#(?:bsc|bnb|binance)(?:\s|$)',
+        'ETH': r'(?:^|\s)#(?:eth|ethereum)(?:\s|$)',
+        'SOL': r'(?:^|\s)#(?:sol|solana)(?:\s|$)',
+        'ARB': r'(?:^|\s)#(?:arb|arbitrum)(?:\s|$)',
+        'AVAX': r'(?:^|\s)#(?:avax|avalanche)(?:\s|$)',
+        'MATIC': r'(?:^|\s)#(?:matic|polygon)(?:\s|$)',
+        'BASE': r'(?:^|\s)#(?:base)(?:\s|$)',
+        'OP': r'(?:^|\s)#(?:op|optimism)(?:\s|$)'
     }
     
-    for chain, patterns in mc_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                logger.info(f"从市值单位提取到链信息: {chain}, 匹配模式: {pattern}")
-                return chain
+    for chain, pattern in tag_patterns.items():
+        if re.search(pattern, text, re.IGNORECASE):
+            logger.info(f"从标签提取到链信息: {chain}")
+            return chain
     
-    # 最后才从合约地址格式推断，且需要结合其他上下文信息
-    if re.search(r'\b0x[0-9a-fA-F]{40}\b', text):
-        # 尝试从其他上下文判断具体是哪种EVM链
-        if 'bnb' in text or 'bsc' in text or 'binance' in text or 'pancake' in text:
-            logger.info("从合约地址格式和上下文信息(BSC关键词)推断为BSC链")
-            return 'BSC'
-        elif 'eth' in text or 'ethereum' in text or 'uniswap' in text:
-            logger.info("从合约地址格式和上下文信息(ETH关键词)推断为ETH链")
-            return 'ETH'
-        elif 'arb' in text or 'arbitrum' in text:
-            logger.info("从合约地址格式和上下文信息(ARB关键词)推断为ARB链")
-            return 'ARB'
-        elif 'matic' in text or 'polygon' in text:
-            logger.info("从合约地址格式和上下文信息(MATIC关键词)推断为MATIC链")
-            return 'MATIC'
-        else:
-            # 不再默认返回ETH，而是返回None表示无法确定
-            logger.warning("从合约地址格式推断为EVM链，但无法确定具体是哪条链，需要更多上下文")
-            return None
+    # 检查消息中是否包含地址格式，用于推断链类型
+    evm_address = re.search(r'\b0x[0-9a-fA-F]{40}\b', text)
+    if evm_address:
+        # 如果找到EVM地址，尝试从上下文确定具体链
+        for chain, keywords in CHAINS.items():
+            if chain in EVM_CHAINS:  # 仅检查EVM链
+                for keyword in keywords:
+                    if keyword.lower() in text:
+                        logger.info(f"从上下文({keyword})和EVM地址格式推断为{chain}链")
+                        return chain
         
-    if re.search(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b', text) and ('sol' in text or 'solana' in text):
-        # Solana Base58格式地址
+        # 如果没有特定关键词，尝试检查网络费用相关术语
+        fee_patterns = {
+            'ETH': [r'gas\s+(?:fee|price)', r'gwei', r'gas\s+limit'],
+            'BSC': [r'bnb\s+(?:fee|gas)', r'gwei.*bnb'],
+            'ARB': [r'arb\s+(?:fee|gas)', r'gwei.*arb'],
+            'MATIC': [r'matic\s+(?:fee|gas)', r'gwei.*matic'],
+        }
+        
+        for chain, patterns in fee_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    logger.info(f"从网络费用术语推断为{chain}链")
+                    return chain
+        
+        # 检查币对描述
+        pair_patterns = {
+            'BSC': [r'\b(?:bnb|busd)/[a-z0-9]+\b', r'\b[a-z0-9]+/(?:bnb|busd)\b'],
+            'ETH': [r'\b(?:eth|usdt)/[a-z0-9]+\b', r'\b[a-z0-9]+/(?:eth|usdt)\b'],
+            'SOL': [r'\b(?:sol|usdc)/[a-z0-9]+\b', r'\b[a-z0-9]+/(?:sol|usdc)\b']
+        }
+        
+        for chain, patterns in pair_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    logger.info(f"从交易对描述推断为{chain}链")
+                    return chain
+        
+        # 如果还是没有识别到，默认返回BSC（作为最常见的EVM链）
+        logger.warning("检测到EVM格式地址但无法确定具体链，默认设置为BSC(最常见的EVM链)")
+        return 'BSC'
+    
+    # 检查是否有Solana格式地址
+    solana_address = re.search(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b', text)
+    if solana_address and ('sol' in text or 'solana' in text):
         logger.info("从合约地址格式和SOL关键词推断为SOL链")
         return 'SOL'
+    
+    # 从消息文本中寻找最频繁出现的链相关词汇
+    chain_mentions = {}
+    for chain, keywords in CHAINS.items():
+        mentions = 0
+        for keyword in keywords:
+            mentions += len(re.findall(rf'\b{re.escape(keyword.lower())}\b', text))
+        if mentions > 0:
+            chain_mentions[chain] = mentions
+    
+    # 如果存在链提及，返回提及最多的链
+    if chain_mentions:
+        most_mentioned = max(chain_mentions.items(), key=lambda x: x[1])
+        logger.info(f"从关键词频率分析，'{most_mentioned[0]}'链被提及{most_mentioned[1]}次，判定为该链")
+        return most_mentioned[0]
     
     # 如果所有方法都失败，返回None
     logger.debug("无法从消息中提取链信息")
@@ -946,19 +1201,8 @@ def extract_url_from_text(text: str, keyword: str = '') -> Optional[str]:
         return None
     
     try:
-        # 定义URL正则表达式模式
-        url_patterns = [
-            r'https?://\S+',  # 标准HTTP/HTTPS URL
-            r'www\.\S+',      # 以www开头的URL
-            r't\.me/\S+',     # Telegram链接
-            r'twitter\.com/\S+'  # Twitter链接
-        ]
-        
-        # 合并所有模式
-        combined_pattern = '|'.join(url_patterns)
-        
-        # 查找所有匹配的URL
-        urls = re.findall(combined_pattern, text)
+        # 使用辅助函数获取所有URL
+        urls = find_urls_in_text(text)
         
         if not urls:
             return None
@@ -967,40 +1211,14 @@ def extract_url_from_text(text: str, keyword: str = '') -> Optional[str]:
             # 如果指定了关键词，优先返回包含关键词的URL
             for url in urls:
                 if keyword.lower() in url.lower():
-                    # 处理URL末尾可能的标点符号
-                    markers = [' ', '\n', '\t', ',', ')', ']', '}', '"', "'", '。', '，', '：', '；']
-                    url_part = url
-                    
-                    # 查找最早出现的标点符号位置
-                    end_idx = len(url_part)
-                    for marker in markers:
-                        marker_idx = url_part.find(marker)
-                        if marker_idx > 0 and marker_idx < end_idx:
-                            end_idx = marker_idx
-                    
-                    url = url_part[:end_idx].strip()
                     return url
         
         # 如果没有指定关键词或没有找到包含关键词的URL，返回第一个URL
-        url_part = urls[0]
-        # 处理URL末尾可能的标点符号
-        markers = [' ', '\n', '\t', ',', ')', ']', '}', '"', "'", '。', '，', '：', '；']
-        
-        # 查找最早出现的标点符号位置
-        end_idx = len(url_part)
-        for marker in markers:
-            marker_idx = url_part.find(marker)
-            if marker_idx > 0 and marker_idx < end_idx:
-                end_idx = marker_idx
-        
-        url = url_part[:end_idx].strip()
-        return url
+        return urls[0] if urls else None
 
     except Exception as e:
         logger.error(f"从文本中提取URL时出错: {str(e)}")
         return None
-    
-    return None
 
 def extract_contract_from_url(url: str) -> Tuple[Optional[str], Optional[str]]:
     """从URL中提取合约地址和链信息
@@ -1015,7 +1233,36 @@ def extract_contract_from_url(url: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
     
     try:
-        # 处理各种常见区块浏览器和DEX的URL
+        # 处理URL中常见的非法字符和格式问题
+        url = url.split('#')[0].split('?')[0]  # 移除URL中的fragment和query部分
+        url_lower = url.lower()
+        
+        # 1. 处理专门的代币信息平台URL
+        
+        # GMGN.ai格式的URL
+        # 格式如: https://gmgn.ai/bsc/token/0x04e8f6a9e5765df0e5105bbc7ba6b562f8104444
+        gmgn_match = re.search(r'(?:https?://)?(?:www\.)?gmgn\.ai(?:/[^/]+)?/([^/]+)/token/([a-zA-Z0-9]{20,})', url, re.IGNORECASE)
+        if gmgn_match:
+            chain_str = gmgn_match.group(1).upper()
+            contract = gmgn_match.group(2)
+            
+            # 映射到标准链标识
+            chain_map = {
+                'BSC': 'BSC',
+                'ETH': 'ETH',
+                'ETHEREUM': 'ETH',
+                'ARBITRUM': 'ARB',
+                'BASE': 'BASE',
+                'SOLANA': 'SOL',
+                'POLYGON': 'MATIC',
+                'OPTIMISM': 'OP',
+                'AVALANCHE': 'AVAX'
+            }
+            
+            chain = chain_map.get(chain_str, chain_str)
+            logger.info(f"从gmgn.ai URL提取到合约地址: {contract}, 链: {chain}")
+            return contract, chain
+            
         # DexScreener格式
         # 例如: https://dexscreener.com/solana/8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF
         dexscreener_pattern = r'(?:https?://)?(?:www\.)?dexscreener\.com/([a-zA-Z0-9]+)/([a-zA-Z0-9]{20,})'
@@ -1040,86 +1287,207 @@ def extract_contract_from_url(url: str) -> Tuple[Optional[str], Optional[str]]:
             logger.info(f"从DexScreener URL提取到合约地址: {contract}, 链: {chain}")
             return contract, chain
         
-        # 特殊模式：币安链浏览器
-        # 例如: https://bscscan.com/token/0x123456789...
-        bscscan_pattern = r'(?:https?://)?(?:www\.)?bscscan\.com/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(bscscan_pattern, url)
+        # GeckoTerminal格式
+        # 例如: https://www.geckoterminal.com/eth/pools/0x1234...
+        geckoterminal_pattern = r'(?:https?://)?(?:www\.)?geckoterminal\.com/([a-zA-Z0-9]+)/(?:pools|tokens)/([a-zA-Z0-9]{20,})'
+        match = re.search(geckoterminal_pattern, url_lower)
         if match:
-            contract = match.group(1)
-            logger.info(f"从BSCScan URL提取到合约地址: {contract}, 链: BSC")
-            return contract, 'BSC'
-        
-        # Etherscan格式
-        # 例如: https://etherscan.io/token/0x123456789...
-        etherscan_pattern = r'(?:https?://)?(?:www\.)?etherscan\.io/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(etherscan_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Etherscan URL提取到合约地址: {contract}, 链: ETH")
-            return contract, 'ETH'
-        
-        # Solscan格式
-        # 例如: https://solscan.io/token/8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF
-        solscan_pattern = r'(?:https?://)?(?:www\.)?solscan\.io/(?:token|account)/([a-zA-Z0-9]{20,})'
-        match = re.search(solscan_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Solscan URL提取到合约地址: {contract}, 链: SOL")
-            return contract, 'SOL'
-        
-        # Polygonscan格式
-        polygonscan_pattern = r'(?:https?://)?(?:www\.)?polygonscan\.com/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(polygonscan_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Polygonscan URL提取到合约地址: {contract}, 链: MATIC")
-            return contract, 'MATIC'
-
-        # Arbiscan格式
-        arbiscan_pattern = r'(?:https?://)?(?:www\.)?arbiscan\.io/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(arbiscan_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Arbiscan URL提取到合约地址: {contract}, 链: ARB")
-            return contract, 'ARB'
-        
-        # Basescan格式
-        basescan_pattern = r'(?:https?://)?(?:www\.)?basescan\.org/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(basescan_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Basescan URL提取到合约地址: {contract}, 链: BASE")
-            return contract, 'BASE'
-        
-        # Snowtrace (Avalanche) 格式
-        snowtrace_pattern = r'(?:https?://)?(?:www\.)?snowtrace\.io/(?:token|address)/([a-zA-Z0-9]{20,})'
-        match = re.search(snowtrace_pattern, url)
-        if match:
-            contract = match.group(1)
-            logger.info(f"从Snowtrace URL提取到合约地址: {contract}, 链: AVAX")
-            return contract, 'AVAX'
-        
-        # 处理Raydium、Orca等Solana DEX的URL
-        solana_dex_pattern = r'(?:https?://)?(?:www\.)?(raydium\.io|orca\.so|jup\.ag)/(?:\w+)/([a-zA-Z0-9]{20,})'
-        match = re.search(solana_dex_pattern, url)
-        if match:
+            chain_str = match.group(1).lower()
             contract = match.group(2)
-            logger.info(f"从Solana DEX URL提取到合约地址: {contract}, 链: SOL")
-            return contract, 'SOL'
+            
+            geckoterminal_map = {
+                'sol': 'SOL',
+                'solana': 'SOL',
+                'eth': 'ETH',
+                'ethereum': 'ETH',
+                'bsc': 'BSC',
+                'arb': 'ARB',
+                'arbitrum': 'ARB',
+                'base': 'BASE',
+                'avax': 'AVAX',
+                'avalanche': 'AVAX',
+                'matic': 'MATIC',
+                'polygon': 'MATIC',
+                'op': 'OP',
+                'optimism': 'OP'
+            }
+            
+            chain = geckoterminal_map.get(chain_str)
+            logger.info(f"从GeckoTerminal URL提取到合约地址: {contract}, 链: {chain}")
+            return contract, chain
         
-        # 处理Uniswap、Sushiswap等以太坊DEX的URL
-        eth_dex_pattern = r'(?:https?://)?(?:www\.)?(uniswap\.org|app\.uniswap\.org|sushi\.com)/(?:\w+)/([a-zA-Z0-9]{20,})'
-        match = re.search(eth_dex_pattern, url)
+        # CoinGecko格式
+        # 例如: https://www.coingecko.com/en/coins/ethereum/0x1234...
+        coingecko_pattern = r'(?:https?://)?(?:www\.)?coingecko\.com/[^/]+/coins/([a-zA-Z0-9-]+)/([a-zA-Z0-9]{20,})'
+        match = re.search(coingecko_pattern, url_lower)
         if match:
+            chain_str = match.group(1).lower()
             contract = match.group(2)
-            logger.info(f"从ETH DEX URL提取到合约地址: {contract}, 链: ETH")
-            return contract, 'ETH'
+            
+            coingecko_map = {
+                'solana': 'SOL',
+                'ethereum': 'ETH',
+                'binance-smart-chain': 'BSC',
+                'arbitrum-one': 'ARB',
+                'base': 'BASE',
+                'avalanche': 'AVAX',
+                'polygon-pos': 'MATIC',
+                'optimistic-ethereum': 'OP'
+            }
+            
+            chain = coingecko_map.get(chain_str)
+            logger.info(f"从CoinGecko URL提取到合约地址: {contract}, 链: {chain}")
+            return contract, chain
+        
+        # 2. 处理区块浏览器URL
+        
+        # 循环检查各个区块浏览器
+        for chain, explorers in CHAIN_EXPLORERS.items():
+            for explorer in explorers:
+                if explorer in url_lower:
+                    # 提取合约地址
+                    explorer_pattern = rf'(?:https?://)?(?:www\.)?{re.escape(explorer)}/(?:token|address|account|contracts)/([a-zA-Z0-9]{{20,}})'
+                    explorer_match = re.search(explorer_pattern, url_lower)
+                    if explorer_match:
+                        contract = explorer_match.group(1)
+                        # 检查合约地址格式
+                        if chain != 'SOL' and contract.startswith('0x') and len(contract) >= 40:
+                            logger.info(f"从{explorer} URL提取到合约地址: {contract}, 链: {chain}")
+                            return contract, chain
+                        elif chain == 'SOL' and not contract.startswith('0x'):
+                            logger.info(f"从{explorer} URL提取到合约地址: {contract}, 链: {chain}")
+                            return contract, chain
+                        else:
+                            # 尝试在URL中寻找正确格式的地址
+                            if chain != 'SOL':
+                                evm_address = re.search(r'0x[a-fA-F0-9]{40}', url)
+                                if evm_address:
+                                    logger.info(f"从URL中重新提取到EVM格式地址: {evm_address.group(0)}, 链: {chain}")
+                                    return evm_address.group(0), chain
+                            else:
+                                solana_address = re.search(r'[1-9A-HJ-NP-Za-km-z]{32,44}', url)
+                                if solana_address:
+                                    logger.info(f"从URL中重新提取到Solana格式地址: {solana_address.group(0)}")
+                                    return solana_address.group(0), 'SOL'
+        
+        # 3. 处理DEX和流动性平台URL
+        
+        # 检查DEX平台URL
+        for chain, patterns in DEX_PATTERNS.items():
+            for pattern in patterns:
+                if re.search(pattern, url_lower):
+                    # 提取合约地址
+                    dex_contract = re.search(r'/([a-zA-Z0-9]{20,})', url)
+                    if dex_contract:
+                        contract = dex_contract.group(1)
+                        logger.info(f"从DEX URL提取到合约地址: {contract}, 链: {chain}")
+                        return contract, chain
+                    
+                    # 如果没有直接找到，尝试根据链类型寻找相应格式的地址
+                    if chain != 'SOL':
+                        evm_address = re.search(r'0x[a-fA-F0-9]{40}', url)
+                        if evm_address:
+                            logger.info(f"从DEX URL中提取到EVM格式地址: {evm_address.group(0)}, 链: {chain}")
+                            return evm_address.group(0), chain
+                    else:
+                        solana_address = re.search(r'[1-9A-HJ-NP-Za-km-z]{32,44}', url)
+                        if solana_address:
+                            logger.info(f"从DEX URL中提取到Solana格式地址: {solana_address.group(0)}")
+                            return solana_address.group(0), 'SOL'
+        
+        # 4. 处理其他常见的代币信息URL格式
+        
+        # 比如: https://coinmarketcap.com/currencies/[token-name]/
+        # 或 https://www.mexc.com/exchange/[TOKEN]_USDT
+        exchange_patterns = [
+            # Coinmarketcap - 不包含合约地址，但可能有助于确定链
+            (r'(?:https?://)?(?:www\.)?coinmarketcap\.com/currencies/([a-zA-Z0-9-]+)', None),
+            # Binance
+            (r'(?:https?://)?(?:www\.)?binance\.com/[^/]+/trade/([A-Z0-9]+)_([A-Z0-9]+)', 'BSC'),
+            # MEXC
+            (r'(?:https?://)?(?:www\.)?mexc\.com/exchange/([A-Z0-9]+)_([A-Z0-9]+)', None)
+        ]
+        
+        for pattern, default_chain in exchange_patterns:
+            match = re.search(pattern, url)
+            if match:
+                logger.info(f"匹配到交易所URL模式: {pattern}")
+                # 这些URL通常不直接包含合约地址，但可以提供链信息
+                if default_chain:
+                    logger.info(f"从交易所URL格式推断链为: {default_chain}")
+                    # 尝试从URL的其他部分提取合约地址
+                    evm_address = re.search(r'0x[a-fA-F0-9]{40}', url)
+                    if evm_address:
+                        return evm_address.group(0), default_chain
+                    
+                    solana_address = re.search(r'[1-9A-HJ-NP-Za-km-z]{32,44}', url)
+                    if solana_address and default_chain == 'SOL':
+                        return solana_address.group(0), 'SOL'
+        
+        # 5. 最后尝试直接从URL中提取合约地址格式
+        
+        # 获取URL中暗示的链信息
+        chain_from_url = get_chain_from_url(url)
+        
+        # 根据链类型尝试提取对应格式的地址
+        if chain_from_url == 'SOL':
+            solana_match = re.search(r'[1-9A-HJ-NP-Za-km-z]{32,44}', url)
+            if solana_match:
+                contract = solana_match.group(0)
+                logger.info(f"从URL直接提取到Solana格式地址: {contract}")
+                return contract, 'SOL'
+        elif chain_from_url in EVM_CHAINS:
+            evm_match = re.search(r'0x[a-fA-F0-9]{40}', url)
+            if evm_match:
+                contract = evm_match.group(0)
+                logger.info(f"从URL直接提取到EVM格式地址: {contract}, 链: {chain_from_url}")
+                return contract, chain_from_url
+        else:
+            # 没有明确的链信息，尝试提取任何格式的地址
+            evm_match = re.search(r'0x[a-fA-F0-9]{40}', url)
+            if evm_match:
+                contract = evm_match.group(0)
+                # 尝试从URL关键词判断链
+                if 'bsc' in url_lower or 'binance' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为BSC链")
+                    return contract, 'BSC'
+                elif 'eth' in url_lower or 'ethereum' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为ETH链")
+                    return contract, 'ETH'
+                # 扩展支持其他链
+                elif 'arb' in url_lower or 'arbitrum' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为ARB链")
+                    return contract, 'ARB'
+                elif 'base' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为BASE链")
+                    return contract, 'BASE'
+                elif 'matic' in url_lower or 'polygon' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为MATIC链")
+                    return contract, 'MATIC'
+                elif 'avax' in url_lower or 'avalanche' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为AVAX链")
+                    return contract, 'AVAX'
+                elif 'op' in url_lower or 'optimism' in url_lower:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 从URL关键词判断为OP链")
+                    return contract, 'OP'
+                else:
+                    logger.info(f"从URL直接提取到EVM格式地址: {contract}, 但无法确定链")
+                    return contract, None
+            
+            # 尝试提取Solana格式地址
+            solana_match = re.search(r'[1-9A-HJ-NP-Za-km-z]{32,44}', url)
+            if solana_match and ('sol' in url_lower or 'solana' in url_lower):
+                contract = solana_match.group(0)
+                logger.info(f"从URL直接提取到Solana格式地址: {contract}")
+                return contract, 'SOL'
         
         logger.debug(f"未能从URL中提取合约地址: {url}")
         return None, None
         
     except Exception as e:
         logger.error(f"从URL中提取合约地址时出错: {str(e)}")
+        import traceback
+        logger.debug(traceback.format_exc())
         return None, None
 
 def format_token_history(history: list) -> str:
@@ -1367,3 +1735,154 @@ def validate_token_data(token_data: Dict[str, Any]) -> Tuple[bool, str]:
             return False, f"缺少必要字段: {field}"
     
     return True, ""
+
+# 测试函数，用于验证重构是否正常工作
+def test_message_extraction():
+    """
+    测试函数，用于验证重构后的信息提取功能是否正常工作
+    此函数仅用于测试，不应该在生产环境中调用
+    
+    Returns:
+        dict: 测试结果
+    """
+    test_results = {}
+    
+    # 测试URL提取
+    test_results['url_extraction'] = {}
+    url_tests = [
+        {
+            'text': '请查看以下链接: https://etherscan.io/token/0x1234567890abcdef1234567890abcdef12345678',
+            'expected': 'https://etherscan.io/token/0x1234567890abcdef1234567890abcdef12345678'
+        },
+        {
+            'text': '网站: www.example.com，联系我们',
+            'expected': 'www.example.com'
+        },
+        {
+            'text': '没有URL的文本',
+            'expected': None
+        }
+    ]
+    
+    for i, test in enumerate(url_tests):
+        result = extract_url_from_text(test['text'])
+        test_results['url_extraction'][f'test_{i+1}'] = {
+            'input': test['text'],
+            'expected': test['expected'],
+            'result': result,
+            'passed': result == test['expected']
+        }
+    
+    # 测试链提取
+    test_results['chain_extraction'] = {}
+    chain_tests = [
+        {
+            'text': '这是BSC上的新代币，链接: https://bscscan.com',
+            'expected': 'BSC'
+        },
+        {
+            'text': '索拉纳上的NFT项目很热门',
+            'expected': 'SOL'
+        },
+        {
+            'text': '市值: 100 BNB，价格...',
+            'expected': 'BSC'
+        },
+        {
+            'text': '合约地址: 0x1234567890abcdef1234567890abcdef12345678',
+            'expected': 'BSC'  # 默认EVM地址为BSC
+        }
+    ]
+    
+    for i, test in enumerate(chain_tests):
+        result = extract_chain_from_message(test['text'])
+        test_results['chain_extraction'][f'test_{i+1}'] = {
+            'input': test['text'],
+            'expected': test['expected'],
+            'result': result,
+            'passed': result == test['expected']
+        }
+    
+    # 测试合约地址提取
+    test_results['contract_extraction'] = {}
+    contract_tests = [
+        {
+            'url': 'https://etherscan.io/token/0x1234567890abcdef1234567890abcdef12345678',
+            'expected_contract': '0x1234567890abcdef1234567890abcdef12345678',
+            'expected_chain': 'ETH'
+        },
+        {
+            'url': 'https://bscscan.com/address/0xabcdef1234567890abcdef1234567890abcdef12',
+            'expected_contract': '0xabcdef1234567890abcdef1234567890abcdef12',
+            'expected_chain': 'BSC'
+        },
+        {
+            'url': 'https://solscan.io/token/8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF',
+            'expected_contract': '8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF',
+            'expected_chain': 'SOL'
+        }
+    ]
+    
+    for i, test in enumerate(contract_tests):
+        contract, chain = extract_contract_from_url(test['url'])
+        test_results['contract_extraction'][f'test_{i+1}'] = {
+            'input': test['url'],
+            'expected_contract': test['expected_contract'],
+            'expected_chain': test['expected_chain'],
+            'result_contract': contract,
+            'result_chain': chain,
+            'passed': contract == test['expected_contract'] and chain == test['expected_chain']
+        }
+    
+    # 测试完整的代币信息提取
+    test_results['promotion_info_extraction'] = {}
+    promotion_tests = [
+        {
+            'text': 'New Token $ABC\n合约地址: 0x1234567890abcdef1234567890abcdef12345678\n链: BSC\n市值: 100 BNB',
+            'date': datetime.now(),
+            'expected_contract': '0x1234567890abcdef1234567890abcdef12345678',
+            'expected_chain': 'BSC',
+            'expected_symbol': 'ABC'
+        },
+        {
+            'text': 'SOL代币，符号: $XYZ\n合约: 8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF\n市值: 50 SOL',
+            'date': datetime.now(),
+            'expected_contract': '8WJ2ngd7FpHVkWiQTNyJ3N9j1oDmjR5e6MFdDAKQNinF',
+            'expected_chain': 'SOL',
+            'expected_symbol': 'XYZ'
+        }
+    ]
+    
+    for i, test in enumerate(promotion_tests):
+        info = extract_promotion_info(test['text'], test['date'])
+        test_passed = False
+        if info:
+            test_passed = (
+                info.contract_address == test['expected_contract'] and
+                info.chain == test['expected_chain'] and
+                info.token_symbol == test['expected_symbol']
+            )
+        
+        test_results['promotion_info_extraction'][f'test_{i+1}'] = {
+            'input': test['text'],
+            'expected_contract': test['expected_contract'],
+            'expected_chain': test['expected_chain'],
+            'expected_symbol': test['expected_symbol'],
+            'result': info.__dict__ if info else None,
+            'passed': test_passed
+        }
+    
+    # 统计测试结果
+    total_tests = sum(len(category) for category in test_results.values())
+    passed_tests = sum(
+        sum(1 for test in category.values() if test['passed'])
+        for category in test_results.values()
+    )
+    
+    test_results['summary'] = {
+        'total_tests': total_tests,
+        'passed_tests': passed_tests,
+        'success_rate': f"{(passed_tests / total_tests * 100):.2f}%" if total_tests > 0 else "N/A"
+    }
+    
+    return test_results

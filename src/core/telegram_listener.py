@@ -446,330 +446,337 @@ class TelegramListener:
             return 0
     
     async def handle_new_message(self, event):
-        """处理新消息事件，支持频道和群组，增加错误处理和恢复机制"""
-        start_time = time.time()
-        message = event.message
+        """
+        处理新消息事件
         
-        # 获取频道/群组标识符
-        channel_identifier = None
-        channel_id = None
-        
-        # 增强频道类型判断
-        is_group = False
-        is_supergroup = False
-        
-        # 尝试获取频道ID和类型
-        if hasattr(event.chat, 'id'):
-            channel_id = event.chat.id
-            # 记录频道ID格式
-            id_type = "正整数" if channel_id > 0 else "负整数"
-            logger.debug(f"处理消息: 频道ID格式: {id_type}, 值: {channel_id}")
-        
-        # 使用Telethon库的正确判断方式
-        from telethon.tl.types import Channel, Chat
-        
-        if isinstance(event.chat, Channel):
-            if event.chat.megagroup:
-                # 超级群组
-                is_supergroup = True
-                is_group = True
-            elif event.chat.broadcast:
-                # 普通频道
-                is_group = False
-                is_supergroup = False
-            else:
-                # 其他Channel类型
-                is_group = False
-        elif isinstance(event.chat, Chat):
-            # 普通群组
-            is_group = True
-            is_supergroup = False
-        
-        # 获取并更新频道成员数
-        member_count = 0
-        if channel_id:
-            try:
-                # 获取成员数量
-                member_count = await self.get_channel_members_count(
-                    channel_id=channel_id,
-                    is_group=is_group,
-                    is_supergroup=is_supergroup
-                )
-                
-                # 更新数据库中的成员数
-                if member_count > 0:
-                    # 使用数据库适配器获取频道信息
-                    from src.database.db_factory import get_db_adapter
-                    db_adapter = get_db_adapter()
-                    
-                    try:
-                        # 尝试获取频道
-                        channel = await db_adapter.get_channel_by_id(channel_id)
-                        
-                        if channel and channel.get('member_count') != member_count:
-                            logger.info(f"更新频道 {channel_id} 的成员数: {channel.get('member_count')} -> {member_count}")
-                            channel['member_count'] = member_count
-                            channel['last_updated'] = datetime.now()
-                            await db_adapter.save_channel(channel)
-                    except Exception as e:
-                        logger.error(f"更新频道 {channel_id} 成员数时出错: {str(e)}")
-            except Exception as e:
-                logger.warning(f"获取频道 {channel_id} 成员数时出错: {str(e)}")
-        
-        # 获取消息的基本信息
-        message_id = message.id
-        date = message.date
-        text = message.text or message.message or ""
-        
-        # 确定该消息所属的区块链
-        channel_chain = None
-        
+        Args:
+            event: Telegram消息事件对象
+        """
         try:
-            # 由于ChannelManager已修改，获取所有活跃频道
-            active_channels = self.channel_manager.get_active_channels()
-            
-            # 查找与当前消息匹配的频道
-            for channel in active_channels:
-                if (channel.get('channel_id') and channel.get('channel_id') == channel_id) or \
-                   (channel.get('channel_username') and hasattr(event.chat, 'username') and 
-                    channel.get('channel_username') == event.chat.username):
-                    channel_chain = channel.get('chain')
-                    break
+            # 获取消息对象
+            message = event.message
+            if not message:
+                return
                 
-            if not channel_chain:
-                # 尝试从消息内容中提取区块链信息
-                from src.database.db_handler import extract_chain_from_message
-                extracted_chain = extract_chain_from_message(text)
-                if extracted_chain:
-                    channel_chain = extracted_chain
-                    logger.info(f"从消息内容中提取到区块链: {channel_chain}")
-                else:
-                    logger.warning(f"无法确定消息的区块链，跳过处理: channel_id={channel_id}")
-                    return
-        except Exception as e:
-            logger.error(f"确定消息区块链时出错: {str(e)}")
-            return
-        
-        # 获取标识符（用户名或ID）
-        if hasattr(event.chat, 'username') and event.chat.username:
-            channel_identifier = event.chat.username
-        else:
-            # 如果没有用户名，则使用ID作为标识符
-            channel_identifier = f"id_{channel_id}" if channel_id else "unknown"
+            # 获取频道信息
+            channel_id = None
+            channel_title = None
             
-        # 获取链信息
-        chain = None
-        # 先尝试通过ID获取链信息
-        if channel_id and hasattr(self, 'channel_entities'):
-            # 如果ID在channel_entities中有对应的实体，获取它的链信息
-            entity_key = str(channel_id)
-            if entity_key in self.chain_map:
-                chain = self.chain_map[entity_key]
-                
-        # 如果通过ID没有找到，则尝试通过上下文从活跃频道中查找
-        if not chain:
-            try:
-                active_channels = self.channel_manager.get_active_channels()
-                for active_channel in active_channels:
-                    if (active_channel.get('channel_id') == channel_id or 
-                        (active_channel.get('channel_username') and 
-                         hasattr(event.chat, 'username') and 
-                         active_channel.get('channel_username') == event.chat.username)):
-                        chain = active_channel.get('chain')
-                        # 添加到chain_map以加速后续查询
-                        if channel_id:
-                            self.chain_map[str(channel_id)] = chain
-                        break
-            except Exception as e:
-                logger.error(f"查找频道链信息时出错: {str(e)}")
+            if hasattr(message.peer_id, 'channel_id'):
+                channel_id = message.peer_id.channel_id
+                try:
+                    chat = await self.client.get_entity(message.peer_id)
+                    channel_title = chat.title
+                except Exception as e:
+                    logger.error(f"获取频道信息失败: {str(e)}")
+                    channel_title = "未知频道"
             
-        # 如果都没找到，使用默认值
-        if not chain:
-            chain = 'UNKNOWN'
-        
-        channel_type = "普通频道"
-        if is_supergroup:
-            channel_type = "超级群组"
-        elif is_group:
-            channel_type = "普通群组"
-            
-        logger.info(f"收到新消息 - {channel_type}: {channel_identifier}, ID: {channel_id}, 链: {chain}, 消息ID: {message.id}")
-        
-        try:
-            # 打印完整消息内容
-            if message.text:
-                logger.info(f"消息内容:\n{'-' * 50}\n{message.text[:500]}...\n{'-' * 50}")
-            else:
-                logger.info("消息没有文本内容")
+            # 记录消息信息
+            logger.info(f"收到新消息 - 普通频道: {channel_title}, ID: {channel_id}, 链: UNKNOWN, 消息ID: {message.id}")
+            logger.info(f"消息内容:\n--------------------------------------------------\n{message.text[:500]}...\n--------------------------------------------------")
             
             # 保存媒体文件
-            media_path = None
             if message.media:
-                # 添加超时控制和错误处理
-                try:
-                    media_dir = f'media/{chain}'
-                    os.makedirs(media_dir, exist_ok=True)
-                    media_path = f'{media_dir}/{message.id}'
-                    
-                    # 设置下载超时
-                    download_task = asyncio.create_task(self.client.download_media(message, media_path))
-                    await asyncio.wait_for(download_task, timeout=60)  # 60秒超时
-                    logger.info(f"保存了媒体文件: {media_path}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"下载媒体文件超时: {channel_type}={channel_identifier}, 消息ID={message.id}")
-                    media_path = None
-                except Exception as e:
-                    logger.error(f"下载媒体文件失败: {str(e)}")
-                    media_path = None
+                await self._save_media_from_message(message, channel_id)
             
-            try:
-                # 使用数据库适配器获取连接
-                from src.database.db_factory import get_db_adapter
-                db_adapter = get_db_adapter()
-                
-                # 使用新的数据库函数保存消息
-                message_data = {
-                    'chain': chain,
-                    'message_id': message.id,
-                    'date': message.date,
-                    'text': message.text,
-                    'media_path': media_path,
-                    'channel_id': channel_id  # 只使用channel_id字段
-                }
-                saved = await db_adapter.save_message(message_data)
-                
-                # 如果消息已存在，则不继续处理
-                if not saved:
-                    return
-                
-                # 从消息中提取 promotion 信息
-                promo = None
-                if message.text:
-                    try:
-                        promo = extract_promotion_info(message.text, message.date, chain, message.id, channel_id)
-                        logger.debug(f"extract_promotion_info 返回值: {promo}")
-                    except Exception as e:
-                        logger.error(f"提取 promotion 信息时出错: {str(e)}")
-                        logger.debug(tb.format_exc())
-                
-                # 如果找到合约地址，调用DEX API获取完整信息
-                if promo and promo.contract_address:
-                    logger.info(f"找到合约地址: {promo.contract_address}，开始通过DEX API获取完整信息")
-                    try:
-                        # 使用合约地址调用DEX API
-                        from src.api.token_market_updater import update_token_market_data_async
-
-                        # 确保chain值有效
-                        if not promo.chain or promo.chain == "UNKNOWN":
-                            # 尝试从消息中再次提取链信息
-                            from src.database.db_handler import extract_chain_from_message
-                            extracted_chain = extract_chain_from_message(message.text)
-                            if extracted_chain:
-                                promo.chain = extracted_chain
-                                logger.info(f"从消息中提取到链信息: {promo.chain}")
-                            else:
-                                # 如果未确定链，尝试常见链
-                                test_chains = ["solana", "ethereum", "bsc", "arbitrum", "base", "optimism"]
-                                for test_chain in test_chains:
-                                    try:
-                                        # 尝试调用DEX API
-                                        from src.api.token_market_updater import _normalize_chain_id
-                                        chain_id = _normalize_chain_id(test_chain)
-                                        if chain_id:
-                                            logger.info(f"尝试在链 {test_chain} 上查询合约地址 {promo.contract_address}")
-                                            result = await update_token_market_data_async(test_chain, promo.contract_address)
-                                            if "error" not in result:
-                                                # 找到有效链
-                                                chain_map = {
-                                                    "solana": "SOL",
-                                                    "ethereum": "ETH",
-                                                    "bsc": "BSC",
-                                                    "arbitrum": "ARB",
-                                                    "base": "BASE",
-                                                    "optimism": "OP"
-                                                }
-                                                promo.chain = chain_map.get(test_chain, test_chain.upper())
-                                                logger.info(f"通过DEX API确定链为: {promo.chain}")
-                                                break
-                                    except Exception as e_inner:
-                                        logger.warning(f"尝试在链 {test_chain} 上查询时出错: {str(e_inner)}")
-                        
-                        # 使用确定的链调用API
-                        if promo.chain and promo.chain != "UNKNOWN":
-                            # 传递所有必要的参数
-                            result = await update_token_market_data_async(
-                                promo.chain, 
-                                promo.contract_address, 
-                                message_id=message.id, 
-                                channel_id=channel_id,
-                                risk_level=promo.risk_level if hasattr(promo, 'risk_level') else None,
-                                promotion_count=promo.promotion_count if hasattr(promo, 'promotion_count') else 1
-                            )
-                            
-                            if "error" not in result:
-                                # 检查是否是新创建的代币 (is_new字段仅用于API响应和日志区分，不存储在数据库中)
-                                is_new_token = result.get("is_new", False)
-                                if is_new_token:
-                                    logger.info(f"成功创建新代币 {promo.chain}/{promo.contract_address} 的信息")
-                                else:
-                                    logger.info(f"成功更新代币 {promo.chain}/{promo.contract_address} 的信息")
-                                
-                                # 获取当前时间格式化为字符串
-                                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                                
-                                # 保存代币信息到数据库 - 由于我们已经在update_token_market_data_async中处理了保存逻辑
-                                # 这里我们只需要保存代币标记信息
-                                token_symbol = result.get('symbol', '未知')
-                                
-                                # 保存代币标记信息
-                                token_mark_data = {
-                                    'chain': promo.chain,
-                                    'token_symbol': token_symbol,
-                                    'contract': promo.contract_address,
-                                    'message_id': message.id,
-                                    'market_cap': result.get('marketCap', 0),
-                                    'channel_id': channel_id
-                                }
-                                
-                                # 保存代币标记
-                                mark_result = await db_adapter.save_token_mark(token_mark_data)
-                                if mark_result:
-                                    logger.info(f"成功保存代币标记信息: {token_symbol}")
-                                else:
-                                    logger.warning(f"保存代币标记信息失败: {token_symbol}")
-                            else:
-                                logger.warning(f"通过DEX API获取代币信息失败: {result.get('error')}")
-                        else:
-                            logger.warning(f"未能确定合约地址 {promo.contract_address} 所属的链，无法调用DEX API")
-                    except Exception as e:
-                        logger.error(f"处理代币信息时出错: {str(e)}")
-                        logger.debug(tb.format_exc())
-                else:
-                    logger.info("未从消息中提取到合约地址，跳过代币信息处理")
-                
-                # 重置错误计数，表示处理成功
-                self.error_count = 0
-                self.last_error_time = None
-                
-                # 记录处理时间
-                process_time = time.time() - start_time
-                logger.debug(f"消息处理完成，耗时: {process_time:.2f}秒")
-                
-            except Exception as e:
-                logger.error(f"获取数据库连接或更新代币信息时出错: {str(e)}")
-                logger.debug(tb.format_exc())
+            # 提取并处理消息中的代币信息
+            await self._process_token_in_message(message, channel_id, channel_title)
+            
+            # 重置错误计数，表示处理成功
+            self.error_count = 0
+            self.last_error_time = None
             
         except Exception as e:
-            # 记录错误并更新错误计数
-            self.error_count += 1
-            self.last_error_time = datetime.now()
-            logger.error(f"处理新消息时出错 (错误计数: {self.error_count}): {str(e)}")
+            logger.error(f"处理新消息时出错: {str(e)}")
+            import traceback as tb
             logger.debug(tb.format_exc())
             
-            # 如果错误过多，尝试重新初始化处理程序
-            if self.error_count >= 5:
-                logger.warning("错误过多，尝试重新初始化处理程序...")
-                asyncio.create_task(self.reinitialize_handlers())
+            # 增加错误计数
+            self.error_count += 1
+            self.last_error_time = time.time()
+            
+            # 如果错误次数过多，尝试重新初始化
+            if self.error_count >= self.max_errors:
+                logger.warning(f"错误次数达到{self.max_errors}次，尝试重新初始化处理器...")
+                await self.reinitialize_handlers()
+    
+    async def _save_media_from_message(self, message, channel_id):
+        """
+        保存消息中的媒体文件
+        
+        Args:
+            message: 消息对象
+            channel_id: 频道ID
+        """
+        try:
+            if not message.media:
+                return
+                
+            chain = "UNKNOWN"  # 默认链
+            # 创建目录（如果不存在）
+            os.makedirs(f"media/{chain}", exist_ok=True)
+            
+            # 设置文件名和路径
+            file_path = f"media/{chain}/{message.id}"
+            
+            # 下载媒体文件
+            await self.client.download_media(message, file_path)
+            logger.info(f"保存了媒体文件: {file_path}")
+            
+            # 更新消息记录
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            
+            # 查询是否已存在记录
+            existing = await db_adapter.execute_query('messages', 'select', 
+                                                     filters={
+                                                         'channel_id': channel_id,
+                                                         'message_id': message.id
+                                                     }, 
+                                                     limit=1)
+            
+            # 更新或插入记录
+            if existing and len(existing) > 0:
+                message_id = existing[0].get('id')
+                await db_adapter.execute_query('messages', 'update', 
+                                              data={'has_media': True},
+                                              filters={'id': message_id})
+            else:
+                logger.debug(f"未找到消息记录，无法更新媒体状态: {channel_id}/{message.id}")
+                
+        except Exception as e:
+            logger.error(f"保存媒体文件时出错: {str(e)}")
+            import traceback as tb
+            logger.debug(tb.format_exc())
+    
+    async def _process_token_in_message(self, message, channel_id, channel_title):
+        """
+        处理消息中的代币信息
+        
+        Args:
+            message: 消息对象
+            channel_id: 频道ID
+            channel_title: 频道名称
+        """
+        try:
+            # 提取代币信息
+            contract_info = await self._extract_contract_from_message(message.text, channel_id)
+            
+            if not contract_info:
+                logger.info("未从消息中提取到合约地址，跳过代币信息处理")
+                return
+                
+            # 获取代币合约和初始链信息
+            contract_address = contract_info.get('contract_address')
+            chain = contract_info.get('chain', 'UNKNOWN')
+            
+            # 如果链未知，尝试识别链
+            if chain == 'UNKNOWN':
+                chain = await self._identify_chain_for_contract(contract_address)
+                
+            # 处理代币数据
+            if chain and chain != 'UNKNOWN':
+                await self._update_or_create_token(chain, contract_address, message.id, channel_id)
+            else:
+                logger.warning(f"未能确定合约地址 {contract_address} 所属的链，无法调用DEX API")
+                
+        except Exception as e:
+            logger.error(f"处理代币信息时出错: {str(e)}")
+            import traceback as tb
+            logger.debug(tb.format_exc())
+    
+    async def _extract_contract_from_message(self, message_text, channel_id):
+        """
+        从消息文本中提取合约地址信息
+        
+        Args:
+            message_text: 消息文本
+            channel_id: 频道ID
+            
+        Returns:
+            Dict: 包含合约地址和链信息的字典，如果未找到则返回None
+        """
+        try:
+            # 获取数据库适配器
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            
+            # 提取合约地址和链信息
+            from datetime import datetime
+            current_time = datetime.now()
+            
+            # 如果db_adapter中有extract_promotion_info方法则调用它
+            if hasattr(db_adapter, 'extract_promotion_info'):
+                promo = await db_adapter.extract_promotion_info(message_text, current_time, 'UNKNOWN', channel_id)
+            else:
+                # 否则使用传统方式调用
+                from src.database.db_handler import extract_promotion_info
+                promo = extract_promotion_info(message_text, current_time, 'UNKNOWN', None, channel_id)
+            
+            if not promo or not hasattr(promo, 'contract_address') or not promo.contract_address:
+                return None
+                
+            return {
+                'contract_address': promo.contract_address,
+                'chain': promo.chain if hasattr(promo, 'chain') else 'UNKNOWN',
+                'risk_level': promo.risk_level if hasattr(promo, 'risk_level') else None,
+                'promotion_count': promo.promotion_count if hasattr(promo, 'promotion_count') else 1
+            }
+            
+        except Exception as e:
+            logger.error(f"提取合约地址时出错: {str(e)}")
+            import traceback as tb
+            logger.debug(tb.format_exc())
+            return None
+    
+    async def _identify_chain_for_contract(self, contract_address):
+        """
+        识别合约地址所属的链
+        
+        Args:
+            contract_address: 合约地址
+            
+        Returns:
+            str: 链ID，如果未识别出则返回'UNKNOWN'
+        """
+        try:
+            # 尝试的链列表
+            test_chains = ["solana", "ethereum", "bsc", "arbitrum", "base", "optimism", "avalanche", "polygon"]
+            
+            # 获取API助手
+            from src.api.token_market_updater import update_token_market_data_async
+            
+            # 依次尝试各链
+            for test_chain in test_chains:
+                try:
+                    logger.info(f"尝试在链 {test_chain} 上查询合约地址 {contract_address}")
+                    result = await update_token_market_data_async(test_chain, contract_address)
+                    
+                    if "error" not in result:
+                        # 找到有效链
+                        chain_map = {
+                            "solana": "SOL",
+                            "ethereum": "ETH",
+                            "bsc": "BSC",
+                            "arbitrum": "ARB",
+                            "base": "BASE",
+                            "optimism": "OP",
+                            "avalanche": "AVAX",
+                            "polygon": "MATIC",
+                            "zksync": "ZK",
+                            "ton": "TON"
+                        }
+                        chain = chain_map.get(test_chain, test_chain.upper())
+                        logger.info(f"通过DEX API确定链为: {chain}")
+                        return chain
+                        
+                except Exception as e_inner:
+                    logger.warning(f"尝试在链 {test_chain} 上查询时出错: {str(e_inner)}")
+            
+            # 未能识别链
+            return "UNKNOWN"
+            
+        except Exception as e:
+            logger.error(f"识别链时出错: {str(e)}")
+            return "UNKNOWN"
+    
+    async def _update_or_create_token(self, chain, contract_address, message_id, channel_id, risk_level=None, promotion_count=1):
+        """
+        更新或创建代币信息
+        
+        Args:
+            chain: 链ID
+            contract_address: 合约地址
+            message_id: 消息ID
+            channel_id: 频道ID
+            risk_level: 风险等级
+            promotion_count: 推广次数
+        """
+        try:
+            # 获取API助手
+            from src.api.token_market_updater import update_token_market_data_async
+            
+            # 更新代币数据
+            result = await update_token_market_data_async(
+                chain, 
+                contract_address, 
+                message_id=message_id, 
+                channel_id=channel_id,
+                risk_level=risk_level,
+                promotion_count=promotion_count
+            )
+            
+            # 检查是否需要创建新代币
+            if "error" in result and "数据库中未找到该代币" in result["error"]:
+                # 创建新代币
+                logger.info(f"未找到代币 {chain}/{contract_address}，开始创建新代币")
+
+                result["channel_id"] = channel_id
+                result["risk_level"] = risk_level
+                result["message_id"] = message_id
+                # 创建新代币
+                result = await self.create_token(result)
+                
+                if "error" in result:
+                    logger.warning(f"创建新代币失败: {result.get('error')}")
+                    return
+                    
+                logger.info(f"成功创建新代币 {chain}/{contract_address}")
+            
+            # 处理成功更新或创建的结果
+            if "error" not in result:
+                await self._save_token_mark(chain, contract_address, message_id, channel_id, result)
+            else:
+                logger.warning(f"处理代币信息失败: {result.get('error')}")
+                
+        except Exception as e:
+            logger.error(f"更新或创建代币时出错: {str(e)}")
+            import traceback as tb
+            logger.debug(tb.format_exc())
+    
+    async def _save_token_mark(self, chain, contract_address, message_id, channel_id, token_result):
+        """
+        保存代币标记信息
+        
+        Args:
+            chain: 链ID
+            contract_address: 合约地址
+            message_id: 消息ID
+            channel_id: 频道ID
+            token_result: 代币处理结果
+        """
+        try:
+            # 获取数据库适配器
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            
+            # 检查是否是新创建的代币
+            is_new_token = token_result.get("is_new", False)
+            if is_new_token:
+                logger.info(f"成功创建新代币 {chain}/{contract_address} 的信息")
+            else:
+                logger.info(f"成功更新代币 {chain}/{contract_address} 的信息")
+            
+            # 保存代币标记信息
+            token_symbol = token_result.get('symbol', '未知')
+            token_mark_data = {
+                'chain': chain,
+                'token_symbol': token_symbol,
+                'contract': contract_address,
+                'message_id': message_id,
+                'market_cap': token_result.get('marketCap', 0),
+                'channel_id': channel_id
+            }
+            
+            # 保存代币标记
+            mark_result = await db_adapter.save_token_mark(token_mark_data)
+            if mark_result:
+                logger.info(f"成功保存代币标记信息: {token_symbol}")
+            else:
+                logger.warning(f"保存代币标记信息失败: {token_symbol}")
+                
+        except Exception as e:
+            logger.error(f"保存代币标记时出错: {str(e)}")
     
     async def reinitialize_handlers(self):
         """当发生多次错误时，重新初始化处理程序"""
@@ -1354,21 +1361,6 @@ class TelegramListener:
                         self.error_count -= 1
                         logger.info(f"错误计数减少: {self.error_count+1} -> {self.error_count}")
                 
-                # 检查系统资源
-                # try:
-                #     import psutil
-                #     process = psutil.Process(os.getpid())
-                #     memory_usage_mb = process.memory_info().rss / 1024 / 1024
-                #     logger.info(f"当前内存使用: {memory_usage_mb:.2f} MB")
-                    
-                #     # 如果内存使用超过1GB，记录警告
-                #     if memory_usage_mb > 1024:
-                #         logger.warning(f"内存使用较高: {memory_usage_mb:.2f} MB")
-                # except ImportError:
-                #     logger.info("psutil未安装，无法获取系统资源信息")
-                # except Exception as e:
-                #     logger.error(f"获取系统资源信息出错: {str(e)}")
-                
                 # 健康检查成功
                 active_channel_count = len(self.channel_manager.get_active_channels())
                 logger.info(f"健康检查完成，监听器状态正常 - 活跃频道: {active_channel_count}, 消息处理器: {len(self.event_handlers)}")
@@ -1437,6 +1429,159 @@ class TelegramListener:
         
         logger.info("Telegram监听服务已完全停止")
         return True
+
+    # 添加新函数: 创建代币
+    async def create_token(self, token_data):
+        """
+        创建新代币
+        
+        Args:
+            token_data: 包含代币信息的字典
+            
+        Returns:
+            Dict: 包含创建结果的字典
+        """
+        try:
+            logger.info(f"开始创建新代币 {token_data.get('chain')}/{token_data.get('contract')}")
+            
+            # 获取数据库适配器
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            
+            # 获取当前时间格式化为字符串
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 准备新代币数据
+            new_token_data = {
+                'chain': token_data.get('chain'),
+                'contract': token_data.get('contract'),
+                'token_symbol': token_data.get('symbol', ''),
+                'message_id': token_data.get('message_id'),  # 添加消息ID
+                'market_cap': token_data.get('marketCap', 0),
+                'market_cap_1h': None,  # 初始设置为None，后续更新时会保存当前市值为1小时前市值
+                'market_cap_formatted': self._format_market_cap(token_data.get('marketCap', 0)),
+                'first_market_cap': token_data.get('marketCap', 0),  # 首次市值
+                'promotion_count': 1,  # 初始推广次数为1
+                'likes_count': 0,  # 初始点赞数为0
+                'telegram_url': None,  # 暂无Telegram链接
+                'twitter_url': None,  # 暂无Twitter链接
+                'website_url': None,  # 暂无网站链接
+                'latest_update': current_time,
+                'first_update': current_time,
+                'dexscreener_url': token_data.get('dexScreenerUrl'),
+                'from_group': False,  # 默认不是来自群组
+                'channel_id': token_data.get('channel_id'),
+                'image_url': token_data.get('image_url'),
+                'last_calculated_change_pct': 0,  # 初始价格变化百分比为0
+                'last_calculation_time': current_time,
+                
+                # 价格和市值趋势分析字段
+                'price': token_data.get('price'),
+                'first_price': token_data.get('first_price'),
+                'price_change_24h': 0,  # 初始24小时价格变化为0
+                'price_change_7d': 0,  # 初始7天价格变化为0
+                'volume_24h': 0,  # 初始24小时交易量为0
+                'volume_1h': token_data.get('volume_1h', 0),
+                'liquidity': token_data.get('liquidity', 0),
+                'holders_count': token_data.get('holders_count', 0),
+                
+                # 1小时交易数据
+                'buys_1h': token_data.get('buys_1h', 0),
+                'sells_1h': token_data.get('sells_1h', 0),
+                
+                # 代币传播统计
+                'spread_count': 0,  # 初始传播次数为0
+                'community_reach': 0,  # 初始社群覆盖人数为0
+                
+                # 情感分析字段
+                'sentiment_score': None,  # 暂无情感分析得分
+                'positive_words': None,  # 暂无积极词汇
+                'negative_words': None,  # 暂无消极词汇
+                'is_trending': False,  # 初始非热门状态
+                'hype_score': 0,  # 初始炒作评分为0
+                'risk_level': token_data.get('risk_level')  # 风险等级
+            }
+            
+            # 插入新代币
+            insert_result = await db_adapter.execute_query('tokens', 'insert', data=new_token_data)
+            
+            if isinstance(insert_result, dict) and insert_result.get('error'):
+                logger.error(f"创建新代币失败: {insert_result.get('error')}")
+                return {"error": f"创建新代币失败: {insert_result.get('error')}"}
+            
+            logger.info(f"成功创建新代币 {token_data.get('chain')}/{token_data.get('contract')}")
+            
+            # 记录历史数据
+            try:
+                # 创建历史记录
+                history_data = {
+                    'chain': token_data.get('chain'),
+                    'contract': token_data.get('contract'),
+                    'token_symbol': token_data.get('symbol', ''),
+                    'timestamp': datetime.now().isoformat(),
+                    'market_cap': token_data.get('marketCap', 0),
+                    'price': token_data.get('price', 0),
+                    'liquidity': token_data.get('liquidity', 0),
+                    'volume_24h': 0,
+                    'volume_1h': token_data.get('volume_1h', 0),
+                    'holders_count': token_data.get('holders_count', 0),
+                    'buys_1h': token_data.get('buys_1h', 0),
+                    'sells_1h': token_data.get('sells_1h', 0),
+                    'community_reach': 0,
+                    'spread_count': 0,
+                    'market_cap_change_pct': 0,
+                    'price_change_pct': 0
+                }
+                
+                # 插入历史记录
+                await db_adapter.execute_query(
+                    'token_history', 
+                    'insert', 
+                    data=history_data
+                )
+                logger.info(f"成功记录新代币 {token_data.get('chain')}/{token_data.get('contract')} 的历史数据")
+            except Exception as history_error:
+                logger.error(f"记录新代币历史数据时出错: {str(history_error)}")
+            
+            # 返回成功结果
+            return {
+                "success": True,
+                "is_new": True,  # 标记为新创建的代币
+                "chain": token_data.get('chain'),
+                "contract": token_data.get('contract'),
+                "symbol": token_data.get('symbol', ''),
+                "marketCap": token_data.get('marketCap', 0),
+                "liquidity": token_data.get('liquidity', 0),
+                "price": token_data.get('price'),
+                "dexScreenerUrl": token_data.get('dexScreenerUrl'),
+                "image_url": token_data.get('image_url')
+            }
+                
+        except Exception as e:
+            logger.error(f"创建新代币时发生错误: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {"error": f"创建新代币时发生错误: {str(e)}"}
+    
+    def _format_market_cap(self, market_cap: float) -> str:
+        """格式化市值显示
+        
+        Args:
+            market_cap: 市值数字
+            
+        Returns:
+            str: 格式化后的市值字符串
+        """
+        if not market_cap or market_cap <= 0:
+            return "$0.00"
+            
+        if market_cap >= 1000000000:  # 十亿 (B)
+            return f"${market_cap/1000000000:.2f}B"
+        elif market_cap >= 1000000:   # 百万 (M)
+            return f"${market_cap/1000000:.2f}M"
+        elif market_cap >= 1000:      # 千 (K)
+            return f"${market_cap/1000:.2f}K"
+        return f"${market_cap:.2f}"
 
 # 设置日志格式
 def setup_logging():

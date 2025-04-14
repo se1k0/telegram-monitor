@@ -239,12 +239,10 @@ async def get_pair_info(chain_id: str, token_address: str) -> Dict[str, Any]:
             return {"error": pools_data["error"]}
         
         # 处理API返回的数据结构
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
+        # 根据API文档，token-pairs/v1/{chainId}/{tokenAddress}返回的直接是交易对数组
+        pairs = pools_data  # 直接使用返回的数据
             
-        if not pairs:
+        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain_id}/{token_address} 的交易对")
             return {"error": "未找到代币交易对"}
             

@@ -174,6 +174,15 @@ def setup() -> Dict[str, Any]:
         config = load_config()
         logger.info("已从环境变量加载配置")
         
+        # 设置常见库的日志级别，避免过多的调试信息
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("requests").setLevel(logging.WARNING)
+        logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+        logging.getLogger("asyncio").setLevel(logging.WARNING)
+        logging.getLogger("telethon").setLevel(logging.INFO)
+        
         # 导入数据库URI直接从settings中获取
         try:
             from config.settings import DATABASE_URI

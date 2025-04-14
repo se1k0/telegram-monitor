@@ -81,7 +81,7 @@ class SupabaseAdapter:
         self.supabase_admin = supabase_admin if supabase_admin else supabase
         
     async def execute_query(self, table: str, query_type: str, data: Dict[str, Any] = None, 
-                           filters: Dict[str, Any] = None, limit: int = None) -> Dict[str, Any]:
+                           filters: Dict[str, Any] = None, limit: int = None, fields: List[str] = None) -> Dict[str, Any]:
         """
         执行Supabase查询
         
@@ -91,6 +91,7 @@ class SupabaseAdapter:
             data: 要插入或更新的数据
             filters: 过滤条件
             limit: 限制返回记录数
+            fields: 要选择的字段列表（仅用于select操作）
             
         Returns:
             查询结果
@@ -105,11 +106,17 @@ class SupabaseAdapter:
             
             if query_type == 'select':
                 # 构建查询
+                # 处理字段选择
+                if fields and isinstance(fields, list) and len(fields) > 0:
+                    # 使用指定的字段列表
+                    field_str = ",".join(fields)
+                    select_query = query.select(field_str)
+                else:
+                    # 默认选择所有字段
+                    select_query = query.select("*")
+                
                 if filters:
                     # 对于Supabase的Python客户端，我们需要使用eq、gt等方法来过滤
-                    # 首先构建基本查询
-                    select_query = query.select("*")
-                    
                     # 应用过滤条件
                     for key, value in filters.items():
                         # 处理不同类型的过滤条件
@@ -136,9 +143,9 @@ class SupabaseAdapter:
                 else:
                     # 无过滤器，直接获取所有记录
                     if limit:
-                        result = query.select("*").limit(limit).execute()
+                        result = select_query.limit(limit).execute()
                     else:
-                        result = query.select("*").execute()
+                        result = select_query.execute()
                     return result.data
                 
             elif query_type == 'insert':
@@ -785,7 +792,14 @@ class SupabaseAdapter:
                     data=channel_data
                 )
                 
-            return not result.get('error')
+            # 修复：正确处理不同类型的返回值
+            if isinstance(result, dict) and result.get('error'):
+                # 如果返回的是带错误信息的字典，说明失败
+                logger.error(f"保存频道信息返回错误: {result.get('error')}")
+                return False
+            else:
+                # 如果返回的是列表或其他值，表示成功
+                return True
             
         except Exception as e:
             logger.error(f"保存频道信息到Supabase失败: {str(e)}")

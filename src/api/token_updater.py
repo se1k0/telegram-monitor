@@ -18,6 +18,9 @@ from typing import Dict, List, Any, Optional
 # 导入数据库适配器
 from src.database.db_factory import get_db_adapter
 
+# 导入链ID标准化函数
+from src.api.token_market_updater import _normalize_chain_id
+
 # 设置日志
 try:
     from src.utils.logger import get_logger
@@ -119,53 +122,94 @@ class TokenDataUpdater:
             # 尝试从DEX Screener获取市场数据
             try:
                 from src.api.dex_screener_api import get_token_pools
-                pools = get_token_pools(chain.lower(), contract)
+                # 使用_normalize_chain_id方法来获取正确的链ID
+                normalized_chain_id = _normalize_chain_id(chain)
+                if not normalized_chain_id:
+                    logger.warning(f"无法识别的链ID: {chain}，将使用默认值")
+                    normalized_chain_id = chain.lower()  # 仍使用小写作为后备方案
+                    
+                pools = get_token_pools(normalized_chain_id, contract)
                 
-                if pools and 'pairs' in pools and pools['pairs']:
-                    pairs = pools['pairs']
-                    
+                # 记录API返回的实际内容，便于调试
+                # import json
+                # try:
+                #     # 使用 json.dumps 格式化和截断输出
+                #     sample_content = json.dumps(pools, ensure_ascii=False, indent=2)
+                #     # 如果内容太长，截断显示
+                #     if len(sample_content) > 1000:
+                #         sample_content = sample_content[:1000] + "... [截断剩余内容]"
+                #     logger.info(f"DEX Screener API ({chain}/{contract}) 返回内容:\n{sample_content}")
+                # except Exception as format_error:
+                #     logger.info(f"无法格式化API返回内容: {str(format_error)}")
+                
+                # 根据API文档，token-pairs/v1/{chainId}/{tokenAddress} 返回的是交易对数组
+                if pools and isinstance(pools, list) and len(pools) > 0:
                     # 提取市场数据
-                    max_market_cap = 0  # 市值
-                    max_liquidity = 0   # 流动性
-                    buys_1h = 0         # 1小时买入交易数
-                    sells_1h = 0        # 1小时卖出交易数
-                    volume_1h = 0       # 1小时交易量
-                    price = None        # 价格
-                    image_url = None    # 代币图像URL
+                    max_market_cap = 0      # 市值 (使用 fdv 或 marketCap)
+                    max_liquidity = 0       # 流动性
+                    buys_1h = 0             # 1小时买入交易数
+                    sells_1h = 0            # 1小时卖出交易数
+                    volume_1h = 0           # 1小时交易量
+                    price = None            # 价格
+                    price_change_1h = None  # 1小时价格变化百分比
+                    image_url = None        # 代币图像URL
                     
-                    for pair in pairs:
-                        # 提取市值数据
-                        if 'fdv' in pair and pair['fdv']:
+                    for pair in pools:  # 直接使用 pools 作为交易对数组
+                        # 提取市值数据 - 优先使用 marketCap，其次使用 fdv
+                        if 'marketCap' in pair and pair['marketCap']:
+                            current_market_cap = float(pair['marketCap'])
+                            if current_market_cap > max_market_cap:
+                                max_market_cap = current_market_cap
+                        elif 'fdv' in pair and pair['fdv']:
                             current_market_cap = float(pair['fdv'])
                             if current_market_cap > max_market_cap:
                                 max_market_cap = current_market_cap
                         
                         # 提取流动性数据
-                        if 'liquidity' in pair and 'usd' in pair['liquidity']:
+                        if 'liquidity' in pair and isinstance(pair['liquidity'], dict) and 'usd' in pair['liquidity']:
                             current_liquidity = float(pair['liquidity']['usd'] or 0)
                             max_liquidity += current_liquidity
                         
-                        # 提取交易数据
-                        if 'txns' in pair and 'h1' in pair['txns']:
+                        # 提取交易数据 - 确保txns和h1字段存在且格式正确
+                        if ('txns' in pair and isinstance(pair['txns'], dict) and 
+                            'h1' in pair['txns'] and isinstance(pair['txns']['h1'], dict)):
                             h1_data = pair['txns']['h1']
-                            buys_1h += h1_data.get('buys', 0)
-                            sells_1h += h1_data.get('sells', 0)
+                            buys_1h += int(h1_data.get('buys', 0))
+                            sells_1h += int(h1_data.get('sells', 0))
                         
-                        # 提取交易量数据
-                        if 'volume' in pair and 'h1' in pair['volume']:
-                            volume_1h += float(pair['volume']['h1'] or 0)
+                        # 提取交易量数据 - 确保volume和h1字段存在
+                        if 'volume' in pair and isinstance(pair['volume'], dict) and 'h1' in pair['volume']:
+                            volume_h1 = pair['volume']['h1']
+                            # 确保是数值类型
+                            if volume_h1 is not None:
+                                try:
+                                    volume_1h += float(volume_h1)
+                                except (TypeError, ValueError):
+                                    logger.warning(f"无法转换交易量数据 {volume_h1} 为浮点数")
                         
                         # 提取价格数据
-                        if not price and 'priceUsd' in pair:
-                            price = float(pair['priceUsd'])
+                        if price is None and 'priceUsd' in pair and pair['priceUsd']:
+                            try:
+                                price = float(pair['priceUsd'])
+                            except (TypeError, ValueError):
+                                logger.warning(f"无法转换价格 {pair['priceUsd']} 为浮点数")
+                        
+                        # 提取价格变化数据
+                        if (price_change_1h is None and 'priceChange' in pair and 
+                            isinstance(pair['priceChange'], dict) and 'h1' in pair['priceChange']):
+                            try:
+                                price_change_1h = float(pair['priceChange']['h1'])
+                            except (TypeError, ValueError):
+                                logger.warning(f"无法转换价格变化 {pair['priceChange']['h1']} 为浮点数")
                         
                         # 提取图像URL
-                        if not image_url and 'info' in pair and 'imageUrl' in pair['info']:
+                        if (not image_url and 'info' in pair and 
+                            isinstance(pair['info'], dict) and 'imageUrl' in pair['info']):
                             image_url = pair['info']['imageUrl']
                     
-                    # 计算涨跌幅
-                    change_pct = 0
-                    if previous_market_cap and max_market_cap > 0 and previous_market_cap > 0:
+                    # 计算涨跌幅 - 如果没有从API获取到，则使用市值计算
+                    change_pct = price_change_1h if price_change_1h is not None else 0
+                    if change_pct == 0 and previous_market_cap and max_market_cap > 0 and previous_market_cap > 0:
                         change_pct = (max_market_cap - previous_market_cap) / previous_market_cap * 100
                     
                     # 准备更新数据 - 只包含有实际值的字段
@@ -245,13 +289,92 @@ class TokenDataUpdater:
                         result["success"] = True
                         result["data"] = updated_data
                 else:
-                    logger.warning(f"无法从DEX Screener获取代币 {symbol} 的数据")
-                    result["error"] = "无法获取DEX Screener数据"
+                    # 记录详细错误信息，包括API返回的实际内容
+                    log_msg = f"无法从DEX Screener获取代币 {symbol} ({chain}/{contract}) 的数据"
+                    error_msg = "无法获取DEX Screener数据"
+                    
+                    # 添加API返回的实际内容
+                    if pools is None:
+                        log_msg += "，API返回为空"
+                        error_msg += "：API返回为空"
+                    else:
+                        # # 记录完整的API返回内容，便于调试
+                        # import json
+                        # try:
+                        #     # 使用 json.dumps 格式化输出
+                        #     sample_content = json.dumps(pools, ensure_ascii=False, indent=2)
+                        #     # 如果内容太长，截断显示
+                        #     if len(sample_content) > 1000:
+                        #         sample_content = sample_content[:1000] + "... [截断剩余内容]"
+                        #     logger.warning(f"DEX Screener API 返回异常内容:\n{sample_content}")
+                        # except Exception as format_error:
+                        #     logger.warning(f"无法格式化API返回内容: {str(format_error)}")
+                        
+                        # 根据API文档检查返回格式
+                        if isinstance(pools, list):
+                            if len(pools) == 0:
+                                log_msg += "，API返回空列表"
+                                error_msg += "：API返回空列表，未找到该代币的交易对信息"
+                            else:
+                                # 列表非空但可能缺少必要字段或数据结构不符合预期
+                                log_msg += f"，API返回列表包含 {len(pools)} 个项目，但可能缺少必要字段"
+                                error_msg += f"：API返回的 {len(pools)} 个交易对数据中没有找到有效的市值/流动性信息"
+                                
+                                # 添加对返回内容的更深入分析
+                                try:
+                                    # 检查每个交易对是否有我们需要的关键字段
+                                    missing_fields_summary = []
+                                    for i, pair in enumerate(pools[:3]):  # 只分析前3个交易对
+                                        missing_fields = []
+                                        if 'marketCap' not in pair and 'fdv' not in pair:
+                                            missing_fields.append("marketCap/fdv")
+                                        if 'liquidity' not in pair or not isinstance(pair.get('liquidity'), dict) or 'usd' not in pair.get('liquidity', {}):
+                                            missing_fields.append("liquidity.usd")
+                                        if 'txns' not in pair or 'h1' not in pair.get('txns', {}):
+                                            missing_fields.append("txns.h1")
+                                        if 'volume' not in pair or 'h1' not in pair.get('volume', {}):
+                                            missing_fields.append("volume.h1")
+                                        
+                                        if missing_fields:
+                                            missing_fields_str = ", ".join(missing_fields)
+                                            missing_fields_summary.append(f"交易对{i+1}缺少: {missing_fields_str}")
+                                    
+                                    if missing_fields_summary:
+                                        fields_info = "; ".join(missing_fields_summary)
+                                        logger.warning(f"API返回数据缺少关键字段: {fields_info}")
+                                except Exception as analysis_error:
+                                    logger.warning(f"分析API返回数据时出错: {str(analysis_error)}")
+                        elif isinstance(pools, dict):
+                            # 如果返回的是字典而不是列表，可能API格式有变化或返回了错误信息
+                            keys = list(pools.keys())
+                            log_msg += f"，API返回字典而非预期的列表，包含键: {keys}"
+                            error_msg += f"：API返回格式异常，预期列表但收到字典: {keys}"
+                            
+                            # 检查是否包含错误信息
+                            if 'error' in pools:
+                                error_msg += f"：{pools['error']}"
+                            elif 'message' in pools:
+                                error_msg += f"：{pools['message']}"
+                            elif 'status' in pools:
+                                error_msg += f"：状态码 {pools['status']}"
+                        else:
+                            log_msg += f"，API返回类型 {type(pools).__name__} 而非预期的列表"
+                            error_msg += f"：API返回格式异常，预期列表但收到 {type(pools).__name__}"
+                    
+                    logger.warning(log_msg)
+                    result["error"] = error_msg
             except Exception as e:
                 logger.error(f"获取DEX Screener数据失败: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
-                result["error"] = f"获取市场数据出错: {str(e)}"
+                
+                # 提供更具体的错误信息
+                if "Connection" in str(e) or "Timeout" in str(e):
+                    result["error"] = f"连接DEX Screener API失败: {str(e)}"
+                elif "JSON" in str(e):
+                    result["error"] = f"解析DEX Screener API返回的JSON数据失败: {str(e)}"
+                else:
+                    result["error"] = f"获取市场数据出错: {str(e)}"
             
             # 更新社区覆盖数据
             try:
@@ -460,8 +583,8 @@ class TokenDataUpdater:
                     community_result = await update_all_tokens_community_reach_async(limit=limit, continue_from_last=True, concurrency=5)
                     
                     logger.info(f"社区覆盖数据更新完成: 成功={community_result.get('success', 0)}, 失败={community_result.get('failed', 0)}")
-                except ImportError:
-                    logger.error("导入社区数据更新函数失败，请检查scripts/update_community_reach.py是否存在")
+                except ImportError as e:
+                    logger.error(f"导入社区数据更新函数失败: {str(e)}")
             except Exception as e:
                 logger.error(f"更新社区覆盖数据时出错: {str(e)}")
                 import traceback

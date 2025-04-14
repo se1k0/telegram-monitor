@@ -15,127 +15,37 @@
                 <th>操作</th>
             </tr>
         </thead>
-        <tbody>
-            {% if tokens %}
-                {% for token in tokens %}
-                <tr class="{% if token.is_profit %}table-profit{% else %}table-loss{% endif %}">
-                    <td>
-                        <div class="d-flex align-items-center">
-                            {% if token.image_url %}
-                            <img src="{{ token.image_url }}" class="me-2 token-img" alt="{{ token.token_symbol }}">
-                            {% else %}
-                            <div class="token-placeholder me-2">{{ token.token_symbol[:1] }}</div>
-                            {% endif %}
-                            <div>
-                                <div class="fw-bold token-name-link" onclick="openTokenDetailModal('{{ token.chain }}', '{{ token.contract }}')">{{ token.token_symbol }}</div>
-                                <div class="small text-muted">{{ token.contract[:10] }}...</div>
-                            </div>
+        <tbody id="token-list-body">
+            <!-- Token数据将通过JavaScript逐条加载 -->
+            <!-- 添加占位行，初始加载时显示 -->
+            <tr class="placeholder-row">
+                <td colspan="11" class="text-center py-4">
+                    <div class="d-flex flex-column align-items-center">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">正在加载...</span>
                         </div>
-                    </td>
-                    <td>{{ token.chain }}</td>
-                    <td>{{ token.market_cap_formatted }}</td>
-                    <td class="{% if token.change_pct_value and token.change_pct_value > 0 %}text-success{% elif token.change_pct_value and token.change_pct_value < 0 %}text-danger{% endif %}">
-                        {{ token.change_percentage }}
-                    </td>
-                    <td>{{ token.volume_1h_formatted if token.volume_1h_formatted else '$0' }}</td>
-                    <td>{{ token.buys_1h|default(0) }}/{{ token.sells_1h|default(0) }}</td>
-                    <td>
-                        {% if token.holders_count %}
-                            {{ token.holders_count }}
-                        {% else %}
-                            <span class="text-muted">未知</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ token.community_reach|default(0) }}</td>
-                    <td>{{ token.spread_count|default(0) }}</td>
-                    <td>{{ token.first_update_formatted }}</td>
-                    <td>
-                        <div class="btn-group">
-                            <a href="{{ get_dexscreener_url(token.chain, token.contract) }}" target="_blank" class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-graph-up"></i>
-                            </a>
-                            <button class="btn btn-sm btn-outline-success like-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}">
-                                <i class="bi bi-heart"></i> <span class="like-count">{{ token.likes_count }}</span>
-                            </button>
-                            <button class="btn btn-sm btn-outline-info token-detail-btn" data-chain="{{ token.chain }}" data-contract="{{ token.contract }}" onclick="openTokenDetailModal('{{ token.chain }}', '{{ token.contract }}')">
-                                <i class="bi bi-info-circle"></i>
-                            </button>
-                            
-                            <button class="btn btn-sm btn-outline-warning token-refresh-btn" 
-                                    data-chain="{{ token.chain }}" 
-                                    data-contract="{{ token.contract }}" 
-                                    data-token-symbol="{{ token.token_symbol }}"
-                                    onclick="refreshTokenData(this)" 
-                                    title="刷新代币数据">
-                                <i class="bi bi-arrow-clockwise"></i>
-                                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            {% else %}
-                <tr>
-                    <td colspan="11" class="text-center">没有找到代币数据</td>
-                </tr>
-            {% endif %}
+                        <p class="mb-0">数据加载中，请稍候...</p>
+                        <p class="small text-muted">页面已载入，正在从数据库获取最新数据</p>
+                    </div>
+                </td>
+            </tr>
         </tbody>
     </table>
 </div>
 
-{% if pagination and pagination.get('pages', 0) > 1 %}
-<nav aria-label="Page navigation">
-    <ul class="pagination justify-content-center">
-        {% if pagination.get('has_prev', False) %}
-        <li class="page-item">
-            <a class="page-link" href="?page={{ pagination.get('prev_num') }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Previous">
-                <span aria-hidden="true">&laquo;</span>
-            </a>
-        </li>
-        {% else %}
-        <li class="page-item disabled">
-            <a class="page-link" href="#" aria-label="Previous">
-                <span aria-hidden="true">&laquo;</span>
-            </a>
-        </li>
-        {% endif %}
+<!-- 加载更多提示 -->
+<div id="tokens-loading-indicator" class="text-center my-4 d-none">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">正在加载代币...</span>
+    </div>
+    <p class="mt-2">正在加载更多代币数据，请稍候...</p>
+</div>
 
-        {% set page_items = pagination.get('iter_pages', []) %}
-        
-        {% for page in page_items %}
-            {% if page %}
-                {% if page != pagination.get('page') %}
-                <li class="page-item">
-                    <a class="page-link" href="?page={{ page }}&chain={{ chain_filter }}&search={{ search_query }}">{{ page }}</a>
-                </li>
-                {% else %}
-                <li class="page-item active">
-                    <span class="page-link">{{ page }}</span>
-                </li>
-                {% endif %}
-            {% else %}
-                <li class="page-item disabled">
-                    <span class="page-link">…</span>
-                </li>
-            {% endif %}
-        {% endfor %}
-
-        {% if pagination.get('has_next', False) %}
-        <li class="page-item">
-            <a class="page-link" href="?page={{ pagination.get('next_num') }}&chain={{ chain_filter }}&search={{ search_query }}" aria-label="Next">
-                <span aria-hidden="true">&raquo;</span>
-            </a>
-        </li>
-        {% else %}
-        <li class="page-item disabled">
-            <a class="page-link" href="#" aria-label="Next">
-                <span aria-hidden="true">&raquo;</span>
-            </a>
-        </li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
+<!-- 全部加载完成提示，默认隐藏 -->
+<div id="tokens-all-loaded" class="text-center my-4 d-none">
+    <i class="bi bi-check-circle-fill text-success" style="font-size: 2rem;"></i>
+    <p class="mt-2">已加载全部代币数据</p>
+</div>
 
 <style>
     .token-name-link {
@@ -161,5 +71,27 @@
         justify-content: center;
         font-weight: bold;
         color: #495057;
+    }
+    
+    /* 新增的动画样式 */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .token-fade-in {
+        animation: fadeIn 0.5s ease-out forwards;
+    }
+    
+    /* 占位行动画 */
+    @keyframes pulse {
+        0% { opacity: 0.6; }
+        50% { opacity: 1; }
+        100% { opacity: 0.6; }
+    }
+    
+    .placeholder-row {
+        animation: pulse 2s infinite;
+        background-color: var(--accent-color);
     }
 </style> 

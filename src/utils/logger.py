@@ -50,6 +50,10 @@ def setup_logger(name=None, log_level=None):
             ]
         )
         
+        # 设置httpx日志级别为WARNING，这样DEBUG和INFO级别的HTTP请求日志就不会显示
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("urllib3").setLevel(logging.WARNING)
+        
         # 获取指定名称的日志记录器
         logger = logging.getLogger(name)
         logger.setLevel(level)

@@ -213,180 +213,111 @@ def index():
         # 获取查询参数
         chain_filter = request.args.get('chain', 'all')
         search_query = request.args.get('search', '')
-        page = request.args.get('page', 1, type=int)
-        page_size = request.args.get('page_size', 20, type=int)  # 默认每页20个
         is_ajax = request.args.get('ajax', '0') == '1'  # 是否是AJAX请求
         
         # 检查是否是获取新token的请求
         check_new = request.args.get('check_new', '0') == '1'
         last_id = request.args.get('last_id', '')
         
-        # 使用Supabase适配器获取代币数据
-        logger.info("使用Supabase获取首页数据")
+        # 使用Supabase适配器处理AJAX请求
+        if is_ajax or check_new:
+            logger.info("处理AJAX请求")
+            try:
+                from supabase import create_client
+                # 不要重新导入config模块，直接使用全局config
+                
+                supabase_url = config.SUPABASE_URL
+                supabase_key = config.SUPABASE_KEY
+                
+                if not supabase_url or not supabase_key:
+                    logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+                    return jsonify({"success": False, "error": "数据库配置不完整"})
+                
+                # 创建 Supabase 客户端
+                supabase = create_client(supabase_url, supabase_key)
+                
+                # 处理检查新token的请求
+                if check_new:
+                    # 构建查询检索比last_id更新的token
+                    new_tokens_query = supabase.table('tokens').select('*')
+                    
+                    # 应用筛选条件
+                    if chain_filter and chain_filter.lower() != 'all':
+                        new_tokens_query = new_tokens_query.eq('chain', chain_filter)
+                        
+                    # 应用搜索条件
+                    if search_query:
+                        new_tokens_query = new_tokens_query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
+                    
+                    # 如果有last_id，查询比它更新的token
+                    if last_id and last_id.isdigit():
+                        new_tokens_query = new_tokens_query.gt('id', int(last_id))
+                    
+                    # 按最新更新时间排序并限制数量
+                    new_tokens_query = new_tokens_query.order('id', desc=True).limit(10)
+                    
+                    # 执行查询
+                    new_tokens_response = new_tokens_query.execute()
+                    
+                    # 处理新token数据
+                    new_tokens = []
+                    if hasattr(new_tokens_response, 'data'):
+                        for token in new_tokens_response.data:
+                            if token is None:
+                                continue
+                                
+                            # 处理token数据，与原代码相同
+                            processed_token = process_token_data(token)
+                            new_tokens.append(processed_token)
+                    
+                    # 返回JSON响应
+                    return jsonify({
+                        'success': True,
+                        'new_tokens': new_tokens
+                    })
+            except Exception as e:
+                logger.error(f"AJAX请求处理出错: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return jsonify({"success": False, "error": str(e)})
+        
+        # 仅获取可用的链信息，不预加载代币数据
         try:
             from supabase import create_client
-            # 不要重新导入config模块，直接使用全局config
             
             supabase_url = config.SUPABASE_URL
             supabase_key = config.SUPABASE_KEY
             
-            if not supabase_url or not supabase_key:
-                logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
-                return handle_error("数据库配置不完整", 500)
-            
-            # 创建 Supabase 客户端
-            supabase = create_client(supabase_url, supabase_key)
-            
-            # 处理检查新token的请求
-            if check_new and is_ajax:
-                # 构建查询检索比last_id更新的token
-                new_tokens_query = supabase.table('tokens').select('*')
+            if supabase_url and supabase_key:
+                # 创建 Supabase 客户端
+                supabase = create_client(supabase_url, supabase_key)
                 
-                # 应用筛选条件
-                if chain_filter and chain_filter.lower() != 'all':
-                    new_tokens_query = new_tokens_query.eq('chain', chain_filter)
-                    
-                # 应用搜索条件
-                if search_query:
-                    new_tokens_query = new_tokens_query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
-                
-                # 如果有last_id，查询比它更新的token
-                if last_id and last_id.isdigit():
-                    new_tokens_query = new_tokens_query.gt('id', int(last_id))
-                
-                # 按最新更新时间排序并限制数量
-                new_tokens_query = new_tokens_query.order('id', desc=True).limit(10)
-                
-                # 执行查询
-                new_tokens_response = new_tokens_query.execute()
-                
-                # 处理新token数据
-                new_tokens = []
-                if hasattr(new_tokens_response, 'data'):
-                    for token in new_tokens_response.data:
-                        if token is None:
-                            continue
-                            
-                        # 处理token数据，与原代码相同
-                        processed_token = process_token_data(token)
-                        new_tokens.append(processed_token)
-                
-                # 返回JSON响应
-                return jsonify({
-                    'success': True,
-                    'new_tokens': new_tokens
-                })
-            
-            # 构建普通查询
-            query = supabase.table('tokens').select('*')
-            
-            # 应用筛选条件
-            if chain_filter and chain_filter.lower() != 'all':
-                query = query.eq('chain', chain_filter)
-                
-            # 应用搜索条件（有限支持）
-            if search_query:
-                query = query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
-            
-            # 先获取全部记录总数以实现分页
-            # 创建单独的计数查询，而不是在现有查询上调用select
-            count_query = supabase.table('tokens').select('id', count='exact')
-            
-            # 同样应用筛选条件到计数查询
-            if chain_filter and chain_filter.lower() != 'all':
-                count_query = count_query.eq('chain', chain_filter)
-                
-            if search_query:
-                count_query = count_query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
-                
-            # 执行计数查询
-            count_response = count_query.execute()
-            total_count = count_response.count if hasattr(count_response, 'count') else 0
-            
-            # 计算总页数
-            total_pages = (total_count + page_size - 1) // page_size
-            
-            # 设置分页参数
-            from_index = (page - 1) * page_size
-            to_index = from_index + page_size - 1
-            
-            # 获取当前页的代币数据
-            query = query.order('latest_update', desc=True).range(from_index, to_index)
-            
-            # 执行查询
-            response = query.execute()
-            
-            if not hasattr(response, 'data'):
-                logger.error("Supabase查询未返回data字段")
-                return handle_error("查询数据失败", 500)
-            
-            # 获取可用的链
-            chains_response = supabase.table('tokens').select('chain').execute()
-            available_chains = []
-            if hasattr(chains_response, 'data'):
-                # 提取唯一的链名称
-                chain_values = [item.get('chain') for item in chains_response.data if item.get('chain')]
-                available_chains = list(set(chain_values))
+                # 仅获取可用的链信息
+                chains_response = supabase.table('tokens').select('chain').execute()
+                available_chains = []
+                if hasattr(chains_response, 'data'):
+                    # 提取唯一的链名称
+                    chain_values = [item.get('chain') for item in chains_response.data if item.get('chain')]
+                    available_chains = list(set(chain_values))
+                else:
+                    available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
             else:
+                logger.warning("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置，使用默认链列表")
                 available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
-            
-            # 处理代币数据
-            tokens = []
-            for token in response.data:
-                # 检查token是否为None
-                if token is None:
-                    logger.warning("发现None类型的token对象，已跳过")
-                    continue
-                    
-                # 处理token数据
-                processed_token = process_token_data(token)
-                tokens.append(processed_token)
-            
-            # 获取系统统计数据
-            system_stats = get_system_stats()
-            
-            # 生成分页信息
-            pagination = {
-                'page': page,
-                'pages': total_pages,
-                'total_pages': total_pages,
-                'total_count': total_count,
-                'page_size': page_size,
-                'prev_num': page - 1 if page > 1 else None,
-                'next_num': page + 1 if page < total_pages else None,
-                'has_prev': page > 1,
-                'has_next': page < total_pages,
-                'next_page': page + 1 if page < total_pages else None,
-                'has_more': page < total_pages,
-                'iter_pages': list(range(1, min(total_pages + 1, 6)))
-            }
-            
-            # 如果是AJAX请求，返回JSON数据
-            if is_ajax:
-                logger.info(f"返回AJAX响应: tokens={len(tokens)}, pagination={pagination}")
-                return jsonify({
-                    'success': True,
-                    'tokens': tokens,
-                    'pagination': pagination
-                })
-            
-            # 渲染模板
-            return render_template(
-                'index.html',
-                tokens=tokens,
-                available_chains=available_chains,
-                chain_filter=chain_filter,
-                search_query=search_query,
-                system_stats=system_stats,
-                pagination=pagination,
-                year=datetime.now().year
-            )
-            
+                
         except Exception as e:
-            logger.error(f"使用Supabase获取数据时出错: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return handle_error(f"获取数据失败: {str(e)}", 500)
+            logger.warning(f"获取链数据时出错，使用默认值: {str(e)}")
+            available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
+        
+        # 立即渲染模板，不预加载代币数据
+        return render_template(
+            'index.html',
+            tokens=[],  # 传递空列表，不预加载数据
+            available_chains=available_chains,
+            chain_filter=chain_filter,
+            search_query=search_query,
+            year=datetime.now().year
+        )
             
     except Exception as e:
         logger.error(f"首页渲染时出错: {str(e)}")
@@ -394,6 +325,90 @@ def index():
         logger.error(traceback.format_exc())
         return handle_error(f"页面加载出错: {str(e)}", 500)
 
+
+@app.route('/api/tokens/stream')
+def stream_tokens():
+    """流式获取代币数据的API，每次返回一条代币数据"""
+    try:
+        # 获取查询参数
+        chain_filter = request.args.get('chain', 'all')
+        search_query = request.args.get('search', '')
+        offset = request.args.get('offset', 0, type=int)
+        batch_size = request.args.get('batch_size', 5, type=int)  # 每次获取的数量，默认5条
+        last_id = request.args.get('last_id', 0, type=int)  # 上一次请求的最后一个token ID
+        
+        logger.info(f"流式获取代币数据: offset={offset}, batch_size={batch_size}, last_id={last_id}")
+        
+        # 使用Supabase获取数据
+        from supabase import create_client
+        
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
+        
+        if not supabase_url or not supabase_key:
+            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
+            return jsonify({"success": False, "error": "数据库配置不完整"})
+        
+        # 创建Supabase客户端
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 构建查询
+        query = supabase.table('tokens').select('*')
+        
+        # 应用筛选条件
+        if chain_filter and chain_filter.lower() != 'all':
+            query = query.eq('chain', chain_filter)
+            
+        # 应用搜索条件
+        if search_query:
+            query = query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
+        
+        # 如果有last_id，从last_id之后的记录开始获取
+        if last_id > 0:
+            query = query.lt('id', last_id)  # 获取ID小于last_id的记录
+        
+        # 按最新更新时间排序并限制数量
+        query = query.order('latest_update', desc=True).limit(batch_size)
+        
+        # 执行查询
+        response = query.execute()
+        
+        # 处理代币数据
+        tokens = []
+        min_id = 0  # 记录最小ID，用于下次请求
+        
+        if hasattr(response, 'data'):
+            for token in response.data:
+                if token is None:
+                    continue
+                    
+                # 处理token数据
+                processed_token = process_token_data(token)
+                tokens.append(processed_token)
+                
+                # 更新最小ID
+                token_id = token.get('id', 0)
+                if token_id > 0 and (min_id == 0 or token_id < min_id):
+                    min_id = token_id
+        
+        # 检查是否还有更多数据
+        has_more = len(tokens) >= batch_size
+        
+        return jsonify({
+            'success': True,
+            'tokens': tokens,
+            'has_more': has_more,
+            'next_id': min_id if has_more else 0
+        })
+        
+    except Exception as e:
+        logger.error(f"流式获取代币数据时出错: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': f"获取数据失败: {str(e)}"
+        })
 
 @app.route('/channels')
 def channels():
@@ -2031,8 +2046,8 @@ async def api_refresh_token(chain, contract):
             if token_id:
                 # 导入社区数据更新函数
                 try:
-                    from scripts.update_community_reach import update_token_community_reach_async
-                    community_result = await update_token_community_reach_async(token_id, token_symbol)
+                    from src.utils.update_reach import update_token_community_reach_async
+                    community_result = await update_token_community_reach_async(token_symbol)
                     
                     if community_result.get('success', False):
                         community_updated = True
@@ -2040,9 +2055,9 @@ async def api_refresh_token(chain, contract):
                     else:
                         community_error = community_result.get('error', '更新社区数据失败')
                         logger.warning(f"更新 {token_symbol} 社区数据失败: {community_error}")
-                except ImportError:
-                    community_error = "社区数据更新模块不可用"
-                    logger.error("导入社区数据更新函数失败，请检查scripts/update_community_reach.py是否存在")
+                except ImportError as e:
+                    community_error = f"社区数据更新模块不可用: {str(e)}"
+                    logger.error(f"导入社区数据更新函数失败: {str(e)}")
             else:
                 community_error = "未找到token_id，无法更新社区数据"
                 logger.warning(f"未找到 {token_symbol} 的ID，跳过社区数据更新")

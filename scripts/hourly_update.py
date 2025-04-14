@@ -260,14 +260,8 @@ async def update_token_with_retry(chain: str, contract: str, symbol: str, token_
                             await asyncio.sleep(wait_time)
                         continue
                     
-                    # 处理API返回的数据结构
-                    pairs = None
-                    if isinstance(pools_data, dict) and "pairs" in pools_data:
-                        pairs = pools_data.get("pairs", [])
-                    else:
-                        pairs = pools_data
-                        
-                    if not pairs:
+                    # 处理API返回的数据结构 - 根据API文档token-pairs/v1返回的是数组
+                    if not pools_data or not isinstance(pools_data, list) or len(pools_data) == 0:
                         logger.warning(f"未找到代币 {symbol} 的交易对")
                         result["details"]["dex_update"] = False
                         result["details"]["dex_error"] = "未找到交易对"
@@ -278,7 +272,7 @@ async def update_token_with_retry(chain: str, contract: str, symbol: str, token_
                     volume_1h = 0
                     
                     # 从所有交易对中收集1小时交易数据
-                    for pair in pairs:
+                    for pair in pools_data:
                         if 'txns' in pair and 'h1' in pair['txns']:
                             h1_data = pair['txns']['h1']
                             current_buys = h1_data.get('buys', 0)
@@ -419,9 +413,9 @@ async def update_token_with_retry(chain: str, contract: str, symbol: str, token_
                 logger.info(f"更新代币 {symbol} 的社群覆盖人数和传播次数")
                 # 使用新优化的社区覆盖更新功能
                 if token_id:
-                    # 使用ID直接更新
-                    from scripts.update_community_reach import update_token_community_reach_async
-                    community_result = await update_token_community_reach_async(token_id, symbol)
+                    # 使用symbol直接更新
+                    from src.utils.update_reach import update_token_community_reach_async
+                    community_result = await update_token_community_reach_async(symbol)
                     result["details"]["community_update"] = community_result.get("success", False)
                     if not community_result.get("success", False):
                         result["details"]["community_error"] = community_result.get("error", "未知错误")

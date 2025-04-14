@@ -64,12 +64,10 @@ class TokenMarketUpdater:
             return {"error": pools_data["error"]}
         
         # 处理API返回的数据结构
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
+        # API文档显示token-pairs/v1 返回直接就是数组，而不是包含pairs字段的对象
+        pairs = pools_data  # 直接使用返回的数据，它应该是一个数组
             
-        if not pairs:
+        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
             return {"error": "未找到代币交易对"}
             
@@ -342,12 +340,10 @@ class TokenMarketUpdater:
             return {"error": pools_data["error"]}
         
         # 处理API返回的数据结构
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
+        # API文档显示token-pairs/v1 返回直接就是数组，而不是包含pairs字段的对象
+        pairs = pools_data  # 直接使用返回的数据，它应该是一个数组
             
-        if not pairs:
+        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
             return {"error": "未找到代币交易对"}
             
@@ -443,32 +439,39 @@ class TokenMarketUpdater:
             return f"${market_cap:.2f}"
     
     def _normalize_chain_id(self, chain: str) -> Optional[str]:
-        """
-        将内部链名称标准化为DexScreener API中使用的链ID
+        """标准化链ID到DexScreener API支持的格式
         
         Args:
-            chain: 内部链名称
+            chain: 链ID，支持大写简写(如ETH)或小写全称(如ethereum)
             
         Returns:
-            Optional[str]: DexScreener API链ID或None（如果不支持）
+            Optional[str]: 标准化后的链ID，如果不支持则返回None
         """
-        chain_mapping = {
+        chain_map = {
             "SOL": "solana",
             "ETH": "ethereum",
             "BSC": "bsc",
-            "MATIC": "polygon",
             "AVAX": "avalanche",
+            "MATIC": "polygon",
             "ARB": "arbitrum",
             "OP": "optimism",
-            "FTM": "fantom",
             "BASE": "base",
             "ZK": "zksync",
-            "CELO": "celo",
-            "TRX": "tron",
             "TON": "ton"
         }
         
-        return chain_mapping.get(chain.upper())
+        # 支持的小写全称列表
+        valid_chain_ids = {
+            "solana", "ethereum", "bsc", "avalanche", "polygon", 
+            "arbitrum", "optimism", "base", "zksync", "ton"
+        }
+        
+        # 检查是否已经是小写全称格式
+        if chain.lower() in valid_chain_ids:
+            return chain.lower()
+        
+        # 尝试将大写简写转换为小写全称
+        return chain_map.get(chain.upper())
     
     @retry(max_retries=3, delay=1.0, exceptions=(Exception,))
     async def update_token_market_and_txn_data(self, chain: str, contract: str) -> Dict[str, Any]:
@@ -499,12 +502,10 @@ class TokenMarketUpdater:
             return {"error": pools_data["error"]}
         
         # 处理API返回的数据结构
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
+        # API文档显示token-pairs/v1 返回直接就是数组，而不是包含pairs字段的对象
+        pairs = pools_data  # 直接使用返回的数据，它应该是一个数组
             
-        if not pairs:
+        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
             return {"error": "未找到代币交易对"}
             
@@ -815,16 +816,10 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             return {"error": f"DEX Screener API错误: {pools_data['error']}"}
         
         # 处理API返回的数据
-        # DEX Screener返回的数据可能有两种形式:
-        # 1. {"pairs": [...]} - 标准响应
-        # 2. [...] - 数组响应
-        pairs = None
-        if isinstance(pools_data, dict) and "pairs" in pools_data:
-            pairs = pools_data.get("pairs", [])
-        else:
-            pairs = pools_data
+        # 根据API文档，token-pairs/v1/{chainId}/{tokenAddress}返回的是交易对数组
+        pairs = pools_data  # 直接使用返回的数据
         
-        if not pairs:
+        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
             return {"error": "未找到交易对"}
         
@@ -1046,10 +1041,26 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             
             return result
         else:
-            # 如果数据库中未找到代币，这里可以添加创建新代币的逻辑
-            # 为了保持代码简洁，暂不实现
+            # 数据库中未找到代币，返回错误信息
             logger.warning(f"数据库中未找到代币: {chain}/{contract}")
-            return {"error": "数据库中未找到该代币"}
+            
+            # 返回包含代币基本信息的错误响应，以便调用者可以使用这些信息创建新代币
+            return {
+                "error": "数据库中未找到该代币",
+                "chain": chain,
+                "contract": contract,
+                "symbol": symbol or '',
+                "marketCap": max_market_cap,
+                "liquidity": max_liquidity,
+                "price": price,
+                "first_price": first_price,
+                "dexScreenerUrl": dex_screener_url,
+                "image_url": image_url,
+                "buys_1h": buys_1h,
+                "sells_1h": sells_1h,
+                "volume_1h": volume_1h,
+                "holders_count": holders_count
+            }
     
     except Exception as e:
         logger.error(f"综合更新代币数据时发生错误: {str(e)}")
@@ -1076,7 +1087,7 @@ def _normalize_chain_id(chain: str) -> Optional[str]:
     """标准化链ID到DexScreener API支持的格式
     
     Args:
-        chain: 链ID
+        chain: 链ID，支持大写简写(如ETH)或小写全称(如ethereum)
         
     Returns:
         Optional[str]: 标准化后的链ID，如果不支持则返回None
@@ -1094,6 +1105,17 @@ def _normalize_chain_id(chain: str) -> Optional[str]:
         "TON": "ton"
     }
     
+    # 支持的小写全称列表
+    valid_chain_ids = {
+        "solana", "ethereum", "bsc", "avalanche", "polygon", 
+        "arbitrum", "optimism", "base", "zksync", "ton"
+    }
+    
+    # 检查是否已经是小写全称格式
+    if chain.lower() in valid_chain_ids:
+        return chain.lower()
+    
+    # 尝试将大写简写转换为小写全称
     return chain_map.get(chain.upper())
 
 # 添加被删除的函数

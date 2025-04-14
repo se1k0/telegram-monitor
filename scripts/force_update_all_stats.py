@@ -132,13 +132,8 @@ async def update_transaction_data(limit: int = None) -> bool:
                     fail_count += 1
                     continue
                 
-                # 处理API返回的数据结构
-                if isinstance(pools_data, dict) and "pairs" in pools_data:
-                    pairs = pools_data.get("pairs", [])
-                else:
-                    pairs = pools_data
-                    
-                if not pairs:
+                # 处理API返回的数据结构 - 根据API文档，token-pairs/v1返回的是数组
+                if not pools_data or not isinstance(pools_data, list) or len(pools_data) == 0:
                     logger.warning(f"未找到代币 {symbol} 的交易对")
                     fail_count += 1
                     continue
@@ -148,7 +143,7 @@ async def update_transaction_data(limit: int = None) -> bool:
                 sells_1h = 0
                 volume_1h = 0
                 
-                for pair in pairs:
+                for pair in pools_data:
                     # 获取交易数据
                     if "txns" in pair and "h1" in pair["txns"]:
                         txns_1h = pair["txns"]["h1"]
