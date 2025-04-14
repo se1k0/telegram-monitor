@@ -2099,6 +2099,13 @@ async def api_refresh_token(chain, contract):
         
         updated_token = updated_token_data[0] if updated_token_data and len(updated_token_data) > 0 else {}
         
+        # 确保社区数据被正确包含在返回结果中
+        if community_updated and community_result and community_result.get('success'):
+            # 显式设置社区数据字段，确保它们被包含在返回数据中
+            updated_token['community_reach'] = community_result.get('community_reach', updated_token.get('community_reach', 0))
+            updated_token['spread_count'] = community_result.get('spread_count', updated_token.get('spread_count', 0))
+            logger.info(f"已将社区数据添加到响应中: 社群覆盖={updated_token['community_reach']}, 传播次数={updated_token['spread_count']}")
+        
         # 检查市值是否更新
         new_market_cap = updated_token.get('market_cap')
         market_cap_change = 0

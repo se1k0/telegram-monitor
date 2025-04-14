@@ -173,8 +173,8 @@ function addTokensSequentially(tokens, index = 0) {
         <td>
             ${token.holders_count ? token.holders_count : '<span class="text-muted">未知</span>'}
         </td>
-        <td>${token.community_reach || 0}</td>
-        <td>${token.spread_count || 0}</td>
+        <td class="community-reach-cell">${token.community_reach || 0}</td>
+        <td class="spread-count-cell">${token.spread_count || 0}</td>
         <td>${token.first_update_formatted}</td>
         <td>
             <div class="btn-group">

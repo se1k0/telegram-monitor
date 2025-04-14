@@ -1451,6 +1451,80 @@ class TelegramListener:
             # 获取当前时间格式化为字符串
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
+            # 计算代币传播统计的初始值
+            spread_count = 1  # 默认至少有1次传播（当前消息）
+            community_reach = 0  # 默认社群覆盖为0
+            
+            # 尝试获取频道的成员数量作为初始community_reach
+            try:
+                channel_id = token_data.get('channel_id')
+                if channel_id:
+                    # 尝试从数据库获取频道信息
+                    channel_info = None
+                    
+                    # 从数据库查询频道信息
+                    try:
+                        channel_query = await db_adapter.execute_query(
+                            'telegram_channels', 
+                            'select', 
+                            filters={'channel_id': channel_id}
+                        )
+                        if channel_query and len(channel_query) > 0:
+                            channel_info = channel_query[0]
+                    except Exception as db_error:
+                        logger.warning(f"从数据库获取频道信息失败: {str(db_error)}")
+                    
+                    # 如果从数据库获取到了成员数
+                    if channel_info and 'member_count' in channel_info and channel_info['member_count']:
+                        community_reach = int(channel_info['member_count'])
+                        logger.info(f"从数据库获取到频道 {channel_id} 的成员数: {community_reach}")
+                    else:
+                        # 尝试使用Telegram API获取成员数
+                        try:
+                            members_count = await self.get_channel_members_count(channel_id)
+                            if members_count > 0:
+                                community_reach = members_count
+                                logger.info(f"从Telegram API获取到频道 {channel_id} 的成员数: {community_reach}")
+                        except Exception as api_error:
+                            logger.warning(f"从Telegram API获取频道成员数失败: {str(api_error)}")
+                
+                # 检查该代币是否已经在其他频道被提及
+                try:
+                    contract = token_data.get('contract')
+                    chain = token_data.get('chain')
+                    if contract and chain:
+                        # 查询历史记录中该代币的提及次数
+                        mentions = await db_adapter.execute_query(
+                            'token_marks', 
+                            'select', 
+                            filters={
+                                'contract': contract,
+                                'chain': chain
+                            }
+                        )
+                        
+                        if mentions and len(mentions) > 0:
+                            # 计算不同频道的数量
+                            unique_channels = set()
+                            for mention in mentions:
+                                if 'channel_id' in mention and mention['channel_id']:
+                                    unique_channels.add(mention['channel_id'])
+                            
+                            # 更新spread_count为不同频道的数量+1（当前频道）
+                            if len(unique_channels) > 0 and channel_id not in unique_channels:
+                                spread_count = len(unique_channels) + 1
+                            else:
+                                spread_count = len(unique_channels) or 1
+                                
+                            logger.info(f"代币 {chain}/{contract} 已在 {spread_count} 个频道被提及")
+                except Exception as mention_error:
+                    logger.warning(f"获取代币提及次数时出错: {str(mention_error)}")
+            except Exception as stats_error:
+                logger.warning(f"计算代币传播统计数据时出错: {str(stats_error)}")
+                # 使用默认值
+                spread_count = 1
+                community_reach = 0
+            
             # 准备新代币数据
             new_token_data = {
                 'chain': token_data.get('chain'),
@@ -1489,9 +1563,9 @@ class TelegramListener:
                 'buys_1h': token_data.get('buys_1h', 0),
                 'sells_1h': token_data.get('sells_1h', 0),
                 
-                # 代币传播统计
-                'spread_count': 0,  # 初始传播次数为0
-                'community_reach': 0,  # 初始社群覆盖人数为0
+                # 代币传播统计 - 使用计算的值
+                'spread_count': spread_count,  # 计算后的传播次数
+                'community_reach': community_reach,  # 计算后的社群覆盖人数
                 
                 # 情感分析字段
                 'sentiment_score': None,  # 暂无情感分析得分
@@ -1527,8 +1601,8 @@ class TelegramListener:
                     'holders_count': token_data.get('holders_count', 0),
                     'buys_1h': token_data.get('buys_1h', 0),
                     'sells_1h': token_data.get('sells_1h', 0),
-                    'community_reach': 0,
-                    'spread_count': 0,
+                    'community_reach': community_reach,  # 使用计算的社群覆盖人数
+                    'spread_count': spread_count,  # 使用计算的传播次数
                     'market_cap_change_pct': 0,
                     'price_change_pct': 0
                 }

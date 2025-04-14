@@ -200,10 +200,43 @@ class DASAPI:
                 return None
                 
             # 从结果中提取持有者总数，优化路径判断
-            # 现在response直接是result部分，不再需要从response["result"]获取
             if "total" in response:
-                logger.debug(f"代币 {mint} 持有者数量: {response['total']}")
-                return response["total"]
+                # 检查API返回的total值是否可靠
+                # 如果持有者数量超过1000，需要手动翻页计算真实数量
+                reported_total = response["total"]
+                
+                # 如果返回的total恰好等于1000，有可能是API限制导致的，需要继续翻页确认
+                if reported_total >= 1000:
+                    logger.debug(f"代币 {mint} 报告的持有者数量为 {reported_total}，开始翻页验证真实数量")
+                    
+                    # 手动计算真实持有者数量
+                    actual_total = 0
+                    current_page = 1
+                    max_pages = 50  # 设置最大页数限制，避免无限循环
+                    
+                    while current_page <= max_pages:
+                        page_response = self.get_token_accounts(mint=mint, page=current_page, limit=1000)
+                        
+                        if "error" in page_response:
+                            logger.error(f"获取第 {current_page} 页时发生错误: {page_response['error']}")
+                            break
+                            
+                        page_accounts = page_response.get("token_accounts", [])
+                        page_count = len(page_accounts)
+                        actual_total += page_count
+                        
+                        # 如果当前页记录数小于1000，说明已经获取完所有数据
+                        if page_count < 1000:
+                            break
+                        
+                        current_page += 1
+                    
+                    logger.debug(f"代币 {mint} 真实持有者数量: {actual_total}")
+                    return actual_total
+                else:
+                    # API返回的总数小于1000，可以认为是准确的
+                    logger.debug(f"代币 {mint} 持有者数量: {reported_total}")
+                    return reported_total
             else:
                 logger.warning(f"无法从响应中获取持有者数量: {response}")
                 return None

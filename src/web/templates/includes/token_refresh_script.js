@@ -132,16 +132,52 @@ function updateTokenDataInUI(chain, contract, tokenData) {
         }
     }
     
-    // 更新社群覆盖
-    const communityCell = row.querySelector('td:nth-child(8)');
+    // 更新社群覆盖 - 增强选择器并添加调试日志
+    const communityCell = row.querySelector('.community-reach-cell') || row.querySelector('td:nth-child(8)');
     if (communityCell) {
-        communityCell.textContent = tokenData.community_reach || 0;
+        // 检查是否有社群覆盖数据
+        if (tokenData.community_reach !== undefined) {
+            console.log(`更新社群覆盖: ${tokenData.community_reach}`);
+            communityCell.textContent = tokenData.community_reach || 0;
+        } else {
+            console.warn(`未找到社群覆盖数据`);
+        }
+    } else {
+        console.warn(`未找到社群覆盖单元格`);
+        // 尝试备用选择器
+        const backupCommunityCell = row.querySelector('td.community-reach') || 
+                                   Array.from(row.querySelectorAll('td')).find(cell => 
+                                       cell.textContent.trim().match(/^\d+$/) && 
+                                       cell.previousElementSibling && 
+                                       cell.previousElementSibling.textContent.includes('持有者'));
+        if (backupCommunityCell && tokenData.community_reach !== undefined) {
+            console.log(`使用备用选择器更新社群覆盖: ${tokenData.community_reach}`);
+            backupCommunityCell.textContent = tokenData.community_reach || 0;
+        }
     }
     
-    // 更新传播次数
-    const spreadCell = row.querySelector('td:nth-child(9)');
+    // 更新传播次数 - 增强选择器并添加调试日志
+    const spreadCell = row.querySelector('.spread-count-cell') || row.querySelector('td:nth-child(9)');
     if (spreadCell) {
-        spreadCell.textContent = tokenData.spread_count || 0;
+        // 检查是否有传播次数数据
+        if (tokenData.spread_count !== undefined) {
+            console.log(`更新传播次数: ${tokenData.spread_count}`);
+            spreadCell.textContent = tokenData.spread_count || 0;
+        } else {
+            console.warn(`未找到传播次数数据`);
+        }
+    } else {
+        console.warn(`未找到传播次数单元格`);
+        // 尝试备用选择器
+        const backupSpreadCell = row.querySelector('td.spread-count') || 
+                               Array.from(row.querySelectorAll('td')).find(cell => 
+                                   cell.textContent.trim().match(/^\d+$/) && 
+                                   cell.previousElementSibling && 
+                                   cell.previousElementSibling.textContent.includes('社群覆盖'));
+        if (backupSpreadCell && tokenData.spread_count !== undefined) {
+            console.log(`使用备用选择器更新传播次数: ${tokenData.spread_count}`);
+            backupSpreadCell.textContent = tokenData.spread_count || 0;
+        }
     }
     
     // 更新代币图像
