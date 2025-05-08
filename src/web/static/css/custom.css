@@ -1,0 +1,209 @@
+/* 添加社交媒体链接样式 */
+.social-link {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    background-color: rgba(108, 117, 125, 0.1);
+    transition: all 0.2s ease;
+    font-size: 12px;
+}
+
+.social-link:hover {
+    color: #fff;
+    background-color: #007bff;
+    text-decoration: none;
+}
+
+.social-link .bi-twitter-x:hover,
+.social-link:hover .bi-twitter-x {
+    color: #fff;
+    background-color: #000;
+}
+
+.social-link .bi-telegram:hover,
+.social-link:hover .bi-telegram {
+    color: #fff;
+    background-color: #0088cc;
+}
+
+.social-link .bi-globe:hover,
+.social-link:hover .bi-globe {
+    color: #fff;
+    background-color: #28a745;
+}
+
+.social-link .bi-search:hover,
+.social-link:hover .bi-search {
+    color: #fff;
+    background-color: #1DA1F2;
+}
+
+.social-link .bi-bar-chart:hover,
+.social-link:hover .bi-bar-chart {
+    color: #fff;
+    background-color: #6f42c1;
+}
+
+.social-link .bi-robot:hover,
+.social-link:hover .bi-robot {
+    color: #fff;
+    background-color: #17a2b8;
+}
+
+.social-link .bi-graph-up:hover,
+.social-link:hover .bi-graph-up {
+    color: #fff;
+    background-color: #fd7e14;
+}
+
+.social-link .bi-rocket:hover,
+.social-link:hover .bi-rocket {
+    color: #fff;
+    background-color: #e83e8c;
+}
+
+/* 社交媒体行容器样式 */
+.social-links-row1, .social-links-row2 {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* 修复合约地址和复制按钮显示 */
+.contract-address {
+    display: flex;
+    align-items: center;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.copy-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 5px;
+}
+
+/* 代币名称和符号样式 */
+.token-name {
+    display: flex;
+    align-items: center;
+    margin-right: 10px;
+}
+
+.token-symbol {
+    font-weight: bold;
+    color: #6c757d;
+    margin-left: 5px;
+}
+
+/* 令牌行表格样式改进 */
+.token-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    margin-right: 12px;
+    object-fit: cover;
+}
+
+.token-row:hover {
+    background-color: rgba(0, 123, 255, 0.03);
+}
+
+/* 响应式调整 */
+@media (max-width: 992px) {
+    .social-links-row1,
+    .social-links-row2 {
+        flex-wrap: wrap;
+    }
+    
+    .social-link {
+        margin-bottom: 4px;
+    }
+}
+
+/* 适配不同屏幕大小的布局调整 */
+@media (max-width: 576px) {
+    .token-info {
+        max-width: calc(100vw - 80px);
+    }
+    
+    .social-links-row1, .social-links-row2 {
+        margin-top: 5px;
+        margin-left: 0;
+    }
+    
+    .token-name, .contract-address {
+        max-width: 100%;
+    }
+}
+
+@media (min-width: 768px) {
+    .social-links-row1, .social-links-row2 {
+        margin-left: auto;
+    }
+}
+
+/* 链徽章样式 */
+.badge-chain {
+    display: inline-block;
+    padding: 0.25em 0.4em;
+    font-size: 75%;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.25rem;
+}
+
+/* 链颜色 */
+.bg-primary {
+    background-color: #007bff !important;
+    color: white !important;
+}
+
+.bg-purple {
+    background-color: #6f42c1 !important;
+    color: white !important;
+}
+
+.bg-warning {
+    background-color: #ffc107 !important;
+    color: black !important;
+}
+
+.bg-info {
+    background-color: #17a2b8 !important;
+    color: white !important;
+}
+
+.bg-success {
+    background-color: #28a745 !important;
+    color: white !important;
+}
+
+.bg-danger {
+    background-color: #dc3545 !important;
+    color: white !important;
+}
+
+.bg-secondary {
+    background-color: #6c757d !important;
+    color: white !important;
+}
+
+/* 代币图片样式 */
+.token-img {
+    object-fit: cover;
+    border-radius: 50%;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+} 

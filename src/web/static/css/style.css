@@ -1,86 +1,424 @@
 :root {
-  /* 色彩组一: 高级感配色 - 保持主要配色方案 */
-  --primary-color: #424874;
-  --primary-light: #A6B1E1;
-  --secondary-color: #DCD6F7;
-  --accent-color: #F4EEFF;
+  /* 现代高级感科技配色方案 */
+  --primary-color: #1a1c2c;
+  --primary-light: #4a4b65;
+  --secondary-color: #7678ED;
+  --accent-color: #f9fafc;
   
-  /* 色彩组二: 高级感配色 */
-  --alt-color-1: #A8D8EA;
-  --alt-color-2: #AA96DA;
-  --alt-color-3: #FCBAD3;
-  --alt-color-4: #FFFFD2;
+  /* 辅助色彩 */
+  --alt-color-1: #3db4f2;  /* 蓝色 */
+  --alt-color-2: #7442c8;  /* 紫色 */
+  --alt-color-3: #00cec9;  /* 青色 */
+  --alt-color-4: #3867d6;  /* 深蓝色 */
   
-  /* 功能性颜色 - 使用高级配色方案进行映射 */
-  --success-color: var(--alt-color-2);  /* 使用紫色代替绿色 */
-  --warning-color: var(--alt-color-3);  /* 使用粉色代替橙色 */
-  --danger-color: var(--primary-color);  /* 使用深蓝色代替红色 */
-  --info-color: var(--alt-color-1);     /* 使用蓝色保持不变 */
+  /* 功能性颜色 */
+  --success-color: #20bf6b;  /* 绿色 */
+  --warning-color: #f7b731;  /* 黄色 */
+  --danger-color: #eb3b5a;   /* 红色 */
+  --info-color: #3db4f2;     /* 蓝色 */
+  
+  /* 高级灰度 */
+  --gray-100: #f9fafc;
+  --gray-200: #edf1f7;
+  --gray-300: #dadce4;
+  --gray-400: #bcc0cf;
+  --gray-500: #9aa0b5;
+  --gray-600: #6b6f82;
+  --gray-700: #4a4b65;
+  --gray-800: #313242;
+  --gray-900: #1a1c2c;
   
   /* 其他变量 */
-  --card-shadow: 0 4px 12px rgba(66, 72, 116, 0.08);
-  --card-border-radius: 12px;
+  --primary-color-rgb: 26, 28, 44;  /* 对应 --primary-color */
+  --card-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+  --card-border-radius: 16px;
   --transition-speed: 0.3s;
+  --header-height: 70px;
+  --sidebar-width: 280px;
 }
 
 body {
   font-family: 'Inter', sans-serif;
-  background-color: #f5f5f5;
-  color: var(--primary-color);
+  background-color: var(--gray-200);
+  color: var(--gray-800);
+  line-height: 1.6;
+  letter-spacing: 0.01em;
 }
 
-/* 导航栏样式 */
+/* 导航栏样式 - 更现代的设计 */
 .navbar {
-  background: linear-gradient(to right, var(--primary-color), var(--primary-light)) !important;
-  box-shadow: 0 2px 10px rgba(66, 72, 116, 0.1);
-  padding: 0.8rem 1rem;
+  background: var(--primary-color) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  height: var(--header-height);
+  padding: 0 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .navbar-brand {
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.5px;
-  color: var(--accent-color) !important;
+  color: white !important;
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+}
+
+.navbar-brand:before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 24px;
+  background: var(--secondary-color);
+  margin-right: 12px;
+  border-radius: 4px;
 }
 
 .navbar .nav-link {
   font-weight: 500;
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 1.2rem;
   transition: all 0.2s;
-  border-radius: 4px;
-  margin: 0 0.2rem;
-  color: var(--accent-color) !important;
+  border-radius: 8px;
+  margin: 0 0.3rem;
+  color: var(--gray-400) !important;
+  position: relative;
 }
 
 .navbar .nav-link:hover {
-  background-color: rgba(244, 238, 255, 0.15);
+  color: white !important;
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 .navbar .nav-link.active {
-  background-color: rgba(244, 238, 255, 0.2);
-  box-shadow: 0 2px 8px rgba(66, 72, 116, 0.1);
+  color: white !important;
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
-/* 卡片设计 */
+.navbar .nav-link.active:after {
+  content: '';
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px;
+  height: 5px;
+  background: var(--secondary-color);
+  border-radius: 50%;
+}
+
+/* 卡片设计 - 更高级的卡片 */
 .card {
   border: none;
   border-radius: var(--card-border-radius);
   box-shadow: var(--card-shadow);
   overflow: hidden;
-  transition: box-shadow var(--transition-speed);
+  transition: all var(--transition-speed);
   margin-bottom: 1.5rem;
-  background-color: var(--accent-color);
+  background-color: white;
+  border: 1px solid var(--gray-300);
 }
 
 .card:hover {
-  box-shadow: 0 6px 18px rgba(66, 72, 116, 0.12);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
 }
 
 .card-header {
-  border-bottom: none;
+  background-color: white;
+  border-bottom: 1px solid var(--gray-300);
   padding: 1.25rem 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+/* 表格样式 - 现代化表格 */
+.table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.table th {
+  font-weight: 600;
+  color: var(--gray-700);
+  border-top: none;
+  background-color: var(--gray-100);
+  padding: 1rem 1.2rem;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table td {
+  padding: 1rem 1.2rem;
+  vertical-align: middle;
+  border-top: 1px solid var(--gray-200);
+  color: var(--gray-800);
+}
+
+.table-hover tbody tr:hover {
+  background-color: var(--gray-100);
+  transition: background-color var(--transition-speed);
+}
+
+/* 美化表格行，增加间距感 */
+.table tbody tr {
+  transition: all 0.2s ease;
+}
+
+.table tbody tr:hover {
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+  transform: translateY(-1px) scale(1.005);
+  z-index: 10;
+  position: relative;
+}
+
+/* 按钮样式 - 更精致的按钮 */
+.btn {
+  border-radius: 8px;
+  padding: 0.5rem 1.25rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  letter-spacing: 0.02em;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn:before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(rgba(255,255,255,0.15), rgba(255,255,255,0));
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.btn:hover:before {
+  opacity: 1;
+}
+
+.btn-primary {
+  background-color: var(--secondary-color);
+  border: none;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: var(--secondary-color);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 15px rgba(118, 120, 237, 0.3);
+}
+
+.btn-secondary {
+  background-color: var(--alt-color-2);
+  border: none;
+}
+
+.btn-info {
+  background-color: var(--alt-color-1);
+  border: none;
+}
+
+.btn:hover {
+  box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.btn-outline-light {
+  border-width: 2px;
+  color: white !important;
+}
+
+.btn-outline-primary {
+  border-color: var(--secondary-color);
+  color: var(--secondary-color) !important;
+}
+
+.btn-outline-primary:hover {
+  background-color: var(--secondary-color);
+  color: white !important;
+}
+
+.btn-outline-success {
+  border-color: var(--success-color);
+  color: var(--success-color) !important;
+}
+
+.btn-outline-success:hover {
+  background-color: var(--success-color);
+  color: white !important;
+}
+
+/* 徽章样式 - 高级风格徽章 */
+.badge {
+  padding: 0.5em 0.9em;
+  font-weight: 500;
+  border-radius: 8px;
+  letter-spacing: 0.03em;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.badge i {
+  margin-right: 5px;
+}
+
+/* 首页令牌表格设计 */
+.token-table {
+  background: white;
+  border-radius: var(--card-border-radius);
+  overflow: hidden;
+}
+
+.token-table thead th {
+  background: var(--gray-100);
+  color: var(--gray-700);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1rem 1rem;
+  border-bottom: 2px solid var(--gray-200);
+}
+
+.token-row {
+  border-bottom: 1px solid var(--gray-200) !important;
+  transition: all 0.25s ease !important;
+}
+
+.token-row:hover {
+  background-color: var(--gray-100) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+  z-index: 1;
+  position: relative;
+}
+
+.token-row td {
+  padding: 1rem !important;
+}
+
+/* 首页搜索容器 */
+.search-container {
+  background-color: white;
+  border-radius: var(--card-border-radius);
+  box-shadow: var(--card-shadow);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--gray-300);
+}
+
+/* Token信息容器 */
+.token-info-container {
+  display: flex;
+  align-items: center;
+}
+
+.token-icon {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 12px !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  border: 2px solid white !important;
+  background-color: var(--gray-100);
+  padding: 0;
+  object-fit: cover;
+}
+
+/* 社交链接样式优化 */
+.social-links {
+  display: flex;
+  gap: 8px;
+}
+
+.social-link {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--gray-200);
+  color: var(--gray-600);
+  transition: all 0.2s;
+}
+
+.social-link:hover {
+  background: var(--primary-color);
+  color: white;
+  transform: translateY(-2px);
+}
+
+/* 数据表格中的徽章 */
+.badge-chain {
+  padding: 0.4rem 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  border-radius: 6px;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+  background-image: linear-gradient(45deg, rgba(255,255,255,0.1), rgba(255,255,255,0));
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+
+/* 功能性颜色 */
+.positive-change {
+  color: var(--success-color) !important;
   font-weight: 600;
 }
 
+.negative-change {
+  color: var(--danger-color) !important;
+  font-weight: 600;
+}
+
+/* 页脚样式 */
+footer {
+  background: var(--primary-color) !important;
+  padding: 2rem 0 !important;
+  color: white !important;
+  margin-top: 4rem !important;
+  position: relative;
+}
+
+footer:before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background: linear-gradient(90deg, var(--secondary-color), var(--alt-color-1), var(--alt-color-3));
+}
+
+footer p {
+  margin-bottom: 0;
+  opacity: 0.7;
+}
+
+footer i {
+  color: var(--secondary-color);
+}
+
+/* 按钮的过渡效果 */
+.btn-sm {
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+}
+
+.btn-sm.action-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 其余样式保持不变 */
 .bg-primary {
   background-color: var(--primary-color) !important;
   background: none !important;
@@ -106,118 +444,6 @@ body {
   background-color: var(--alt-color-2) !important;
 }
 
-/* 表格样式 */
-.table {
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-.table th {
-  font-weight: 600;
-  color: var(--primary-color);
-  border-top: none;
-  background-color: var(--secondary-color);
-}
-
-.table-hover tbody tr:hover {
-  background-color: rgba(166, 177, 225, 0.15);
-  transition: background-color var(--transition-speed);
-}
-
-/* 按钮样式 */
-.btn {
-  border-radius: 6px;
-  padding: 0.5rem 1.25rem;
-  font-weight: 500;
-  transition: all 0.2s;
-  box-shadow: 0 2px 5px rgba(66, 72, 116, 0.1);
-}
-
-.btn-primary {
-  background-color: var(--primary-color);
-  border: none;
-}
-
-.btn-secondary {
-  background-color: var(--alt-color-2);
-  border: none;
-}
-
-.btn-info {
-  background-color: var(--alt-color-1);
-  border: none;
-}
-
-.btn:hover {
-  box-shadow: 0 3px 8px rgba(66, 72, 116, 0.12);
-}
-
-.btn-outline-light {
-  border-width: 2px;
-  color: var(--accent-color) !important;
-}
-
-.btn-outline-primary {
-  border-color: var(--primary-color);
-  color: var(--primary-color) !important;
-}
-
-.btn-outline-primary:hover {
-  background-color: var(--primary-color);
-  color: var(--accent-color) !important;
-}
-
-.btn-outline-success {
-  border-color: var(--alt-color-2);
-  color: var(--alt-color-2) !important;
-}
-
-.btn-outline-success:hover {
-  background-color: var(--alt-color-2);
-  color: var(--accent-color) !important;
-}
-
-/* 徽章样式 */
-.badge {
-  padding: 0.5em 0.8em;
-  font-weight: 500;
-  border-radius: 6px;
-}
-
-.trending-badge {
-  box-shadow: 0 2px 5px rgba(66, 72, 116, 0.1);
-}
-
-/* 风险等级徽章 */
-.risk-badge {
-  font-size: 0.85rem !important;
-  padding: 0.35rem 0.7rem !important;
-  border-radius: 20px;
-  font-weight: 500;
-  box-shadow: 0 2px 5px rgba(66, 72, 116, 0.1);
-}
-
-/* 功能性颜色 - 改为使用我们的配色方案 */
-.risk-low {
-  background-color: var(--alt-color-2) !important;
-  color: var(--accent-color) !important;
-}
-
-.risk-medium {
-  background-color: var(--alt-color-3) !important;
-  color: var(--primary-color) !important;
-}
-
-.risk-high {
-  background-color: var(--primary-color) !important;
-  color: var(--accent-color) !important;
-}
-
-/* 搜索表单 */
-.token-filter-card {
-  border-left: 4px solid var(--primary-color) !important;
-}
-
 /* 情感指示器 */
 .sentiment-indicator {
   height: 8px !important;
@@ -238,18 +464,6 @@ body {
 .pagination .page-item.active .page-link {
   background-color: var(--primary-color);
   color: var(--accent-color);
-}
-
-/* 页脚样式 */
-footer {
-  background: var(--primary-color) !important;
-  padding: 1.5rem !important;
-  box-shadow: 0 -2px 10px rgba(66, 72, 116, 0.1);
-  color: var(--accent-color) !important;
-}
-
-footer a {
-  color: var(--accent-color) !important;
 }
 
 /* 首页状态卡片 */
@@ -536,15 +750,6 @@ header {
   font-size: 1.5rem;
   font-weight: 700;
   color: var(--primary-color);
-}
-
-/* 搜索区域 */
-.search-container {
-  background-color: var(--accent-color);
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(66, 72, 116, 0.05);
-  padding: 15px;
-  margin-bottom: 1.5rem;
 }
 
 /* 代币行样式 */
@@ -893,4 +1098,143 @@ input:checked + .slider:before {
 
 .negative-change {
   color: #f44336 !important; /* 红色表示下跌 */
+}
+
+/* 代币名称样式 */
+.token-name {
+    color: inherit !important;
+    text-decoration: none !important;
+    text-align: left !important;
+    display: block !important;
+    width: 100% !important;
+    font-weight: 500 !important;
+    font-size: 1rem !important;
+    margin-bottom: 4px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+/* 合约地址样式 */
+.contract-address-container {
+    display: flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    text-align: left !important;
+}
+
+.contract-address {
+    font-size: 0.8rem !important;
+    color: var(--primary-light) !important;
+    max-width: none !important;
+    white-space: normal !important;
+    overflow: visible !important;
+}
+
+.copy-icon {
+    cursor: pointer !important;
+    color: var(--primary-light) !important;
+    transition: color 0.2s !important;
+    font-size: 0.9rem !important;
+}
+
+.copy-icon:hover {
+    color: var(--primary-color) !important;
+}
+
+/* 社交媒体链接样式 */
+.social-links {
+    display: flex !important;
+    gap: 8px !important;
+    margin-top: 4px !important;
+    justify-content: flex-end !important;
+}
+
+.social-link {
+    color: var(--primary-light) !important;
+    font-size: 1rem !important;
+    opacity: 0.7 !important;
+    transition: opacity 0.2s, color 0.2s !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 24px !important;
+    height: 24px !important;
+    text-decoration: none !important;
+}
+
+.social-link:hover {
+    opacity: 1 !important;
+    color: var(--primary-color) !important;
+}
+
+/* 复制成功提示样式 */
+.copy-toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    z-index: 1000;
+    animation: fadeInOut 2s ease-in-out;
+}
+
+@keyframes fadeInOut {
+    0% { opacity: 0; transform: translate(-50%, 20px); }
+    10% { opacity: 1; transform: translate(-50%, 0); }
+    90% { opacity: 1; transform: translate(-50%, 0); }
+    100% { opacity: 0; transform: translate(-50%, -20px); }
+}
+
+/* 复制提示样式 */
+.copy-tooltip {
+    position: fixed !important;
+    top: 20px !important;
+    right: 20px !important;
+    background-color: rgba(0, 0, 0, 0.8) !important;
+    color: white !important;
+    padding: 10px 20px !important;
+    border-radius: 4px !important;
+    font-size: 14px !important;
+    z-index: 9999 !important;
+    opacity: 0 !important;
+    transform: translateY(-20px) !important;
+    transition: opacity 0.3s, transform 0.3s !important;
+}
+
+.copy-tooltip.show {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+}
+
+.copy-tooltip i {
+    margin-right: 5px !important;
+}
+
+/* 表格单元格样式 */
+.table td {
+    vertical-align: middle !important;
+    padding: 0.75rem !important;
+}
+
+/* 代币信息容器样式 */
+.token-info-container {
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+    width: 100% !important;
+}
+
+.token-info-main {
+    flex: 1 !important;
+    min-width: 0 !important;
+}
+
+.token-info-social {
+    flex-shrink: 0 !important;
+    margin-left: 8px !important;
 } 

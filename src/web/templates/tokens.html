@@ -50,6 +50,9 @@
         document.getElementById('chainFilter').addEventListener('change', function() {
             this.form.submit();
         });
+
+        // 初始化token流式加载器
+        initTokenStreamLoader();
     });
 </script>
 {% endblock %} 

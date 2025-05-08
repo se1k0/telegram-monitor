@@ -265,6 +265,36 @@ async def update_token_with_retry(chain: str, contract: str, symbol: str, token_
                         logger.warning(f"未找到代币 {symbol} 的交易对")
                         result["details"]["dex_update"] = False
                         result["details"]["dex_error"] = "未找到交易对"
+                        
+                        # 如果在DEX上找不到代币，则从数据库中删除该代币
+                        try:
+                            from src.api.token_market_updater import delete_token_data
+                            logger.info(f"代币 {symbol} ({chain}/{contract}) 在DEX上不存在，将从数据库中删除")
+                            
+                            delete_result = await delete_token_data(chain, contract, double_check=True)
+                            if delete_result['success']:
+                                deleted_info = delete_result.get('deleted_token_data', {})
+                                token_symbol = delete_result.get('token_symbol', symbol)
+                                logger.info(f"成功删除无效代币 {token_symbol} ({chain}/{contract}) 及其相关数据")
+                                logger.info(f"已删除代币信息 - 首次记录: {deleted_info.get('first_update')}, 最后更新: {deleted_info.get('latest_update')}")
+                                
+                                result["details"]["deleted"] = True
+                                result["details"]["delete_reason"] = "代币在DEX上不存在"
+                                result["details"]["deleted_info"] = deleted_info
+                                result["deleted"] = True  # 在根级别也设置删除标志，便于上层处理
+                                result["token_symbol"] = token_symbol  # 保存代币符号
+                                result["success"] = True  # 标记为成功，因为删除操作成功完成
+                                return result
+                            else:
+                                logger.error(f"删除无效代币失败: {delete_result.get('error', '未知错误')}")
+                                result["details"]["delete_failed"] = True
+                                result["details"]["delete_error"] = delete_result.get('error', '未知错误')
+                        except Exception as delete_error:
+                            logger.error(f"删除无效代币时出错: {str(delete_error)}")
+                            import traceback
+                            logger.debug(traceback.format_exc())
+                            result["details"]["delete_error"] = str(delete_error)
+                        
                         continue
                     
                     buys_1h = 0
@@ -454,75 +484,90 @@ async def batch_update_tokens_async(tokens: List[Dict[str, str]],
                         min_delay: float = 0.5, 
                         max_delay: float = 2.0) -> Dict[str, Any]:
     """
-    批量异步更新代币数据，带有速率控制和并发限制
+    批量异步更新代币数据
     
     Args:
-        tokens: 代币信息列表
+        tokens: 代币信息列表，每个字典包含chain、contract和symbol
         batch_size: 每批处理的代币数量
-        concurrency: 最大并发数量
-        min_delay: 请求间最小延迟时间(秒)
-        max_delay: 请求间最大延迟时间(秒)
+        concurrency: 并发任务数
+        min_delay: 最小请求延迟(秒)
+        max_delay: 最大请求延迟(秒)
         
     Returns:
-        Dict: 包含更新结果的字典
+        Dict[str, Any]: 包含更新结果的字典
     """
     results = {
         "total": len(tokens),
         "success": 0,
         "failed": 0,
-        "skipped": 0,
-        "start_time": datetime.now(),
-        "end_time": None,
-        "duration": None,
-        "details": []
+        "deleted": 0,  # 添加已删除代币计数
+        "details": [],
+        "start_time": datetime.now()
     }
     
-    # 随机打乱代币列表顺序，避免按相同顺序请求
-    random.shuffle(tokens)
+    logger.info(f"开始批量更新 {len(tokens)} 个代币，批次大小={batch_size}，并发数={concurrency}")
     
-    # 使用信号量控制并发
-    semaphore = asyncio.Semaphore(concurrency)
-    
-    # 分批处理，每批创建一组任务并等待完成
+    # 分批处理
     for i in range(0, len(tokens), batch_size):
         batch = tokens[i:i+batch_size]
-        logger.info(f"处理第 {i//batch_size + 1}/{(len(tokens)-1)//batch_size + 1} 批，共 {len(batch)} 个代币")
+        logger.info(f"处理批次 {i//batch_size + 1}/{(len(tokens)-1)//batch_size + 1}, 代币数量: {len(batch)}")
         
-        # 当前批次的任务
-        batch_tasks = []
-        batch_delays = []
-        
-        # 为每个代币创建任务和延迟
-        for token in batch:
-            # 为每个任务计算随机延迟，避免同时发送大量请求
-            delay = min_delay + random.random() * (max_delay - min_delay)
-            batch_delays.append(delay)
-            
-            # 创建异步任务
-            async def process_token(token_data, delay_time):
-                # 应用延迟
+        # 为每个代币创建一个协程
+        async def process_token(token_data, delay_time):
+            # 应用延迟
+            if delay_time > 0:
                 await asyncio.sleep(delay_time)
                 
-                # 使用信号量限制并发
-                async with semaphore:
-                    return await update_token_with_retry(
-                        token_data["chain"], 
-                        token_data["contract"],
-                        token_data["symbol"],
-                        token_data.get("id")
-                    )
+            try:
+                # 处理单个代币
+                return await update_token_with_retry(
+                    token_data["chain"],
+                    token_data["contract"],
+                    token_data["symbol"],
+                    token_data.get("id"),
+                    max_retries=3,
+                    base_delay=min_delay,
+                    max_delay=max_delay
+                )
+            except Exception as e:
+                logger.error(f"处理代币 {token_data['symbol']} 时发生错误: {str(e)}")
+                return {
+                    "success": False,
+                    "chain": token_data["chain"],
+                    "contract": token_data["contract"],
+                    "symbol": token_data["symbol"],
+                    "error": str(e)
+                }
+        
+        # 为每个代币分配不同的延迟，避免同时发起请求
+        tasks = []
+        for j, token_data in enumerate(batch):
+            # 计算随机延迟，第一个任务不延迟，后续任务使用递增延迟
+            delay = 0 if j == 0 else min_delay + (j / len(batch)) * (max_delay - min_delay)
+            # 添加小的随机因素
+            delay += random.random() * min_delay
             
-            # 添加到当前批次任务列表
-            task = asyncio.create_task(process_token(token, delay))
-            batch_tasks.append(task)
+            # 创建任务
+            task = asyncio.create_task(process_token(token_data, delay))
+            tasks.append(task)
         
-        # 等待当前批次所有任务完成
-        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        # 使用信号量限制并发
+        semaphore = asyncio.Semaphore(concurrency)
         
-        # 处理批次结果
+        async def controlled_task(task):
+            async with semaphore:
+                return await task
+        
+        # 转换为受控任务
+        controlled_tasks = [controlled_task(task) for task in tasks]
+        
+        # 等待所有任务完成
+        batch_results = await asyncio.gather(*controlled_tasks, return_exceptions=True)
+        
+        # 处理结果
         for result in batch_results:
             if isinstance(result, Exception):
-                logger.error(f"更新代币时出现异常: {str(result)}")
+                logger.error(f"任务执行失败: {str(result)}")
                 results["failed"] += 1
                 results["details"].append({
                     "success": False,
@@ -532,6 +577,12 @@ async def batch_update_tokens_async(tokens: List[Dict[str, str]],
                 # 正常结果处理
                 if result.get("success", False):
                     results["success"] += 1
+                elif result.get("details", {}).get("deleted", False) or result.get("deleted", False):
+                    # 如果是删除操作，单独计数
+                    results["deleted"] = results.get("deleted", 0) + 1
+                    symbol = result.get("symbol") or result.get("details", {}).get("token_symbol", "未知")
+                    delete_reason = result.get("details", {}).get("delete_reason", "在DEX上不存在")
+                    logger.info(f"代币 {symbol} 已被删除，原因: {delete_reason}")
                 else:
                     results["failed"] += 1
                 
@@ -647,6 +698,7 @@ async def hourly_update(limit: Optional[int] = None, test_mode: bool = False,
         logger.info(f"总代币数: {results['total']}")
         logger.info(f"成功: {results['success']} ({success_rate:.1f}%)")
         logger.info(f"失败: {results['failed']}")
+        logger.info(f"已删除: {results.get('deleted', 0)}")  # 添加已删除代币数量
         logger.info(f"总用时: {duration}")
         logger.info("="*50)
         
@@ -656,6 +708,7 @@ async def hourly_update(limit: Optional[int] = None, test_mode: bool = False,
             "total": results["total"],
             "success_count": results["success"],
             "failed_count": results["failed"],
+            "deleted_count": results.get("deleted", 0),  # 添加已删除代币数量
             "success_rate": success_rate,
             "start_time": start_time,
             "end_time": end_time,

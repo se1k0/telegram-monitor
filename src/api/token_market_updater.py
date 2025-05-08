@@ -507,8 +507,45 @@ class TokenMarketUpdater:
             
         if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
-            return {"error": "未找到代币交易对"}
             
+            # 检查代币是否存在于数据库中
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
+            
+            if isinstance(token_result, list) and len(token_result) > 0:
+                token_info = token_result[0]
+                token_symbol = token_info.get('token_symbol', '未知')
+                last_update = token_info.get('latest_update', '未知')
+                
+                # 如果代币存在但DEX API没有数据，则删除该代币及其相关数据
+                logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，将尝试从数据库中删除")
+                logger.info(f"代币详情 - 符号: {token_symbol}, 最后更新: {last_update}")
+                
+                delete_result = await delete_token_data(chain, contract, double_check=True)
+                
+                if delete_result['success']:
+                    deleted_info = delete_result.get('deleted_token_data', {})
+                    logger.info(f"成功删除无效代币 {token_symbol} ({chain}/{contract})")
+                    logger.info(f"已删除代币信息 - 首次记录: {deleted_info.get('first_update')}, 最后更新: {deleted_info.get('latest_update')}")
+                    
+                    return {
+                        "success": False, 
+                        "deleted": True, 
+                        "token_symbol": token_symbol,
+                        "message": "代币在DEX上不存在，已从数据库中删除", 
+                        "deleted_info": deleted_info,
+                        "error": "未找到交易对"
+                    }
+                else:
+                    logger.error(f"删除代币 {token_symbol} ({chain}/{contract}) 失败: {delete_result.get('error', '未知错误')}")
+                    return {
+                        "success": False, 
+                        "error": "未找到交易对，尝试删除代币失败: " + delete_result.get('error', '未知错误')
+                    }
+            
+            return {"error": "未找到交易对"}
+        
         # 查找市值最高的池
         max_market_cap = 0
         max_liquidity = 0
@@ -865,6 +902,43 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
         
         if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
+            
+            # 检查代币是否存在于数据库中
+            from src.database.db_factory import get_db_adapter
+            db_adapter = get_db_adapter()
+            token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
+            
+            if isinstance(token_result, list) and len(token_result) > 0:
+                token_info = token_result[0]
+                token_symbol = token_info.get('token_symbol', '未知')
+                last_update = token_info.get('latest_update', '未知')
+                
+                # 如果代币存在但DEX API没有数据，则删除该代币及其相关数据
+                logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，将尝试从数据库中删除")
+                logger.info(f"代币详情 - 符号: {token_symbol}, 最后更新: {last_update}")
+                
+                delete_result = await delete_token_data(chain, contract, double_check=True)
+                
+                if delete_result['success']:
+                    deleted_info = delete_result.get('deleted_token_data', {})
+                    logger.info(f"成功删除无效代币 {token_symbol} ({chain}/{contract})")
+                    logger.info(f"已删除代币信息 - 首次记录: {deleted_info.get('first_update')}, 最后更新: {deleted_info.get('latest_update')}")
+                    
+                    return {
+                        "success": False, 
+                        "deleted": True, 
+                        "token_symbol": token_symbol,
+                        "message": "代币在DEX上不存在，已从数据库中删除", 
+                        "deleted_info": deleted_info,
+                        "error": "未找到交易对"
+                    }
+                else:
+                    logger.error(f"删除代币 {token_symbol} ({chain}/{contract}) 失败: {delete_result.get('error', '未知错误')}")
+                    return {
+                        "success": False, 
+                        "error": "未找到交易对，尝试删除代币失败: " + delete_result.get('error', '未知错误')
+                    }
+            
             return {"error": "未找到交易对"}
         
         # 提取关键数据
@@ -1252,4 +1326,138 @@ async def update_token_market_and_txn_data_async(session: Session, chain: str, c
         Dict: 包含更新结果的字典
     """
     updater = TokenMarketUpdater(session)
-    return await updater.update_token_market_and_txn_data(chain, contract) 
+    return await updater.update_token_market_and_txn_data(chain, contract)
+
+async def delete_token_data(chain: str, contract: str, double_check: bool = True) -> Dict[str, Any]:
+    """
+    删除代币及其相关数据
+    
+    Args:
+        chain: 链标识
+        contract: 代币合约地址
+        double_check: 是否在删除前再次检查DEX API，确保代币确实不存在
+        
+    Returns:
+        Dict[str, Any]: 包含删除结果的字典
+    """
+    result = {"success": False, "error": None}
+    
+    try:
+        logger.info(f"开始处理代币 {chain}/{contract} 的删除请求")
+        
+        # 如果需要再次确认，先检查DEX API
+        if double_check:
+            try:
+                from src.api.dex_screener_api import get_token_pools
+                # 标准化链ID
+                chain_id = _normalize_chain_id(chain)
+                if not chain_id:
+                    logger.error(f"不支持的链ID: {chain}，无法进行二次验证")
+                else:
+                    logger.info(f"二次验证: 从DEX API检查代币 {chain}/{contract} 是否存在")
+                    pools_data = get_token_pools(chain_id, contract)
+                    
+                    # 验证API返回结果
+                    if not isinstance(pools_data, dict) or "error" not in pools_data:
+                        # 如果API没有返回错误且返回了有效数据，说明代币可能仍然存在
+                        if isinstance(pools_data, list) and len(pools_data) > 0:
+                            logger.warning(f"代币 {chain}/{contract} 在DEX上仍然存在，取消删除操作")
+                            result["error"] = "代币在DEX上仍然存在，取消删除操作"
+                            result["pools_data"] = pools_data
+                            return result
+                    else:
+                        # API返回了错误，检查错误类型
+                        error_msg = str(pools_data.get("error", "")).lower()
+                        if "not found" in error_msg or "no pools found" in error_msg:
+                            logger.info(f"二次验证确认: 代币 {chain}/{contract} 在DEX上不存在")
+                        else:
+                            # 其他类型的错误，可能是API限制等
+                            logger.warning(f"二次验证时遇到API错误: {error_msg}，谨慎处理")
+                            # 如果是API限制或其他类型的错误，我们仍然继续删除流程
+            except Exception as e:
+                logger.error(f"二次验证时出错: {str(e)}")
+                # 发生错误时，我们继续删除流程，但记录警告
+                logger.warning("由于验证错误，将继续删除操作，但请注意可能存在风险")
+        
+        logger.info(f"开始删除代币 {chain}/{contract} 及其相关数据")
+        
+        # 获取数据库适配器
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        
+        # 获取代币数据，记录删除前的状态以便日志记录
+        token_data = None
+        try:
+            token_result = await db_adapter.execute_query(
+                'tokens',
+                'select',
+                filters={'chain': chain, 'contract': contract},
+                limit=1
+            )
+            if isinstance(token_result, list) and len(token_result) > 0:
+                token_data = token_result[0]
+                logger.info(f"删除前记录代币数据: 符号={token_data.get('token_symbol')}, "
+                           f"首次更新={token_data.get('first_update')}, "
+                           f"最近更新={token_data.get('latest_update')}")
+        except Exception as e:
+            logger.error(f"获取代币数据时出错: {str(e)}")
+            # 继续执行，不中断流程
+        
+        # 删除代币标记数据
+        try:
+            mark_result = await db_adapter.execute_query(
+                'tokens_mark',
+                'delete',
+                filters={'chain': chain, 'contract': contract}
+            )
+            logger.info(f"已删除代币 {chain}/{contract} 的标记数据")
+        except Exception as e:
+            logger.error(f"删除代币标记数据时出错: {str(e)}")
+            # 继续执行，不中断流程
+        
+        # 删除代币历史数据
+        try:
+            history_result = await db_adapter.execute_query(
+                'token_history',
+                'delete',
+                filters={'chain': chain, 'contract': contract}
+            )
+            logger.info(f"已删除代币 {chain}/{contract} 的历史数据")
+        except Exception as e:
+            logger.error(f"删除代币历史数据时出错: {str(e)}")
+            # 继续执行，不中断流程
+        
+        # 最后删除代币主记录
+        try:
+            token_delete_result = await db_adapter.execute_query(
+                'tokens',
+                'delete',
+                filters={'chain': chain, 'contract': contract}
+            )
+            logger.info(f"已删除代币 {chain}/{contract} 的主记录")
+            result["success"] = True
+            
+            # 添加额外的删除信息
+            if token_data:
+                result["token_symbol"] = token_data.get("token_symbol")
+                result["deleted_token_data"] = {
+                    "symbol": token_data.get("token_symbol"),
+                    "first_update": token_data.get("first_update"),
+                    "latest_update": token_data.get("latest_update"),
+                    "market_cap": token_data.get("market_cap"),
+                    "price": token_data.get("price")
+                }
+        except Exception as e:
+            logger.error(f"删除代币主记录时出错: {str(e)}")
+            result["error"] = f"删除代币主记录失败: {str(e)}"
+            return result
+        
+        # 所有删除操作完成
+        logger.info(f"成功删除代币 {chain}/{contract} 及其所有相关数据")
+        result["success"] = True
+        return result
+        
+    except Exception as e:
+        logger.error(f"删除代币数据时出错: {str(e)}")
+        result["error"] = str(e)
+        return result 

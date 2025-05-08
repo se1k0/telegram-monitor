@@ -172,36 +172,30 @@ class TelegramListener:
                 raise ValueError("无法获取有效的API ID和API HASH，无法初始化Telegram客户端")
         
         # 初始化会话参数
-        self.session_dir = os.path.join('./data')
-        # 使用进程ID和时间戳创建唯一的会话名称
-        session_name = f'tg_session_{os.getpid()}_{int(time.time())}'
-        self.session_path = os.path.join(self.session_dir, session_name)
+        self.session_dir = os.path.join('./data/sessions')  # 专门的sessions目录
+        self.session_backup_dir = os.path.join(self.session_dir, 'backups')  # 备份目录
         
         # 确保目录存在
         os.makedirs(self.session_dir, exist_ok=True)
+        os.makedirs(self.session_backup_dir, exist_ok=True)
+        
+        # 初始化session路径
+        self._init_session_path()
         
         # 设置连接参数
-        self.connection_retries = 5  # 连接重试次数
+        self.connection_retries = 5
         self.auto_reconnect = True   # 自动重连
         self.retry_delay = 5         # 重试延迟时间（秒）
-        self.request_retries = 5     # 请求重试次数
-        self.flood_sleep_threshold = 60  # 洪水睡眠阈值
+        self.request_retries = 5
+        self.flood_sleep_threshold = 60  # 限流等待阈值
+        self.max_reconnect_attempts = 3  # 最大重连尝试次数
+        self.reconnect_cooldown = 30     # 重连冷却时间（秒）
         
-        # 初始化Telegram客户端
-        self.client = TelegramClient(
-            self.session_path,
-            self.api_id, 
-            self.api_hash,
-            connection_retries=self.connection_retries,
-            auto_reconnect=self.auto_reconnect,
-            retry_delay=self.retry_delay,
-            request_retries=self.request_retries,
-            flood_sleep_threshold=self.flood_sleep_threshold,
-            timeout=30  # 设置更长的超时时间
-        )
+        # 初始化客户端为None，等待start方法中创建
+        self.client = None
         
         # 初始化频道管理器
-        self.channel_manager = ChannelManager(self.client)
+        self.channel_manager = None  # 将在start方法中初始化
         
         # 初始化频道发现器
         self.channel_discovery = None
@@ -228,6 +222,213 @@ class TelegramListener:
         self.discovery_interval = config.DISCOVERY_INTERVAL
         self.min_members = config.MIN_CHANNEL_MEMBERS
         self.max_auto_channels = config.MAX_AUTO_CHANNELS
+        
+        # session管理相关属性
+        self.max_session_backups = 5  # 最大备份数量
+        self.last_session_backup = None
+        self.session_backup_interval = 1800  # 备份间隔（秒）
+        
+        # session过期检测相关属性
+        self.last_session_check = None
+        self.session_check_interval = 300  # 每5分钟检查一次session状态
+        self.session_expiry_threshold = 43200  # session过期阈值（12小时）
+        self.last_authorized_check = None
+        self.authorized_check_interval = 60  # 每1分钟检查一次授权状态
+    
+    def _init_session_path(self):
+        """初始化session路径,选择最新的可用session或创建新的"""
+        try:
+            # 处理操作系统差异
+            import platform
+            is_windows = platform.system() == 'Windows'
+            
+            # 查找现有的session文件
+            existing_sessions = []
+            for file in os.listdir(self.session_dir):
+                if file.endswith('.session') and not file.endswith('.session-journal'):
+                    full_path = os.path.join(self.session_dir, file)
+                    existing_sessions.append((full_path, os.path.getmtime(full_path)))
+            
+            if existing_sessions:
+                # 按修改时间排序，获取最新的session
+                existing_sessions.sort(key=lambda x: x[1], reverse=True)
+                latest_session = existing_sessions[0][0]
+                logger.info(f"找到现有session文件: {latest_session}")
+                
+                # 检查session文件是否被锁定
+                if self._check_session_lock(latest_session):
+                    # 使用现有的session文件
+                    self.session_path = latest_session.replace('.session', '')
+                    logger.info(f"将使用现有session文件: {self.session_path}")
+                    return
+            
+            # 如果没有可用的session文件,创建新的
+            session_name = f'tg_session_{"win_" if is_windows else ""}{int(time.time())}'
+            self.session_path = os.path.join(self.session_dir, session_name)
+            logger.info(f"创建新的session文件: {self.session_path}")
+            
+        except Exception as e:
+            logger.error(f"初始化session路径时出错: {str(e)}")
+            # 确保至少有一个默认的session路径
+            self.session_path = os.path.join(self.session_dir, f'tg_session_default_{int(time.time())}')
+            logger.info(f"使用默认session路径: {self.session_path}")
+
+    def _check_session_lock(self, session_path):
+        """检查session文件是否被锁定,如果被锁定则尝试清理"""
+        try:
+            # 先检查journal文件
+            journal_file = f"{session_path}-journal"
+            if os.path.exists(journal_file):
+                try:
+                    os.remove(journal_file)
+                    logger.info(f"已删除journal文件: {journal_file}")
+                except Exception as e:
+                    logger.warning(f"删除journal文件失败: {str(e)}")
+                    return False
+            
+            # 尝试打开数据库连接
+            import sqlite3
+            try:
+                conn = sqlite3.connect(session_path, timeout=1)
+                conn.close()
+                return True
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e):
+                    logger.warning(f"session文件被锁定: {session_path}")
+                    # 如果文件被锁定,尝试重命名或删除
+                    try:
+                        new_path = f"{session_path}.locked"
+                        os.rename(session_path, new_path)
+                        logger.info(f"已将锁定的session文件重命名为: {new_path}")
+                        return False
+                    except Exception as rename_error:
+                        logger.error(f"重命名锁定的session文件失败: {str(rename_error)}")
+                        return False
+                return False
+                
+        except Exception as e:
+            logger.error(f"检查session文件锁定状态时出错: {str(e)}")
+            return False
+
+    async def _check_session_validity(self):
+        """检查session是否有效,只在建立连接前调用"""
+        try:
+            if not self.session_path:
+                logger.error("session路径未设置")
+                self._init_session_path()  # 尝试重新初始化session路径
+                if not self.session_path:
+                    return False
+            
+            # 检查session文件是否存在且可用
+            session_file = f"{self.session_path}.session"
+            if not os.path.exists(session_file):
+                logger.warning(f"session文件不存在: {session_file}")
+                return False
+            
+            # 检查session文件是否被锁定
+            if not self._check_session_lock(session_file):
+                logger.warning("session文件被锁定或损坏")
+                return False
+            
+            # 如果有客户端实例,检查授权状态
+            if self.client:
+                try:
+                    if not await self.client.is_user_authorized():
+                        logger.warning("session未授权")
+                        return False
+                except Exception as e:
+                    logger.error(f"检查授权状态时出错: {str(e)}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"检查session有效性时出错: {str(e)}")
+            return False
+
+    async def _handle_session_expiry(self):
+        """处理session过期的情况"""
+        try:
+            logger.warning("检测到session可能已过期,尝试恢复...")
+            
+            # 1. 首先尝试从备份恢复
+            if await self.restore_session():
+                logger.info("已从备份恢复session,尝试重新连接...")
+                # 重新创建客户端
+                self.client = TelegramClient(
+                    self.session_path,
+                    self.api_id, 
+                    self.api_hash,
+                    connection_retries=self.connection_retries,
+                    auto_reconnect=self.auto_reconnect,
+                    retry_delay=self.retry_delay,
+                    request_retries=self.request_retries,
+                    flood_sleep_threshold=self.flood_sleep_threshold,
+                    timeout=30
+                )
+                
+                try:
+                    await self.client.connect()
+                    if await self.client.is_user_authorized():
+                        logger.info("从备份恢复session成功")
+                        return True
+                except Exception as e:
+                    logger.error(f"从备份恢复后重连失败: {str(e)}")
+            
+            # 2. 如果备份恢复失败,创建新的session
+            logger.info("备份恢复失败,创建新的session...")
+            
+            # 删除旧的session文件
+            session_files = [f"{self.session_path}.session", f"{self.session_path}.session-journal"]
+            for file in session_files:
+                if os.path.exists(file):
+                    try:
+                        os.remove(file)
+                        logger.info(f"已删除旧的session文件: {file}")
+                    except Exception as e:
+                        logger.error(f"删除旧的session文件失败: {str(e)}")
+            
+            # 重新初始化session路径
+            self._init_session_path()
+            
+            # 重新创建客户端
+            self.client = TelegramClient(
+                self.session_path,
+                self.api_id, 
+                self.api_hash,
+                connection_retries=self.connection_retries,
+                auto_reconnect=self.auto_reconnect,
+                retry_delay=self.retry_delay,
+                request_retries=self.request_retries,
+                flood_sleep_threshold=self.flood_sleep_threshold,
+                timeout=30
+            )
+            
+            # 连接并重新登录
+            await self.client.connect()
+            
+            if not await self.client.is_user_authorized():
+                logger.info("需要重新登录Telegram")
+                try:
+                    # 请求用户输入手机号
+                    phone = input("请输入您的Telegram手机号（包含国家代码,如+86）：")
+                    # 发送验证码
+                    await self.client.send_code_request(phone)
+                    # 请求用户输入验证码
+                    code = input("请输入收到的验证码：")
+                    # 登录
+                    await self.client.sign_in(phone, code)
+                    logger.info("Telegram登录成功")
+                    return True
+                except Exception as e:
+                    logger.error(f"Telegram登录失败: {str(e)}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"处理session过期时出错: {str(e)}")
+            return False
     
     @async_retry(max_retries=3, delay=2, exceptions=(ConnectionError, TimeoutError))
     async def setup_channels(self):
@@ -834,329 +1035,165 @@ class TelegramListener:
     
     async def start(self):
         """启动服务"""
-        max_connection_attempts = 5
-        connection_attempt = 0
-        
         try:
-            # 处理操作系统差异
-            import platform
-            is_windows = platform.system() == 'Windows'
+            # 检查session是否有效
+            if not await self._check_session_validity():
+                logger.warning("当前session无效,尝试从备份恢复或创建新session...")
+                if not await self._handle_session_expiry():
+                    logger.error("无法恢复或创建有效的session")
+                    return False
             
-            # 在Windows环境下优化会话文件路径和名称
-            if is_windows:
-                # Windows环境下使用更简单的会话名称，避免使用进程ID
-                session_name = f'tg_session_win_{int(time.time())}'
-                self.session_path = os.path.join(self.session_dir, session_name)
-                
-                # 重新初始化客户端使用新的会话路径
-                logger.info(f"Windows环境：使用简化的会话名称: {session_name}")
-                self.client = TelegramClient(
-                    self.session_path,
-                    self.api_id, 
-                    self.api_hash,
-                    connection_retries=self.connection_retries,
-                    auto_reconnect=self.auto_reconnect,
-                    retry_delay=self.retry_delay,
-                    request_retries=self.request_retries,
-                    flood_sleep_threshold=self.flood_sleep_threshold,
-                    timeout=30  # 设置更长的超时时间
-                )
+            # 初始化客户端
+            self.client = TelegramClient(
+                self.session_path,
+                self.api_id, 
+                self.api_hash,
+                connection_retries=self.connection_retries,
+                auto_reconnect=self.auto_reconnect,
+                retry_delay=self.retry_delay,
+                request_retries=self.request_retries,
+                flood_sleep_threshold=self.flood_sleep_threshold,
+                timeout=30
+            )
             
-            # 设置连接超时
-            connection_timeout = 60  # 秒
-            
-            while connection_attempt < max_connection_attempts:
-                try:
-                    # 尝试连接Telegram
-                    logger.info(f"尝试连接Telegram (尝试 {connection_attempt+1}/{max_connection_attempts})...")
-                    
-                    # 使用超时包装
-                    try:
-                        await asyncio.wait_for(
-                            self.client.connect(),
-                            timeout=connection_timeout
-                        )
-                        # 连接成功，跳出循环
-                        logger.info("成功连接到Telegram服务器")
-                        break
-                    except asyncio.TimeoutError:
-                        connection_attempt += 1
-                        logger.warning(f"连接Telegram超时 ({connection_attempt}/{max_connection_attempts})")
-                        if connection_attempt >= max_connection_attempts:
-                            logger.error("多次连接超时，无法连接到Telegram服务器")
-                            return False
-                        continue
-                    
-                except Exception as e:
-                    connection_attempt += 1
-                    logger.error(f"连接Telegram时出错 ({connection_attempt}/{max_connection_attempts}): {str(e)}")
-                    
-                    if connection_attempt >= max_connection_attempts:
-                        logger.critical("多次连接失败，放弃连接")
-                        return False
-                    
-                    # 增加延迟，避免频繁重试
-                    wait_time = min(30, 5 * connection_attempt) 
-                    logger.info(f"等待 {wait_time} 秒后重试...")
-                    await asyncio.sleep(wait_time)
-            
-            # 检查是否已经授权
-            authorization_timeout = 60
+            # 尝试连接
             try:
-                is_authorized = await asyncio.wait_for(
-                    self.client.is_user_authorized(), 
-                    timeout=authorization_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"检查授权状态超时")
-                is_authorized = False
+                await self.client.connect()
+            except Exception as e:
+                logger.error(f"连接Telegram服务器时出错: {str(e)}")
+                return False
             
-            if not is_authorized:
-                logger.info("用户未登录，开始登录流程...")
-                
+            # 检查是否已授权
+            if not await self.client.is_user_authorized():
+                logger.info("需要重新登录Telegram")
                 try:
-                    # 提示用户输入手机号码
-                    phone = input("请输入您的手机号码 (包含国家代码，如 +86xxxxxxxxxx): ")
-                    
-                    # 发送验证码请求（带超时和FloodWaitError处理）
-                    try:
-                        await asyncio.wait_for(
-                            self.client.send_code_request(phone),
-                            timeout=60
-                        )
-                    except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
-                        # 解析错误信息中的等待时间（单位为秒）
-                        wait_seconds = getattr(flood_error, 'seconds', 0)
-                        if not wait_seconds:
-                            # 如果无法从错误属性中获取等待时间，尝试从错误消息中提取
-                            import re
-                            match = re.search(r'wait of (\d+) seconds', str(flood_error))
-                            if match:
-                                wait_seconds = int(match.group(1))
-                            else:
-                                wait_seconds = 3600  # 默认等待1小时
-                        
-                        # 转换为易读的时间格式
-                        wait_minutes = wait_seconds // 60
-                        wait_hours = wait_minutes // 60
-                        remaining_minutes = wait_minutes % 60
-                        
-                        if wait_hours > 0:
-                            wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
-                        else:
-                            wait_msg = f"{wait_minutes}分钟"
-                        
-                        logger.error(f"Telegram API限流: 需要等待{wait_msg}后才能继续。错误: {str(flood_error)}")
-                        print(f"\n⚠️ 您的账号或IP已被Telegram限流，需要等待{wait_msg}后才能重试登录。")
-                        print(f"⚠️ 限流原因: 可能是短时间内多次尝试登录或存在异常活动。")
-                        print(f"⚠️ 请稍后再试或使用其他账号/网络环境。")
-                        
-                        # 将限流信息保存到文件，以便后续查看
-                        try:
-                            with open("./logs/flood_wait_info.txt", "w") as f:
-                                f.write(f"限流发生时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                                f.write(f"需要等待时间: {wait_msg} ({wait_seconds}秒)\n")
-                                f.write(f"限流错误详情: {str(flood_error)}\n")
-                                f.write(f"手机号: {phone}\n")
-                        except Exception as file_error:
-                            logger.error(f"保存限流信息到文件时出错: {str(file_error)}")
-                        
-                        return False
-                    except asyncio.TimeoutError:
-                        logger.error("发送验证码请求超时")
-                        print("\n⚠️ 发送验证码请求超时，请检查网络连接后重试。")
-                        return False
-                    except Exception as e:
-                        logger.error(f"发送验证码时发生错误: {str(e)}")
-                        print(f"\n⚠️ 发送验证码失败: {str(e)}")
-                        print("请检查手机号是否正确，或网络连接是否稳定后重试。")
-                        return False
-                    
-                    # 提示用户输入验证码
-                    code = input("请输入您收到的验证码 (输入'cancel'取消): ")
-                    if code.lower() == 'cancel':
-                        logger.info("用户取消登录")
-                        return False
-                        
-                    # 登录（带超时和FloodWaitError处理）
-                    try:
-                        await asyncio.wait_for(
-                            self.client.sign_in(phone, code),
-                            timeout=60
-                        )
-                    except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
-                        # 处理FloodWaitError，类似于上面的处理
-                        wait_seconds = getattr(flood_error, 'seconds', 3600)  # 默认1小时
-                        wait_minutes = wait_seconds // 60
-                        wait_hours = wait_minutes // 60
-                        remaining_minutes = wait_minutes % 60
-                        
-                        if wait_hours > 0:
-                            wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
-                        else:
-                            wait_msg = f"{wait_minutes}分钟"
-                        
-                        logger.error(f"登录时遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
-                        print(f"\n⚠️ 登录过程中被Telegram限流，需要等待{wait_msg}后才能重试")
-                        return False
-                    except telethon.errors.PhoneCodeInvalidError:
-                        logger.error("验证码无效")
-                        print("\n⚠️ 验证码无效，请确保输入了正确的验证码")
-                        return False
-                    except telethon.errors.PhoneCodeExpiredError:
-                        logger.error("验证码已过期")
-                        print("\n⚠️ 验证码已过期，请重新获取验证码")
-                        return False
-                    except asyncio.TimeoutError:
-                        logger.error("登录请求超时")
-                        print("\n⚠️ 登录请求超时，请检查网络连接后重试")
-                        return False
-                    except Exception as e:
-                        logger.error(f"登录过程中出错: {str(e)}")
-                        print(f"\n⚠️ 登录失败: {str(e)}")
-                        logger.debug(tb.format_exc())
-                        return False
-                    
-                    # 检查是否需要两步验证
-                    try:
-                        is_authorized = await asyncio.wait_for(
-                            self.client.is_user_authorized(),
-                            timeout=30
-                        )
-                    except asyncio.TimeoutError:
-                        logger.error("检查授权状态超时")
-                        is_authorized = False
-                        
-                    if not is_authorized:
-                        # 可能需要两步验证密码
-                        password = input("请输入您的两步验证密码 (输入'cancel'取消): ")
-                        if password.lower() == 'cancel':
-                            logger.info("用户取消登录")
-                            return False
-                            
-                        # 密码登录（带超时和FloodWaitError处理）
-                        try:
-                            await asyncio.wait_for(
-                                self.client.sign_in(password=password),
-                                timeout=60
-                            )
-                        except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
-                            wait_seconds = getattr(flood_error, 'seconds', 3600)
-                            wait_minutes = wait_seconds // 60
-                            wait_hours = wait_minutes // 60
-                            remaining_minutes = wait_minutes % 60
-                            
-                            if wait_hours > 0:
-                                wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
-                            else:
-                                wait_msg = f"{wait_minutes}分钟"
-                            
-                            logger.error(f"两步验证时遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
-                            print(f"\n⚠️ 两步验证过程中被Telegram限流，需要等待{wait_msg}后才能重试")
-                            return False
-                        except telethon.errors.PasswordHashInvalidError:
-                            logger.error("两步验证密码无效")
-                            print("\n⚠️ 两步验证密码无效，请确保输入了正确的密码")
-                            return False
-                        except asyncio.TimeoutError:
-                            logger.error("两步验证登录请求超时")
-                            print("\n⚠️ 两步验证登录请求超时，请检查网络连接后重试")
-                            return False
-                        except Exception as e:
-                            logger.error(f"两步验证过程中出错: {str(e)}")
-                            print(f"\n⚠️ 两步验证失败: {str(e)}")
-                            return False
-                    
-                    # 登录成功，获取用户信息
-                    try:
-                        me = await asyncio.wait_for(
-                            self.client.get_me(),
-                            timeout=30
-                        )
-                        logger.info(f"登录成功! 已登录为: {me.first_name} (ID: {me.id})")
-                        print(f"\n✅ 登录成功! 您已登录为: {me.first_name} (ID: {me.id})")
-                    except asyncio.TimeoutError:
-                        logger.warning("获取用户信息超时，但登录可能已成功")
-                        print("\n⚠️ 获取用户信息超时，但登录可能已成功")
-                except telethon.errors.rpcerrorlist.FloodWaitError as flood_error:
-                    # 捕获整个登录流程中的FloodWaitError
-                    wait_seconds = getattr(flood_error, 'seconds', 3600)
-                    wait_minutes = wait_seconds // 60
-                    wait_hours = wait_minutes // 60
-                    remaining_minutes = wait_minutes % 60
-                    
-                    if wait_hours > 0:
-                        wait_msg = f"{wait_hours}小时{remaining_minutes}分钟"
-                    else:
-                        wait_msg = f"{wait_minutes}分钟"
-                    
-                    logger.error(f"登录流程中遇到限流: 需要等待{wait_msg}。错误: {str(flood_error)}")
-                    print(f"\n⚠️ 登录流程中被Telegram限流，需要等待{wait_msg}后才能重试")
-                    return False
+                    # 请求用户输入手机号
+                    phone = input("请输入您的Telegram手机号（包含国家代码,如+86）：")
+                    # 发送验证码
+                    await self.client.send_code_request(phone)
+                    # 请求用户输入验证码
+                    code = input("请输入收到的验证码：")
+                    # 登录
+                    await self.client.sign_in(phone, code)
+                    logger.info("Telegram登录成功")
                 except Exception as e:
-                    logger.error(f"登录过程中出错: {str(e)}")
-                    print(f"\n⚠️ 登录过程中发生错误: {str(e)}")
-                    logger.debug(tb.format_exc())
-                    return False
-                
-                # 再次检查是否已登录
-                try:
-                    is_authorized = await asyncio.wait_for(
-                        self.client.is_user_authorized(),
-                        timeout=30
-                    )
-                except asyncio.TimeoutError:
-                    logger.error("最终检查授权状态超时")
-                    is_authorized = False
-                    
-                if not is_authorized:
-                    logger.error("登录失败，请检查凭据后重试")
-                    print("\n⚠️ 登录失败，请检查您的凭据后重试")
+                    logger.error(f"Telegram登录失败: {str(e)}")
                     return False
             
-            # 初始化频道发现器（用于自动发现新频道）
+            # 初始化频道管理器
+            self.channel_manager = ChannelManager(self.client)
+            
+            # 设置频道监听
+            if not await self.setup_channels():
+                logger.error("设置频道监听失败")
+                return False
+            
+            # 启动自动发现频道任务
             if self.auto_discovery_enabled:
-                try:
-                    from src.core.channel_discovery import ChannelDiscovery
-                    self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
-                    logger.info("频道发现器已初始化，自动发现功能已启用")
-                except Exception as e:
-                    logger.error(f"初始化频道发现器时出错，自动发现功能将禁用: {str(e)}")
-                    self.auto_discovery_enabled = False
-                    self.channel_discovery = None
-            else:
-                logger.info("自动发现频道功能已手动禁用")
-                
-            # 设置活跃频道并注册处理程序
-            await self.setup_channels()
+                self.discovery_task = asyncio.create_task(self.discovery_loop())
+            
+            # 启动健康检查任务
+            self.health_check_task = asyncio.create_task(self.health_check_loop())
             
             # 设置运行状态
             self.is_running = True
             
-            # 根据操作系统不同使用不同的批处理策略
-            if is_windows:
-                # Windows环境下在当前进程中运行批处理
-                logger.info("Windows环境：在当前进程中运行批处理任务")
-                self.batch_task = asyncio.create_task(process_batches())
-            else:
-                # Linux环境下可以安全使用进程间通信
-                logger.info("非Windows环境：使用标准方式启动批处理任务")
-                self.batch_task = asyncio.create_task(process_batches())
+            # 定期备份session
+            self.session_backup_task = asyncio.create_task(self._periodic_session_backup())
             
-            # 启动健康检查和自动发现任务
-            self.health_check_task = asyncio.create_task(self.health_check())
-            self.discovery_task = asyncio.create_task(self.discovery_loop())
-            
-            logger.info("监听服务已启动")
-            
-            # 返回self，而不是进入无限循环
-            return self
+            logger.info("Telegram监听服务已启动")
+            return True
             
         except Exception as e:
-            self.is_running = False
-            logger.error(f"启动监听服务时出错: {str(e)}")
+            logger.critical(f"启动服务时出错: {str(e)}")
             logger.debug(tb.format_exc())
             return False
+    
+    async def _periodic_session_backup(self):
+        """定期备份session文件"""
+        while self.is_running:
+            try:
+                # 检查是否需要备份
+                current_time = time.time()
+                if (self.last_session_backup is None or 
+                    current_time - self.last_session_backup >= self.session_backup_interval):
+                    if self.client and self.client.is_connected():
+                        await self.backup_session()
+                
+                # 等待下一次备份检查
+                await asyncio.sleep(60)  # 每分钟检查一次是否需要备份
+                
+            except Exception as e:
+                logger.error(f"定期备份session时出错: {str(e)}")
+                logger.debug(tb.format_exc())
+                await asyncio.sleep(60)  # 出错后等待一分钟再继续
+    
+    async def _handle_disconnection(self):
+        """处理断开连接的情况"""
+        try:
+            # 检查session是否有效
+            if not await self._check_session_validity():
+                logger.warning("当前session无效,尝试恢复...")
+                if not await self._handle_session_expiry():
+                    logger.error("无法恢复session")
+                    return False
+            
+            # 尝试重新连接
+            try:
+                await self.client.connect()
+                if await self.client.is_user_authorized():
+                    logger.info("重新连接成功")
+                    return True
+                else:
+                    logger.warning("重新连接后未授权")
+                    return False
+            except Exception as e:
+                logger.error(f"重新连接失败: {str(e)}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"处理断开连接时出错: {str(e)}")
+            return False
+    
+    async def health_check_loop(self):
+        """健康检查循环,只检查连接状态"""
+        last_reconnect_time = None
+        reconnect_attempts = 0
+        
+        while self.is_running:
+            try:
+                # 只检查连接状态
+                if not self.client.is_connected():
+                    now = datetime.now()
+                    
+                    # 检查是否需要等待冷却时间
+                    if last_reconnect_time:
+                        time_since_last_reconnect = (now - last_reconnect_time).total_seconds()
+                        if time_since_last_reconnect < self.reconnect_cooldown:
+                            await asyncio.sleep(self.reconnect_cooldown - time_since_last_reconnect)
+                    
+                    logger.warning("检测到客户端已断开连接,正在尝试重新连接...")
+                    last_reconnect_time = datetime.now()
+                    
+                    if await self._handle_disconnection():
+                        reconnect_attempts = 0
+                        continue
+                    
+                    reconnect_attempts += 1
+                    if reconnect_attempts >= self.max_reconnect_attempts:
+                        logger.critical("多次重连失败,等待较长时间后重试...")
+                        await asyncio.sleep(300)  # 等待5分钟后重试
+                        reconnect_attempts = 0
+                    else:
+                        await asyncio.sleep(self.reconnect_cooldown)
+                
+                # 等待下一次检查
+                await asyncio.sleep(10)  # 每10秒检查一次
+                
+            except Exception as e:
+                logger.error(f"健康检查时出错: {str(e)}")
+                logger.debug(tb.format_exc())
+                await asyncio.sleep(10)
     
     async def discovery_loop(self):
         """自动发现频道的循环任务"""
@@ -1223,12 +1260,12 @@ class TelegramListener:
                 # 先检查连接状态，如果断开则立即处理
                 if not self.client.is_connected():
                     now = datetime.now()
-                    # 记录重连尝试
+                    
+                    # 检查是否需要等待冷却时间
                     if last_reconnect_time:
                         time_since_last_reconnect = (now - last_reconnect_time).total_seconds()
-                        # 如果距离上次重连不到30秒，增加等待时间避免频繁重连
-                        if time_since_last_reconnect < 30:
-                            await asyncio.sleep(30 - time_since_last_reconnect)
+                        if time_since_last_reconnect < self.reconnect_cooldown:
+                            await asyncio.sleep(self.reconnect_cooldown - time_since_last_reconnect)
                     
                     logger.warning("检测到客户端已断开连接，正在尝试重新连接...")
                     last_reconnect_time = datetime.now()
@@ -1495,7 +1532,7 @@ class TelegramListener:
                     if contract and chain:
                         # 查询历史记录中该代币的提及次数
                         mentions = await db_adapter.execute_query(
-                            'token_marks', 
+                            'tokens_mark', 
                             'select', 
                             filters={
                                 'contract': contract,
@@ -1656,6 +1693,97 @@ class TelegramListener:
         elif market_cap >= 1000:      # 千 (K)
             return f"${market_cap/1000:.2f}K"
         return f"${market_cap:.2f}"
+
+    async def backup_session(self):
+        """备份当前session文件"""
+        try:
+            if not self.client or not self.client.is_connected():
+                logger.warning("客户端未连接，无法备份session")
+                return False
+                
+            # 创建备份文件名
+            backup_name = f"session_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            backup_path = os.path.join(self.session_backup_dir, backup_name)
+            
+            # 复制session文件
+            session_files = [f"{self.session_path}.session", f"{self.session_path}.session-journal"]
+            for file in session_files:
+                if os.path.exists(file):
+                    backup_file = f"{backup_path}{os.path.splitext(file)[1]}"
+                    import shutil
+                    shutil.copy2(file, backup_file)
+                    logger.info(f"已备份session文件: {file} -> {backup_file}")
+            
+            # 清理旧的备份
+            self._cleanup_old_backups()
+            
+            self.last_session_backup = time.time()
+            return True
+            
+        except Exception as e:
+            logger.error(f"备份session文件时出错: {str(e)}")
+            logger.debug(tb.format_exc())
+            return False
+    
+    def _cleanup_old_backups(self):
+        """清理旧的session备份文件"""
+        try:
+            # 获取所有备份文件
+            backup_files = []
+            for file in os.listdir(self.session_backup_dir):
+                if file.startswith("session_backup_"):
+                    full_path = os.path.join(self.session_backup_dir, file)
+                    backup_files.append((full_path, os.path.getmtime(full_path)))
+            
+            # 按修改时间排序
+            backup_files.sort(key=lambda x: x[1], reverse=True)
+            
+            # 删除多余的备份
+            if len(backup_files) > self.max_session_backups:
+                for file_path, _ in backup_files[self.max_session_backups:]:
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"已删除旧的session备份: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"删除旧的session备份失败: {str(e)}")
+                        
+        except Exception as e:
+            logger.error(f"清理旧的session备份时出错: {str(e)}")
+            logger.debug(tb.format_exc())
+    
+    async def restore_session(self):
+        """尝试从最新的备份恢复session"""
+        try:
+            # 获取所有备份文件
+            backup_files = []
+            for file in os.listdir(self.session_backup_dir):
+                if file.startswith("session_backup_"):
+                    full_path = os.path.join(self.session_backup_dir, file)
+                    backup_files.append((full_path, os.path.getmtime(full_path)))
+            
+            if not backup_files:
+                logger.warning("没有可用的session备份")
+                return False
+            
+            # 按修改时间排序，获取最新的备份
+            backup_files.sort(key=lambda x: x[1], reverse=True)
+            latest_backup = backup_files[0][0]
+            
+            # 复制备份文件到当前session位置
+            import shutil
+            for ext in ['.session', '.session-journal']:
+                backup_file = f"{latest_backup}{ext}"
+                if os.path.exists(backup_file):
+                    target_file = f"{self.session_path}{ext}"
+                    shutil.copy2(backup_file, target_file)
+                    logger.info(f"已从备份恢复session文件: {backup_file} -> {target_file}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"恢复session备份时出错: {str(e)}")
+            logger.debug(tb.format_exc())
+            return False
 
 # 设置日志格式
 def setup_logging():

@@ -5,7 +5,7 @@ import os
 import multiprocessing
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_from_directory, abort, session
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_from_directory, abort, session, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 from src.database.models import Token, Message, TelegramChannel, TokensMark
@@ -248,157 +248,104 @@ def index():
                     # 应用搜索条件
                     if search_query:
                         new_tokens_query = new_tokens_query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
-                    
-                    # 如果有last_id，查询比它更新的token
-                    if last_id and last_id.isdigit():
-                        new_tokens_query = new_tokens_query.gt('id', int(last_id))
-                    
-                    # 按最新更新时间排序并限制数量
-                    new_tokens_query = new_tokens_query.order('id', desc=True).limit(10)
-                    
-                    # 执行查询
-                    new_tokens_response = new_tokens_query.execute()
-                    
-                    # 处理新token数据
-                    new_tokens = []
-                    if hasattr(new_tokens_response, 'data'):
-                        for token in new_tokens_response.data:
-                            if token is None:
-                                continue
-                                
-                            # 处理token数据，与原代码相同
-                            processed_token = process_token_data(token)
-                            new_tokens.append(processed_token)
-                    
-                    # 返回JSON响应
-                    return jsonify({
-                        'success': True,
-                        'new_tokens': new_tokens
-                    })
+                        
+                # 需要添加这里的实现或者抛出异常
+                return jsonify({"success": False, "error": "功能未实现"})
             except Exception as e:
                 logger.error(f"AJAX请求处理出错: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
                 return jsonify({"success": False, "error": str(e)})
         
-        # 仅获取可用的链信息，不预加载代币数据
-        try:
-            from supabase import create_client
-            
-            supabase_url = config.SUPABASE_URL
-            supabase_key = config.SUPABASE_KEY
-            
-            if supabase_url and supabase_key:
-                # 创建 Supabase 客户端
-                supabase = create_client(supabase_url, supabase_key)
-                
-                # 仅获取可用的链信息
-                chains_response = supabase.table('tokens').select('chain').execute()
-                available_chains = []
-                if hasattr(chains_response, 'data'):
-                    # 提取唯一的链名称
-                    chain_values = [item.get('chain') for item in chains_response.data if item.get('chain')]
-                    available_chains = list(set(chain_values))
-                else:
-                    available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
-            else:
-                logger.warning("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置，使用默认链列表")
-                available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
-                
-        except Exception as e:
-            logger.warning(f"获取链数据时出错，使用默认值: {str(e)}")
-            available_chains = ['ETH', 'BSC', 'SOL']  # 默认值
+        # 获取系统统计数据
+        stats = get_system_stats()
         
-        # 立即渲染模板，不预加载代币数据
+        # 获取可用链列表
+        available_chains = ['eth', 'bsc', 'sol']  # 默认支持的链
+        
         return render_template(
-            'index.html',
-            tokens=[],  # 传递空列表，不预加载数据
-            available_chains=available_chains,
-            chain_filter=chain_filter,
+            'index.html', 
+            stats=stats,
+            chain_filter=chain_filter, 
             search_query=search_query,
+            available_chains=available_chains,
             year=datetime.now().year
         )
-            
     except Exception as e:
         logger.error(f"首页渲染时出错: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        return handle_error(f"页面加载出错: {str(e)}", 500)
-
+        return handle_error(str(e))
 
 @app.route('/api/tokens/stream')
-def stream_tokens():
-    """流式获取代币数据的API，每次返回一条代币数据"""
+async def stream_tokens():
+    """流式获取代币数据"""
     try:
         # 获取查询参数
-        chain_filter = request.args.get('chain', 'all')
-        search_query = request.args.get('search', '')
-        offset = request.args.get('offset', 0, type=int)
-        batch_size = request.args.get('batch_size', 5, type=int)  # 每次获取的数量，默认5条
-        last_id = request.args.get('last_id', 0, type=int)  # 上一次请求的最后一个token ID
+        chain = request.args.get('chain', 'all')
+        search = request.args.get('search', '')
+        last_id = request.args.get('last_id', '0')
+        batch_size = int(request.args.get('batch_size', '100'))
         
-        logger.info(f"流式获取代币数据: offset={offset}, batch_size={batch_size}, last_id={last_id}")
+        # 获取数据库连接
+        db = get_db_connection()
         
-        # 使用Supabase获取数据
-        from supabase import create_client
+        # 构建查询条件
+        filters = {}
+        if chain and chain.lower() != 'all':
+            filters['chain'] = chain.upper()
+        # 移除对search参数的直接过滤，改为在应用层进行过滤
+        if last_id and last_id.isdigit():
+            # 使用 id 而不是 last_id
+            filters['id'] = ('>', int(last_id))
         
-        supabase_url = config.SUPABASE_URL
-        supabase_key = config.SUPABASE_KEY
-        
-        if not supabase_url or not supabase_key:
-            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
-            return jsonify({"success": False, "error": "数据库配置不完整"})
-        
-        # 创建Supabase客户端
-        supabase = create_client(supabase_url, supabase_key)
-        
-        # 构建查询
-        query = supabase.table('tokens').select('*')
-        
-        # 应用筛选条件
-        if chain_filter and chain_filter.lower() != 'all':
-            query = query.eq('chain', chain_filter)
+        # 获取更大的批量，以便有足够的数据进行过滤后满足批量大小要求
+        search_batch_size = batch_size
+        if search:
+            # 如果有搜索条件，获取更多的数据，以便过滤后有足够的结果
+            search_batch_size = batch_size * 10  # 获取10倍数据以便过滤
+            if search_batch_size > 1000:  # 设置一个上限
+                search_batch_size = 1000
             
-        # 应用搜索条件
-        if search_query:
-            query = query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
-        
-        # 如果有last_id，从last_id之后的记录开始获取
-        if last_id > 0:
-            query = query.lt('id', last_id)  # 获取ID小于last_id的记录
-        
-        # 按最新更新时间排序并限制数量
-        query = query.order('latest_update', desc=True).limit(batch_size)
-        
-        # 执行查询
-        response = query.execute()
+        # 获取代币数据
+        tokens = await db.execute_query('tokens', 'select', filters=filters, limit=search_batch_size)
         
         # 处理代币数据
-        tokens = []
-        min_id = 0  # 记录最小ID，用于下次请求
+        processed_tokens = []
+        if tokens and isinstance(tokens, list):
+            for token in tokens:
+                if isinstance(token, dict):
+                    # 如果有搜索条件，则在应用层过滤
+                    if search:
+                        # 在token_symbol和contract字段中搜索，不区分大小写
+                        token_symbol = token.get('token_symbol', '').lower() if token.get('token_symbol') else ''
+                        contract = token.get('contract', '').lower() if token.get('contract') else ''
+                        search_lower = search.lower()
+                        
+                        # 如果匹配则添加到结果
+                        if search_lower in token_symbol or search_lower in contract:
+                            processed_token = process_token_data(token)
+                            processed_tokens.append(processed_token)
+                            # 如果已经达到请求的批量大小，则停止处理
+                            if len(processed_tokens) >= batch_size:
+                                break
+                    else:
+                        # 无搜索条件，直接处理
+                        processed_token = process_token_data(token)
+                        processed_tokens.append(processed_token)
         
-        if hasattr(response, 'data'):
-            for token in response.data:
-                if token is None:
-                    continue
-                    
-                # 处理token数据
-                processed_token = process_token_data(token)
-                tokens.append(processed_token)
-                
-                # 更新最小ID
-                token_id = token.get('id', 0)
-                if token_id > 0 and (min_id == 0 or token_id < min_id):
-                    min_id = token_id
-        
-        # 检查是否还有更多数据
-        has_more = len(tokens) >= batch_size
-        
+        # 获取下一个ID - 确保有数据时才获取
+        next_id = 0
+        if processed_tokens and len(processed_tokens) > 0:
+            # 确保获取的是实际的ID
+            last_token = processed_tokens[-1]
+            if isinstance(last_token, dict) and 'id' in last_token:
+                next_id = last_token['id']
+            
+        # 返回JSON响应
         return jsonify({
             'success': True,
-            'tokens': tokens,
-            'has_more': has_more,
-            'next_id': min_id if has_more else 0
+            'tokens': processed_tokens,
+            'next_id': next_id,
+            'has_more': len(processed_tokens) == batch_size
         })
         
     except Exception as e:
@@ -407,8 +354,8 @@ def stream_tokens():
         logger.error(traceback.format_exc())
         return jsonify({
             'success': False,
-            'error': f"获取数据失败: {str(e)}"
-        })
+            'error': f"流式获取代币数据时出错: {str(e)}"
+        }), 500
 
 @app.route('/channels')
 def channels():
@@ -1123,102 +1070,90 @@ logger.info("已启动API缓存清理线程")
 
 # 辅助函数：处理token数据
 def process_token_data(token):
-    """处理token数据，格式化价格和时间等信息"""
+    """处理代币数据，添加额外的显示信息"""
     try:
-        # 创建处理后的token对象
-        processed_token = dict(token)
+        # 确保first_update_formatted有值
+        first_update = token.get('first_update_formatted', '')
+        if not first_update:
+            first_update = token.get('first_update', '')
+            # 如果有first_update但没有格式化，尝试格式化
+            if first_update and isinstance(first_update, str):
+                try:
+                    # 尝试将ISO格式时间转换为更友好的格式
+                    dt = datetime.fromisoformat(first_update.replace('Z', '+00:00'))
+                    first_update = dt.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    pass
         
-        # 确保始终设置基本字段，避免None值
-        processed_token['change_pct_value'] = to_decimal_or_float(token.get('change_pct_value', 0)) or 0
-        processed_token['change_percentage'] = token.get('change_percentage', "0.00%") or "0.00%"
-        processed_token['market_cap'] = to_decimal_or_float(token.get('market_cap', 0)) or 0
-        processed_token['volume_1h'] = to_decimal_or_float(token.get('volume_1h', 0)) or 0
-        
-        # 确保社群数据为整数类型，并处理None值和错误转换情况
-        original_community_reach = token.get('community_reach')
-        original_spread_count = token.get('spread_count')
-        
+        # 获取原始市值数值，确保为数值类型
+        market_cap_value = token.get('market_cap', 0)
         try:
-            processed_token['community_reach'] = int(float(token.get('community_reach', 0) or 0))
-        except (ValueError, TypeError):
-            processed_token['community_reach'] = 0
+            if isinstance(market_cap_value, str):
+                market_cap_value = float(market_cap_value.replace(',', ''))
+            else:
+                market_cap_value = float(market_cap_value) if market_cap_value is not None else 0
+        except:
+            market_cap_value = 0
             
-        try:
-            processed_token['spread_count'] = int(float(token.get('spread_count', 0) or 0))
-        except (ValueError, TypeError):
-            processed_token['spread_count'] = 0
-            
-        # 添加详细调试日志
-        logger.info(f"处理token数据: ID={token.get('id')}, Chain={token.get('chain')}, Symbol={token.get('token_symbol')}")
-        logger.info(f"原始社群数据: community_reach={original_community_reach}({type(original_community_reach).__name__}), spread_count={original_spread_count}({type(original_spread_count).__name__})")
-        logger.info(f"处理后社群数据: community_reach={processed_token['community_reach']}, spread_count={processed_token['spread_count']}")
-        
-        processed_token['buys_1h'] = int(to_decimal_or_float(token.get('buys_1h', 0)) or 0)
-        processed_token['sells_1h'] = int(to_decimal_or_float(token.get('sells_1h', 0)) or 0)
-        processed_token['holders_count'] = int(to_decimal_or_float(token.get('holders_count', 0)) or 0)
-        
-        # 处理市值格式化
-        if processed_token['market_cap'] > 0:
-            processed_token['market_cap_formatted'] = format_market_cap(processed_token['market_cap'])
-        else:
-            processed_token['market_cap_formatted'] = "$0.00"
-        
-        # 处理价格变化百分比
-        change_pct = to_decimal_or_float(token.get('price_change_24h')) or to_decimal_or_float(token.get('last_calculated_change_pct')) or 0
-        processed_token['change_pct_value'] = change_pct
-        if change_pct > 0:
-            processed_token['change_percentage'] = f"+{change_pct:.2f}%"
-        else:
-            processed_token['change_percentage'] = f"{change_pct:.2f}%"
-        
-        # 处理1小时交易量格式化
-        if processed_token['volume_1h'] > 0:
-            processed_token['volume_1h_formatted'] = format_market_cap(processed_token['volume_1h'])
-        else:
-            processed_token['volume_1h_formatted'] = "$0.00"
-        
-        # 处理首次更新时间格式化
-        if token.get('first_update'):
-            try:
-                # 尝试解析时间格式
-                dt = datetime.fromisoformat(token['first_update'].replace('Z', '+00:00'))
-                processed_token['first_update_formatted'] = dt.strftime('%Y-%m-%d %H:%M:%S')
-            except (ValueError, TypeError, AttributeError):
-                processed_token['first_update_formatted'] = str(token.get('first_update', "未知"))
-        else:
-            processed_token['first_update_formatted'] = "未知"
-        
-        # 处理流动性数据
-        liquidity = to_decimal_or_float(token.get('liquidity', 0)) or 0
-        processed_token['liquidity'] = format_number(liquidity)
-        
-        # 添加调试日志
-        logger.debug(f"处理后的token数据: 社群覆盖人数={processed_token['community_reach']}, 传播次数={processed_token['spread_count']}")
-        
-        return processed_token
-    except Exception as e:
-        logger.error(f"处理token数据时出错: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        # 返回带基本字段的字典，确保页面不会崩溃
-        return {
+        # 基础数据处理
+        token_data = {
+            'id': token.get('id', 0),  # 添加id字段
+            'name': token.get('name', ''),
+            'token_symbol': token.get('token_symbol', ''),  # 添加token_symbol字段
+            'symbol': token.get('symbol', ''),
             'chain': token.get('chain', ''),
             'contract': token.get('contract', ''),
-            'token_symbol': token.get('token_symbol', '未知'),
-            'market_cap': 0,
-            'market_cap_formatted': "$0.00",
-            'change_pct_value': 0,
-            'change_percentage': "0.00%",
-            'volume_1h': 0,
-            'volume_1h_formatted': "$0.00",
-            'community_reach': 0,
-            'spread_count': 0,
-            'buys_1h': 0,
-            'sells_1h': 0,
-            'holders_count': 0,
-            'first_update_formatted': "未知",
-            'liquidity': "0"
+            'market_cap': market_cap_value,  # 保留原始数值，供前端JS处理
+            'market_cap_formatted': format_market_cap(market_cap_value),  # 添加格式化后的市值
+            'price': format_number(token.get('price', 0)),
+            'volume_1h': format_number(token.get('volume_1h', 0)),
+            'volume_1h_formatted': format_number(token.get('volume_1h', 0)),  # 添加格式化后的1小时交易量
+            'volume_24h': format_number(token.get('volume_24h', 0)),
+            'holders': format_number(token.get('holders', 0)),
+            'holders_count': token.get('holders_count', 0),  # 添加原始持有者数量
+            'latest_update': token.get('latest_update', ''),
+            'isSol': token.get('chain', '').upper() == 'SOL',
+            'first_update_formatted': first_update or '未知',
+            'buys_1h': token.get('buys_1h', 0),
+            'sells_1h': token.get('sells_1h', 0),
+            'community_reach': token.get('community_reach', 0),
+            'spread_count': token.get('spread_count', 0),
+            'change_pct_value': token.get('change_pct_value', 0),
+            'change_percentage': token.get('change_percentage', '0.00%'),
+            'image_url': token.get('image_url', ''),  # 添加图片URL
+            'likes_count': token.get('likes_count', 0),  # 添加点赞数
         }
+        
+        # 添加社交链接
+        token_data.update({
+            'twitter': token.get('twitter', ''),
+            'website': token.get('website', ''),
+            'telegram': token.get('telegram', ''),
+        })
+        
+        # 添加其他链接
+        token_data.update({
+            'dexscreener_url': get_dexscreener_url(token.get('chain', ''), token.get('contract', '')),
+            'twitter_search_url': f"https://x.com/search?q=({token.get('name', '')}%20OR%20{token.get('contract', '')})&src=typed_query&f=live",
+        })
+        
+        # 如果是Solana代币，添加特定链接
+        if token.get('chain', '').upper() == 'SOL':
+            token_data.update({
+                'axiom_url': f"https://axiom.trade/meme/{token.get('contract', '')}",
+                'pumpfun_url': f"https://pump.fun/coin/{token.get('contract', '')}",
+            })
+        
+        # 添加通用链接
+        token_data.update({
+            'debot_url': f"https://debot.ai/token/{token.get('chain', '').lower()}/{token.get('contract', '')}",
+            'gmgn_url': f"https://gmgn.ai/{token.get('chain', '').lower()}/token/{token.get('contract', '')}",
+        })
+        
+        return token_data
+    except Exception as e:
+        logger.error(f"处理代币数据时出错: {str(e)}")
+        return token
 
 # 辅助函数：格式化数字
 def format_number(value):
@@ -1977,6 +1912,22 @@ async def api_refresh_token(chain, contract):
             from src.api.token_market_updater import update_token_market_data_async
             market_result = await update_token_market_data_async(chain, contract)
             
+            # 检查是否返回deleted标志，表示代币已被删除
+            if isinstance(market_result, dict) and market_result.get('deleted', False):
+                logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，已被删除")
+                deleted_info = market_result.get('deleted_info', {})
+                
+                # 返回已删除的响应
+                return jsonify({
+                    "success": True,
+                    "deleted": True,
+                    "token_symbol": token_symbol,
+                    "chain": chain,
+                    "contract": contract,
+                    "message": "代币在DEX上不存在，已从数据库中删除",
+                    "deleted_info": deleted_info
+                })
+                
             if isinstance(market_result, dict) and not market_result.get('error'):
                 market_updated = True
                 logger.info(f"成功更新 {token_symbol} 的市场数据")
@@ -2001,9 +1952,40 @@ async def api_refresh_token(chain, contract):
             if normalized_chain:
                 pools = get_token_pools(normalized_chain, contract)
                 
+                # 检查是否返回空结果，表示代币不存在
+                if not pools or (isinstance(pools, list) and len(pools) == 0):
+                    logger.warning(f"DEX API返回空结果，代币 {token_symbol} ({chain}/{contract}) 可能不存在")
+                    
+                    # 调用删除函数
+                    try:
+                        from src.api.token_market_updater import delete_token_data
+                        logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，将从数据库中删除")
+                        
+                        delete_result = await delete_token_data(chain, contract, double_check=True)
+                        if delete_result['success']:
+                            deleted_info = delete_result.get('deleted_token_data', {})
+                            logger.info(f"成功删除无效代币 {token_symbol} ({chain}/{contract}) 及其相关数据")
+                            
+                            # 返回已删除的响应
+                            return jsonify({
+                                "success": True,
+                                "deleted": True,
+                                "token_symbol": token_symbol,
+                                "chain": chain,
+                                "contract": contract,
+                                "message": "代币在DEX上不存在，已从数据库中删除",
+                                "deleted_info": deleted_info
+                            })
+                        else:
+                            logger.error(f"删除无效代币失败: {delete_result.get('error', '未知错误')}")
+                            txn_error = f"代币在DEX上不存在，删除失败: {delete_result.get('error', '未知错误')}"
+                    except Exception as delete_error:
+                        logger.error(f"删除无效代币时出错: {str(delete_error)}")
+                        txn_error = f"代币在DEX上不存在，删除时出错: {str(delete_error)}"
+                
                 # 修正API返回数据的处理
                 # API返回的是数组而不是包含'pairs'字段的对象
-                if pools and isinstance(pools, list) and len(pools) > 0:
+                elif pools and isinstance(pools, list) and len(pools) > 0:
                     # 提取交易数据
                     buys_1h = 0
                     sells_1h = 0

@@ -26,29 +26,24 @@
                     <span id="tokenSymbolShort"></span>
                   </div>
                 </div>
-                <div>
+                <div class="token-info-container">
                   <h4 id="tokenSymbol"></h4>
-                  <p class="text-muted mb-0">
+                  <p class="text-muted mb-0 token-contract-container">
                     <span id="tokenChain" class="badge bg-secondary me-2"></span>
                     <span id="tokenContract" class="small"></span>
                   </p>
                 </div>
               </div>
             </div>
-            <div class="col-md-6">
-              <div class="card h-100">
-                <div class="card-body">
-                  <h6 class="card-title">市场数据</h6>
-                  <div class="row">
-                    <div class="col-6">
-                      <p class="mb-1">市值：</p>
-                      <h5 id="tokenMarketCap"></h5>
-                    </div>
-                    <div class="col-6">
-                      <p class="mb-1">24h变化：</p>
-                      <h5 id="tokenPriceChange"></h5>
-                    </div>
-                  </div>
+            <div class="col-md-6 col-sm-6 d-flex align-items-start market-data-container">
+              <div class="market-data-pills">
+                <div class="market-data-pill">
+                  <span class="mini-label">市值</span>
+                  <span id="tokenMarketCap" class="mini-value"></span>
+                </div>
+                <div class="market-data-pill">
+                  <span class="mini-label">24h变化</span>
+                  <span id="tokenPriceChange" class="mini-value"></span>
                 </div>
               </div>
             </div>
@@ -118,4 +113,173 @@
       </div>
     </div>
   </div>
-</div> 
+</div>
+
+<!-- 复制成功提示Toast -->
+<!-- 移除原有的Toast容器，使用动态创建的提示元素 -->
+<!-- <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
+  <div id="copyToastContainer" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="2000" data-debug-copy="true">
+    <div class="toast-header bg-success text-white">
+      <i class="bi bi-clipboard-check me-2"></i>
+      <strong class="me-auto">复制成功</strong>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="关闭"></button>
+    </div>
+    <div class="toast-body">
+      <span id="copyToastMessage">合约地址已复制到剪贴板</span>
+    </div>
+  </div>
+</div> -->
+
+<style>
+  /* 详情弹窗样式 */
+  .token-info-container {
+    position: relative;
+    z-index: 10;
+    width: 100%;
+  }
+  
+  .token-contract-container {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    margin-top: 4px;
+  }
+  
+  #tokenContract {
+    display: flex;
+    align-items: center;
+    max-width: 100%;
+    overflow: visible;
+    position: relative;
+    z-index: 20;
+    gap: 8px;
+  }
+  
+  #tokenContract span {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+    font-family: monospace;
+    background-color: #f8f9fa;
+    padding: 3px 6px;
+    border-radius: 3px;
+    border: 1px solid #e9ecef;
+  }
+  
+  #tokenContract .copy-address-btn {
+    font-size: 0.8rem;
+    color: #333;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 3px 8px !important;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    position: relative;
+    z-index: 30;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  #tokenContract .copy-address-btn:hover {
+    color: #fff;
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+  }
+  
+  #tokenContract .copy-address-btn.text-success {
+    color: #fff !important;
+    background-color: #198754;
+    border-color: #198754;
+  }
+  
+  .market-data-container {
+    position: relative;
+    z-index: 5;
+  }
+  
+  .text-success {
+    color: #198754 !important;
+  }
+  
+  /* 极简市场数据样式 - 药丸式设计 */
+  .market-data-pills {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  
+  .market-data-pill {
+    display: flex;
+    flex-direction: column;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 0.5rem;
+    padding: 0.1rem 0.5rem;
+    min-width: 80px;
+  }
+  
+  .mini-label {
+    font-size: 0.65rem;
+    color: #6c757d;
+    margin-bottom: -0.15rem;
+  }
+  
+  .mini-value {
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  
+  /* 响应式调整 */
+  @media (max-width: 576px) {
+    .market-data-pills {
+      margin-top: 0.5rem;
+    }
+  }
+  
+  /* 确保toast容器正确显示 */
+  #copyToastContainer {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  
+  #copyToastContainer.show {
+    opacity: 1;
+  }
+  
+  /* 复制成功提示优化 */
+  .copy-tooltip {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: #198754;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 9999;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+  }
+  
+  .copy-tooltip.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  
+  .copy-tooltip i {
+    font-size: 1.2rem;
+  }
+  
+  /* 隐藏原始的Toast容器（将通过JS切换） */
+  #copyToastContainer {
+    display: none;
+  }
+</style> 

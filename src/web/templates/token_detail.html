@@ -49,7 +49,12 @@
                                 <h6 class="border-bottom pb-2">基本信息</h6>
                                 <div class="d-flex justify-content-between mb-2">
                                     <span>合约地址:</span>
-                                    <span class="text-break">{{ token.contract }}</span>
+                                    <span class="text-break d-flex align-items-center">
+                                        {{ token.contract }}
+                                        <button class="btn btn-sm btn-primary ms-2 copy-address-btn" onclick="copyToClipboard('{{ token.contract }}', '合约地址')">
+                                            <i class="bi bi-clipboard"></i> 复制
+                                        </button>
+                                    </span>
                                 </div>
                                 <div class="d-flex justify-content-between mb-2">
                                     <span>当前市值:</span>
@@ -260,4 +265,71 @@
         });
     });
 </script>
+{% endblock %}
+
+{% block styles %}
+<style>
+    .token-img-lg {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        object-fit: cover;
+    }
+    
+    .token-placeholder-lg {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background-color: #e9ecef;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 1.2rem;
+    }
+    
+    .message-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 0.9rem;
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 4px;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .message-image {
+        max-height: 300px;
+        border-radius: 4px;
+    }
+    
+    /* 复制成功提示样式 */
+    .copy-tooltip {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background-color: #198754;
+        color: white;
+        padding: 10px 15px;
+        border-radius: 4px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        z-index: 9999;
+        opacity: 0;
+        transform: translateY(20px);
+        transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    
+    .copy-tooltip.show {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    
+    .copy-tooltip i {
+        font-size: 1.2rem;
+    }
+</style>
 {% endblock %} 
