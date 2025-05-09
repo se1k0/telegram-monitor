@@ -156,24 +156,32 @@ def get_system_stats():
     }
     
     try:
-        # 使用Supabase适配器
-        from src.database.db_factory import get_db_adapter
-        from src.core.channel_manager import ChannelManager
-        db_adapter = get_db_adapter()
+        # 使用Supabase适配器获取数据，避免不必要的查询
+        from supabase import create_client
+        import config.settings as config
         
-        # 使用ChannelManager获取活跃频道
-        channel_manager = ChannelManager()
-        channels = channel_manager.get_active_channels()
-        active_channels_count = len(channels) if channels else 0
+        # 获取Supabase配置
+        supabase_url = config.SUPABASE_URL
+        supabase_key = config.SUPABASE_KEY
         
-        # 使用Supabase适配器获取消息和代币数量
-        try:
-            # 获取代币数量
-            from supabase import create_client
-            supabase_url = config.SUPABASE_URL
-            supabase_key = config.SUPABASE_KEY
-            supabase = create_client(supabase_url, supabase_key)
+        if not supabase_url or not supabase_key:
+            logger.error("缺少 SUPABASE_URL 或 SUPABASE_KEY 配置")
+            return default_stats
             
+        # 创建Supabase客户端
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # 1. 只获取活跃频道数量，不需要完整的频道数据
+        try:
+            # 只计数，不获取完整数据
+            active_channels_response = supabase.table('telegram_channels').select('id', count='exact').eq('is_active', True).execute()
+            active_channels_count = active_channels_response.count if hasattr(active_channels_response, 'count') else 0
+        except Exception as e:
+            logger.error(f"获取活跃频道计数时出错: {str(e)}")
+            active_channels_count = 0
+            
+        # 2. 获取代币数量和消息数量
+        try:
             # 获取代币数量
             tokens_count_response = supabase.table('tokens').select('id', count='exact').execute()
             token_count = tokens_count_response.count if hasattr(tokens_count_response, 'count') else 0
@@ -183,7 +191,7 @@ def get_system_stats():
             message_count = messages_count_response.count if hasattr(messages_count_response, 'count') else 0
             
             # 获取最后更新时间
-            last_update_response = supabase.table('tokens').select('latest_update').order('id', desc=True).limit(1).execute()
+            last_update_response = supabase.table('tokens').select('latest_update').order('latest_update', desc=True).limit(1).execute()
             last_update = last_update_response.data[0]['latest_update'] if hasattr(last_update_response, 'data') and last_update_response.data else "未知"
         except Exception as e:
             logger.error(f"获取Supabase数据统计时出错: {str(e)}")
@@ -191,12 +199,13 @@ def get_system_stats():
             message_count = 0
             last_update = "未知"
         
+        # 首页只需要统计数量，不需要获取完整的频道数据列表
         return {
             'active_channels_count': active_channels_count,
             'message_count': message_count,
             'token_count': token_count,
             'last_update': last_update,
-            'channels': channels or [],
+            'channels': [], # 首页不需要完整的频道数据，置空以提高性能
         }
     except Exception as e:
         logger.error(f"获取系统统计数据时出错: {str(e)}")
@@ -238,19 +247,73 @@ def index():
                 
                 # 处理检查新token的请求
                 if check_new:
-                    # 构建查询检索比last_id更新的token
-                    new_tokens_query = supabase.table('tokens').select('*')
+                    # 获取最后看到的token ID
+                    last_id = request.args.get('last_id', '0')
                     
-                    # 应用筛选条件
+                    # 使用first_update来获取比当前最新token更新的数据
+                    query = "select * from tokens"
+                    params = {}
+                    
+                    # 如果有lastId，则查询比last_token更新的数据
+                    where_clauses = []
+                    if last_id and last_id.isdigit() and int(last_id) > 0:
+                        try:
+                            # 先获取该ID的token的first_update时间
+                            last_token_result = supabase.table('tokens').select('first_update').eq('id', last_id).execute()
+                            
+                            if hasattr(last_token_result, 'data') and last_token_result.data:
+                                last_token_time = last_token_result.data[0].get('first_update')
+                                if last_token_time:
+                                    where_clauses.append(f"first_update > '{last_token_time}'")
+                                    logger.info(f"查询first_update > {last_token_time}的数据")
+                        except Exception as e:
+                            logger.error(f"获取last_token时间失败: {str(e)}")
+                    
+                    # 应用链过滤
                     if chain_filter and chain_filter.lower() != 'all':
-                        new_tokens_query = new_tokens_query.eq('chain', chain_filter)
-                        
-                    # 应用搜索条件
+                        where_clauses.append(f"chain = '{chain_filter.upper()}'")
+                    
+                    # 应用搜索过滤
                     if search_query:
-                        new_tokens_query = new_tokens_query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
+                        where_clauses.append(f"(token_symbol ilike '%{search_query}%' OR contract ilike '%{search_query}%')")
+                    
+                    # 构建完整的查询
+                    if where_clauses:
+                        query += " where " + " and ".join(where_clauses)
+                    
+                    # 按first_update降序排序，获取最新的先
+                    query += " order by first_update desc"
+                    
+                    # 执行查询
+                    try:
+                        logger.info(f"执行查询: {query}")
+                        result = supabase.rpc('exec_sql', {'sql_query': query}).execute()
                         
-                # 需要添加这里的实现或者抛出异常
-                return jsonify({"success": False, "error": "功能未实现"})
+                        # 处理结果
+                        new_tokens = []
+                        if hasattr(result, 'data') and result.data:
+                            raw_tokens = result.data
+                            logger.info(f"找到 {len(raw_tokens)} 个新token")
+                            
+                            # 处理每个token
+                            for token in raw_tokens:
+                                processed_token = process_token_data(token)
+                                new_tokens.append(processed_token)
+                        
+                        # 返回结果
+                        return jsonify({
+                            "success": True,
+                            "new_tokens": new_tokens,
+                            "count": len(new_tokens)
+                        })
+                    except Exception as e:
+                        logger.error(f"执行新token查询出错: {str(e)}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        return jsonify({"success": False, "error": f"查询新token失败: {str(e)}"})
+                
+                # 非check_new请求的处理
+                return jsonify({"success": False, "error": "不支持的请求类型"})
             except Exception as e:
                 logger.error(f"AJAX请求处理出错: {str(e)}")
                 return jsonify({"success": False, "error": str(e)})
@@ -283,7 +346,7 @@ async def stream_tokens():
         chain = request.args.get('chain', 'all')
         search = request.args.get('search', '')
         last_id = request.args.get('last_id', '0')
-        batch_size = int(request.args.get('batch_size', '100'))
+        batch_size = int(request.args.get('batch_size', '20'))  # 默认加载20条
         
         # 获取数据库连接
         db = get_db_connection()
@@ -292,25 +355,74 @@ async def stream_tokens():
         filters = {}
         if chain and chain.lower() != 'all':
             filters['chain'] = chain.upper()
-        # 移除对search参数的直接过滤，改为在应用层进行过滤
-        if last_id and last_id.isdigit():
-            # 使用 id 而不是 last_id
-            filters['id'] = ('>', int(last_id))
-        
-        # 获取更大的批量，以便有足够的数据进行过滤后满足批量大小要求
-        search_batch_size = batch_size
-        if search:
-            # 如果有搜索条件，获取更多的数据，以便过滤后有足够的结果
-            search_batch_size = batch_size * 10  # 获取10倍数据以便过滤
-            if search_batch_size > 1000:  # 设置一个上限
-                search_batch_size = 1000
             
-        # 获取代币数据
-        tokens = await db.execute_query('tokens', 'select', filters=filters, limit=search_batch_size)
+        # 获取总记录数 - 使用db适配器的方法
+        total_count = 0
+        try:
+            # 执行count查询
+            count_result = await db.execute_query(
+                'tokens',
+                'select',
+                fields=['id'],
+                filters={} if chain.lower() == 'all' else {'chain': chain.upper()}
+            )
+            
+            # 计算总记录数
+            if count_result and isinstance(count_result, list):
+                total_count = len(count_result)
+                
+            logger.info(f"数据库中共有 {total_count} 条token记录")
+        except Exception as e:
+            logger.error(f"获取token总数出错: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # 即使出错也继续执行，不影响主功能
         
-        # 处理代币数据
+        # 关键修复：确保分页正确工作
+        # 收到last_id后，我们需要获取比这个ID更旧的数据(first_update更小的数据)
+        # 前端是按照先展示最新数据，然后下拉加载更旧数据的方式工作的
+        
+        # 如果last_id存在，我们需要先获取这个token的first_update时间
+        last_token_time = None
+        if last_id and last_id.isdigit() and int(last_id) > 0:
+            try:
+                # 获取last_id对应的token
+                last_token_result = await db.execute_query(
+                    'tokens',
+                    'select',
+                    fields=['first_update'],
+                    filters={'id': int(last_id)}
+                )
+                
+                if last_token_result and isinstance(last_token_result, list) and len(last_token_result) > 0:
+                    last_token_time = last_token_result[0].get('first_update')
+                    logger.info(f"找到ID={last_id}的token，first_update时间为{last_token_time}")
+            except Exception as e:
+                logger.error(f"获取last_token_time时出错: {str(e)}")
+        
+        # 构建查询 - 如果有last_token_time，查询比这个时间更早的数据
+        query_filters = filters.copy()
+        if last_token_time:
+            # 查询比last_token_time更早的数据(first_update更小的值)
+            query_filters['first_update'] = ('<', last_token_time)
+            logger.info(f"查询first_update < {last_token_time}的数据")
+        
+        # 获取代币数据 - 按照首次发现时间降序排序
+        logger.info(f"加载token数据: last_id={last_id}, chain={chain}, batch_size={batch_size}, 按first_update降序排序")
+        tokens = await db.execute_query(
+            'tokens', 
+            'select', 
+            filters=query_filters, 
+            limit=batch_size,
+            order_by={'column': 'first_update', 'ascending': False}  # 按照首次发现时间降序排列(新的在前)
+        )
+        
+        # 处理查询结果
         processed_tokens = []
+        
+        # 如果tokens不为空，处理数据
         if tokens and isinstance(tokens, list):
+            # 处理代币数据
             for token in tokens:
                 if isinstance(token, dict):
                     # 如果有搜索条件，则在应用层过滤
@@ -324,9 +436,6 @@ async def stream_tokens():
                         if search_lower in token_symbol or search_lower in contract:
                             processed_token = process_token_data(token)
                             processed_tokens.append(processed_token)
-                            # 如果已经达到请求的批量大小，则停止处理
-                            if len(processed_tokens) >= batch_size:
-                                break
                     else:
                         # 无搜索条件，直接处理
                         processed_token = process_token_data(token)
@@ -335,17 +444,61 @@ async def stream_tokens():
         # 获取下一个ID - 确保有数据时才获取
         next_id = 0
         if processed_tokens and len(processed_tokens) > 0:
-            # 确保获取的是实际的ID
+            # 获取当前批次中最后一个token的ID
             last_token = processed_tokens[-1]
             if isinstance(last_token, dict) and 'id' in last_token:
                 next_id = last_token['id']
+                logger.info(f"设置next_id为当前批次最后一个token的ID: {next_id}")
+        
+        # 判断是否还有更多数据
+        # 如果没有返回任何数据，说明没有更多了
+        if len(processed_tokens) == 0:
+            has_more = False
+            logger.info("查询无结果，没有更多数据了")
+        else:
+            # 如果返回的数据少于请求的批次大小，可能没有更多数据了，但仍需检查
+            has_more = len(processed_tokens) >= batch_size
+        
+        # 当返回结果小于批次大小但不为0时，检查是否真的没有更多数据
+        if has_more == False and len(processed_tokens) > 0 and len(processed_tokens) < batch_size:
+            try:
+                # 查询是否还有更早的数据
+                # 使用当前批次最后一个token的first_update时间
+                last_time = processed_tokens[-1].get('first_update')
+                if last_time:
+                    earlier_check = await db.execute_query(
+                        'tokens', 
+                        'select', 
+                        fields=['id'],
+                        filters={
+                            **filters,
+                            'first_update': ('<', last_time)
+                        },
+                        limit=1
+                    )
+                    
+                    # 如果还有更早的数据，设置has_more=True
+                    if earlier_check and len(earlier_check) > 0:
+                        has_more = True
+                        logger.info(f"检测到还有更早的数据，设置has_more=True")
+            except Exception as e:
+                logger.error(f"检查更早数据时出错: {str(e)}")
+                # 出错时保守处理，假设没有更多数据
+                has_more = False
+        
+        # 关键修复：删除特殊情况处理，避免无限循环
+        # 当没有数据时，不再返回最新的数据，而是返回空数据并设置has_more=False
             
+        logger.info(f"返回 {len(processed_tokens)} 条token数据，has_more={has_more}")
+        
         # 返回JSON响应
         return jsonify({
             'success': True,
             'tokens': processed_tokens,
             'next_id': next_id,
-            'has_more': len(processed_tokens) == batch_size
+            'has_more': has_more,
+            'batch_size': batch_size,
+            'total_count': total_count
         })
         
     except Exception as e:
@@ -1076,14 +1229,73 @@ def process_token_data(token):
         first_update = token.get('first_update_formatted', '')
         if not first_update:
             first_update = token.get('first_update', '')
-            # 如果有first_update但没有格式化，尝试格式化
-            if first_update and isinstance(first_update, str):
+        
+        # 处理首次更新时间，计算经过的天数
+        days_since_first = None
+        if first_update and isinstance(first_update, str):
+            try:
+                # 记录原始日期字符串，帮助调试
+                logger.debug(f"处理首次更新时间: {first_update}")
+                
+                # 将ISO格式时间转换为datetime对象，确保有时区信息
+                # 处理常见的ISO格式，确保Z被替换为+00:00
+                if 'Z' in first_update:
+                    first_update = first_update.replace('Z', '+00:00')
+                elif 'T' in first_update and not any(x in first_update for x in ['+', '-', 'Z']):
+                    # 如果有T分隔符但没有时区信息，添加UTC时区
+                    first_update = first_update + '+00:00'
+                
+                # 尝试解析日期
                 try:
-                    # 尝试将ISO格式时间转换为更友好的格式
-                    dt = datetime.fromisoformat(first_update.replace('Z', '+00:00'))
-                    first_update = dt.strftime("%Y-%m-%d %H:%M")
-                except Exception:
-                    pass
+                    dt = datetime.fromisoformat(first_update)
+                except ValueError:
+                    # 尝试其他格式
+                    formats = [
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%d %H:%M",
+                        "%Y-%m-%d"
+                    ]
+                    for fmt in formats:
+                        try:
+                            dt = datetime.strptime(first_update, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        raise ValueError(f"无法解析日期: {first_update}")
+                
+                logger.debug(f"转换后的datetime对象: {dt}, 时区信息: {dt.tzinfo}")
+                
+                # 确保dt是offset-aware的
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    logger.debug(f"添加UTC时区后: {dt}")
+                
+                # 获取当前时间，确保也是offset-aware的
+                now = datetime.now(timezone.utc)
+                logger.debug(f"当前UTC时间: {now}")
+                
+                # 计算到当前时间的天数差
+                delta = now - dt
+                days_since_first = delta.days
+                logger.debug(f"计算的天数差: {days_since_first}天")
+                
+                # 格式化首次推荐时间显示
+                if days_since_first < 1:
+                    # 不足一天显示 <1d
+                    first_update_display = "<1d"
+                else:
+                    # 显示具体天数
+                    first_update_display = f"{days_since_first}d"
+                
+                logger.debug(f"格式化后的首次推荐显示: {first_update_display}")
+            except Exception as e:
+                logger.warning(f"处理首次更新时间出错: {str(e)}, 原始值: {first_update}")
+                # 如果无法解析日期，使用原始值
+                first_update_display = first_update
+        else:
+            # 没有有效的首次更新时间
+            first_update_display = '未知'
         
         # 获取原始市值数值，确保为数值类型
         market_cap_value = token.get('market_cap', 0)
@@ -1113,7 +1325,9 @@ def process_token_data(token):
             'holders_count': token.get('holders_count', 0),  # 添加原始持有者数量
             'latest_update': token.get('latest_update', ''),
             'isSol': token.get('chain', '').upper() == 'SOL',
-            'first_update_formatted': first_update or '未知',
+            'first_update_original': first_update or '未知',  # 保存原始首次更新时间
+            'first_update_formatted': first_update_display,  # 使用新的首次推荐显示方式
+            'days_since_first': days_since_first,  # 添加天数信息
             'buys_1h': token.get('buys_1h', 0),
             'sells_1h': token.get('sells_1h', 0),
             'community_reach': token.get('community_reach', 0),

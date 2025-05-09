@@ -128,6 +128,45 @@
     </div>
 </div>
 
+<style>
+    /* 新token更新通知条样式 */
+    .new-tokens-notification {
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .new-tokens-notification:hover {
+        background-color: #e9f5ff !important;
+    }
+    
+    .new-tokens-notification::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(3, 169, 244, 0.1), transparent);
+        animation: wave 2s infinite linear;
+    }
+    
+    @keyframes wave {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+    
+    /* 新添加的token行的高亮动画 */
+    @keyframes highlightNew {
+        0% { background-color: rgba(76, 175, 80, 0.2); }
+        100% { background-color: transparent; }
+    }
+    
+    .new-token-highlight {
+        animation: highlightNew 5s ease-out;
+    }
+</style>
+
 <!-- 代币行模板 -->
 <template id="token-row-template">
     <tr class="token-row" data-id="TOKEN_ID">

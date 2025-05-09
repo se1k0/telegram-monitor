@@ -81,7 +81,8 @@ class SupabaseAdapter:
         self.supabase_admin = supabase_admin if supabase_admin else supabase
         
     async def execute_query(self, table: str, query_type: str, data: Dict[str, Any] = None, 
-                           filters: Dict[str, Any] = None, limit: int = None, fields: List[str] = None) -> Dict[str, Any]:
+                           filters: Dict[str, Any] = None, limit: int = None, fields: List[str] = None,
+                           order_by: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         执行Supabase查询
         
@@ -92,6 +93,7 @@ class SupabaseAdapter:
             filters: 过滤条件
             limit: 限制返回记录数
             fields: 要选择的字段列表（仅用于select操作）
+            order_by: 排序参数，例如 {'column': 'created_at', 'ascending': False}
             
         Returns:
             查询结果
@@ -132,21 +134,21 @@ class SupabaseAdapter:
                         else:
                             # 默认使用相等操作符
                             select_query = select_query.eq(key, value)
+                
+                # 应用排序
+                if order_by and isinstance(order_by, dict) and 'column' in order_by:
+                    column = order_by['column']
+                    # 默认为升序，除非显式指定为降序
+                    ascending = order_by.get('ascending', True)
+                    select_query = select_query.order(column, desc=(not ascending))
                     
-                    # 应用限制
-                    if limit:
-                        select_query = select_query.limit(limit)
-                    
-                    # 执行查询
-                    result = select_query.execute()
-                    return result.data
-                else:
-                    # 无过滤器，直接获取所有记录
-                    if limit:
-                        result = select_query.limit(limit).execute()
-                    else:
-                        result = select_query.execute()
-                    return result.data
+                # 应用限制
+                if limit:
+                    select_query = select_query.limit(limit)
+                
+                # 执行查询
+                result = select_query.execute()
+                return result.data
                 
             elif query_type == 'insert':
                 if data:
