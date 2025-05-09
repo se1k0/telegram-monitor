@@ -250,62 +250,70 @@ def index():
                     # 获取最后看到的token ID
                     last_id = request.args.get('last_id', '0')
                     
-                    # 使用first_update来获取比当前最新token更新的数据
-                    query = "select * from tokens"
-                    params = {}
-                    
-                    # 如果有lastId，则查询比last_token更新的数据
-                    where_clauses = []
-                    if last_id and last_id.isdigit() and int(last_id) > 0:
-                        try:
+                    try:
+                        # 如果有lastId，则查询比last_token更新的数据
+                        if last_id and last_id.isdigit() and int(last_id) > 0:
                             # 先获取该ID的token的first_update时间
                             last_token_result = supabase.table('tokens').select('first_update').eq('id', last_id).execute()
                             
                             if hasattr(last_token_result, 'data') and last_token_result.data:
                                 last_token_time = last_token_result.data[0].get('first_update')
                                 if last_token_time:
-                                    where_clauses.append(f"first_update > '{last_token_time}'")
                                     logger.info(f"查询first_update > {last_token_time}的数据")
-                        except Exception as e:
-                            logger.error(f"获取last_token时间失败: {str(e)}")
-                    
-                    # 应用链过滤
-                    if chain_filter and chain_filter.lower() != 'all':
-                        where_clauses.append(f"chain = '{chain_filter.upper()}'")
-                    
-                    # 应用搜索过滤
-                    if search_query:
-                        where_clauses.append(f"(token_symbol ilike '%{search_query}%' OR contract ilike '%{search_query}%')")
-                    
-                    # 构建完整的查询
-                    if where_clauses:
-                        query += " where " + " and ".join(where_clauses)
-                    
-                    # 按first_update降序排序，获取最新的先
-                    query += " order by first_update desc"
-                    
-                    # 执行查询
-                    try:
-                        logger.info(f"执行查询: {query}")
-                        result = supabase.rpc('exec_sql', {'sql_query': query}).execute()
-                        
-                        # 处理结果
-                        new_tokens = []
-                        if hasattr(result, 'data') and result.data:
-                            raw_tokens = result.data
-                            logger.info(f"找到 {len(raw_tokens)} 个新token")
+                                    
+                                    # 构建基本查询
+                                    query = supabase.table('tokens').select('*')
+                                    
+                                    # 添加时间过滤条件 - 使用gt(greater than)操作符
+                                    query = query.gt('first_update', last_token_time)
+                                    
+                                    # 应用链过滤
+                                    if chain_filter and chain_filter.lower() != 'all':
+                                        query = query.eq('chain', chain_filter.upper())
+                                    
+                                    # 应用搜索过滤（如果有搜索条件）
+                                    if search_query:
+                                        # 使用Supabase支持的ilike操作和or_查询
+                                        query = query.or_(f"token_symbol.ilike.%{search_query}%,contract.ilike.%{search_query}%")
+                                    
+                                    # 按first_update降序排序
+                                    query = query.order('first_update', desc=True)
+                                    
+                                    # 执行查询
+                                    result = query.execute()
+                                    
+                                    # 处理结果
+                                    new_tokens = []
+                                    if hasattr(result, 'data') and result.data:
+                                        raw_tokens = result.data
+                                        logger.info(f"找到 {len(raw_tokens)} 个新token")
+                                        
+                                        # 处理每个token
+                                        for token in raw_tokens:
+                                            processed_token = process_token_data(token)
+                                            new_tokens.append(processed_token)
+                                    
+                                    # 返回结果
+                                    return jsonify({
+                                        "success": True,
+                                        "new_tokens": new_tokens,
+                                        "count": len(new_tokens)
+                                    })
+                            else:
+                                logger.warning(f"未找到ID={last_id}的token")
+                                return jsonify({
+                                    "success": False,
+                                    "error": f"未找到ID={last_id}的token",
+                                    "count": 0
+                                })
+                        else:
+                            logger.warning("没有有效的last_id参数")
+                            return jsonify({
+                                "success": False,
+                                "error": "没有有效的last_id参数",
+                                "count": 0
+                            })
                             
-                            # 处理每个token
-                            for token in raw_tokens:
-                                processed_token = process_token_data(token)
-                                new_tokens.append(processed_token)
-                        
-                        # 返回结果
-                        return jsonify({
-                            "success": True,
-                            "new_tokens": new_tokens,
-                            "count": len(new_tokens)
-                        })
                     except Exception as e:
                         logger.error(f"执行新token查询出错: {str(e)}")
                         import traceback

@@ -890,11 +890,13 @@ function startCheckingNewTokens() {
         clearInterval(checkNewTokensInterval);
     }
     
-    // 设置定时器，每30秒检查一次新token
-    checkNewTokensInterval = setInterval(checkNewTokens, 30000);
+    // 设置定时器，每45秒检查一次新token（比原来30秒延长，减少请求频率）
+    checkNewTokensInterval = setInterval(checkNewTokens, 45000);
     
-    // 初始检查
-    setTimeout(checkNewTokens, 5000);
+    // 初始检查延迟10秒，确保首次加载完成
+    setTimeout(checkNewTokens, 10000);
+    
+    console.log("已启动定时检查新token功能，每45秒检查一次");
 }
 
 /**
@@ -930,6 +932,7 @@ function checkNewTokens() {
         return response.json();
     })
     .then(data => {
+        // 检查是否请求成功
         if (data.success && data.new_tokens && data.new_tokens.length > 0) {
             // 更新最新的token ID
             if (data.new_tokens[0].id > newestTokenId) {
@@ -938,10 +941,21 @@ function checkNewTokens() {
             
             // 显示新token通知
             updateNewTokensNotification(data.count, data.new_tokens);
+        } else {
+            // 请求成功但没有新数据
+            console.log("没有新的token数据");
+            
+            // 如果有错误信息，记录日志但不显示给用户
+            if (data.error) {
+                console.error("检查新token时收到错误:", data.error);
+            }
         }
     })
     .catch(error => {
         console.error('检查新token出错:', error);
+        
+        // 即使请求失败，也继续保持定时检查
+        // 不需要通知用户，因为这是后台操作
     });
 }
 
