@@ -161,7 +161,8 @@ ERROR_REPORT_INTERVAL = int(os.getenv('ERROR_REPORT_INTERVAL', '3600'))
 DAS_API_KEY = os.getenv('DAS_API_KEY', '')
 
 # 代币数据更新配置
-TOKEN_UPDATE_LIMIT = int(os.getenv('TOKEN_UPDATE_LIMIT', '500'))
+TOKEN_UPDATE_LIMIT = int(os.getenv('TOKEN_UPDATE_LIMIT', '20'))
+TOKEN_UPDATE_INTERVAL = int(os.getenv('TOKEN_UPDATE_INTERVAL', '999999'))  # 将默认值从2分钟改为999999分钟，实际上禁用更新
 TOKEN_UPDATE_MIN_DELAY = float(os.getenv('TOKEN_UPDATE_MIN_DELAY', '0.5'))
 TOKEN_UPDATE_MAX_DELAY = float(os.getenv('TOKEN_UPDATE_MAX_DELAY', '2.0'))
 TOKEN_UPDATE_BATCH_SIZE = int(os.getenv('TOKEN_UPDATE_BATCH_SIZE', '50'))
@@ -254,6 +255,7 @@ class EnvConfig:
         
         # 代币数据更新配置
         self.TOKEN_UPDATE_LIMIT = TOKEN_UPDATE_LIMIT
+        self.TOKEN_UPDATE_INTERVAL = TOKEN_UPDATE_INTERVAL
         self.TOKEN_UPDATE_MIN_DELAY = TOKEN_UPDATE_MIN_DELAY
         self.TOKEN_UPDATE_MAX_DELAY = TOKEN_UPDATE_MAX_DELAY
         self.TOKEN_UPDATE_BATCH_SIZE = TOKEN_UPDATE_BATCH_SIZE
@@ -300,6 +302,7 @@ def load_config(_=None):
             },
             "token_update": {
                 "limit": TOKEN_UPDATE_LIMIT,
+                "interval": TOKEN_UPDATE_INTERVAL,
                 "min_delay": TOKEN_UPDATE_MIN_DELAY,
                 "max_delay": TOKEN_UPDATE_MAX_DELAY,
                 "batch_size": TOKEN_UPDATE_BATCH_SIZE

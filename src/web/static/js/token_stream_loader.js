@@ -397,6 +397,9 @@ function renderTokens(tokens) {
             const trElement = row.querySelector('tr');
             if (trElement) {
                 trElement.dataset.id = token.id || '';
+                trElement.setAttribute('data-chain', token.chain);
+                trElement.setAttribute('data-contract', token.contract);
+                trElement.setAttribute('data-token-symbol', token.token_symbol || token.symbol || '');
             }
             
             // 代币名称和图标
@@ -503,10 +506,17 @@ function renderTokens(tokens) {
             // 设置各种数值
             safeSetTextContent(row.querySelector('td:nth-child(3)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
             
-            // 24h变化
+            // 涨跌幅
             const changeElem = row.querySelector('td:nth-child(4)');
             if (changeElem) {
-                const changeValue = parseFloat(token.change_pct_value) || 0;
+                const currentMarketCap = parseFloat(token.market_cap) || 0;
+                const firstMarketCap = parseFloat(token.first_market_cap) || 0;
+                let changeValue = 0;
+                
+                if (firstMarketCap > 0) {
+                    changeValue = ((currentMarketCap - firstMarketCap) / firstMarketCap) * 100;
+                }
+                
                 changeElem.textContent = formatPercentage(changeValue);
                 changeElem.className = `d-none d-lg-table-cell ${changeValue > 0 ? 'positive-change' : changeValue < 0 ? 'negative-change' : ''}`;
             }
@@ -515,11 +525,13 @@ function renderTokens(tokens) {
             safeSetTextContent(row.querySelector('td:nth-child(5)'), formatVolume(token.volume_1h));
             
             // 买入/卖出
-            safeSetTextContent(row.querySelector('.positive-change'), (token.buys_1h || '0'));
-            safeSetTextContent(row.querySelector('.negative-change'), (token.sells_1h || '0'));
+            const buysElem = row.querySelector('.buy-count');
+            const sellsElem = row.querySelector('.sell-count');
+            if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
+            if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
             
             // 持有者
-            safeSetTextContent(row.querySelector('td:nth-child(7)'), formatNumber(token.holders || 0));
+            safeSetTextContent(row.querySelector('td:nth-child(7)'), formatNumber(token.holders_count));
             
             // 社区覆盖
             safeSetTextContent(row.querySelector('td:nth-child(8)'), formatNumber(token.community_reach || 0));
@@ -528,7 +540,10 @@ function renderTokens(tokens) {
             safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.spread_count || 0));
             
             // 首次发现
-            safeSetTextContent(row.querySelector('td:nth-child(10) .small'), formatDate(token.first_update_formatted || token.first_seen));
+            const firstSeenElem = row.querySelector('td:nth-child(10) .small');
+            if (firstSeenElem) {
+                firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
+            }
             
             // 操作按钮
             const refreshBtn = row.querySelector('.refresh-token-btn');
@@ -562,6 +577,9 @@ function renderTokens(tokens) {
     } catch (error) {
         console.error('初始化工具提示失败:', error);
     }
+    
+    // 添加对详情按钮的事件处理
+    attachTokenDetailClickHandlers();
 }
 
 /**
@@ -807,34 +825,49 @@ function formatNumber(value) {
  */
 function formatDate(dateString) {
     if (!dateString) return '未知';
-    
-    // 检查是否已经是以"d"结尾的天数格式（如"5d"或"<1d"）
+
+    // 检查是否已经是以d结尾的天数格式（如"5d"或"<1d"）
     if (typeof dateString === 'string' && 
         (dateString.endsWith('d') || dateString === '<1d')) {
         return dateString;  // 直接返回已格式化的天数字符串
     }
-    
+
     try {
-        const date = new Date(dateString);
-        if (isNaN(date.getTime())) return '未知';
-        
-        const now = new Date();
-        const diffTime = Math.abs(now - date);
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
-        if (diffDays === 0) {
-            // 今天，显示小时和分钟
-            return '今天 ' + date.getHours().toString().padStart(2, '0') + ':' + 
-                   date.getMinutes().toString().padStart(2, '0');
-        } else if (diffDays === 1) {
-            return '昨天';
-        } else if (diffDays < 7) {
-            return diffDays + '天前';
+        let date;
+        // 兼容 'YYYY-MM-DD HH:mm:ss' 格式，强制按本地时间解析
+        const match = typeof dateString === 'string' && dateString.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
+        if (match) {
+            date = new Date(
+                parseInt(match[1]),           // 年
+                parseInt(match[2], 10) - 1,   // 月（0-11）
+                parseInt(match[3], 10),       // 日
+                parseInt(match[4], 10),       // 时
+                parseInt(match[5], 10),       // 分
+                parseInt(match[6], 10)        // 秒
+            );
         } else {
-            // 显示年月日
-            return date.getFullYear() + '/' + 
-                   (date.getMonth() + 1).toString().padStart(2, '0') + '/' + 
-                   date.getDate().toString().padStart(2, '0');
+            date = new Date(dateString);
+        }
+        if (isNaN(date.getTime())) return '未知';
+
+        const now = new Date();
+        const diffMs = now - date;
+        const diffSec = Math.floor(diffMs / 1000);
+        const diffMin = Math.floor(diffSec / 60);
+        const diffHour = Math.floor(diffMin / 60);
+        const diffDay = Math.floor(diffHour / 24);
+        const diffYear = Math.floor(diffDay / 365);
+
+        if (diffSec < 60) {
+            return '刚刚';
+        } else if (diffMin < 60) {
+            return `${diffMin}m`;
+        } else if (diffHour < 24) {
+            return `${diffHour}h`;
+        } else if (diffDay < 365) {
+            return `${diffDay}d`;
+        } else {
+            return `${diffYear}y`;
         }
     } catch (e) {
         return '未知';
@@ -842,212 +875,150 @@ function formatDate(dateString) {
 }
 
 /**
- * 创建新token更新提示条
+ * 创建新token悬浮提示条显示函数
  */
-function createNewTokensNotification() {
-    // 检查是否已存在
-    if (document.getElementById('new-tokens-notification')) {
-        return;
+function showNotificationBar(count, newTokens) {
+    let bar = document.getElementById('new-tokens-notification-bar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'new-tokens-notification-bar';
+        document.body.appendChild(bar);
     }
-    
-    // 创建提示条元素
-    const notification = document.createElement('tr');
-    notification.id = 'new-tokens-notification';
-    notification.className = 'new-tokens-notification';
-    notification.style.display = 'none';
-    notification.style.cursor = 'pointer';
-    notification.style.backgroundColor = '#f8f9fa';
-    notification.style.textAlign = 'center';
-    notification.style.color = '#007bff';
-    notification.style.fontWeight = 'bold';
-    notification.style.padding = '10px';
-    notification.style.borderBottom = '1px solid #dee2e6';
-    
-    // 创建单元格
-    const cell = document.createElement('td');
-    cell.colSpan = 11; // 跨越所有列
-    cell.innerHTML = '<i class="bi bi-arrow-clockwise me-2"></i>【点击更新 <span id="new-tokens-count">0</span> 条新信号】';
-    
-    // 添加点击事件处理
-    notification.addEventListener('click', loadNewTokens);
-    
-    // 添加到DOM
-    notification.appendChild(cell);
-    
-    // 获取tokens-container
-    const container = document.getElementById('tokens-container');
-    if (container) {
-        container.insertBefore(notification, container.firstChild);
-    }
+    let displayCount = count;
+    if (count >= 100) displayCount = '99+';
+    bar.innerHTML = `<i class="bi bi-arrow-clockwise me-2"></i>【点击更新 <span id="new-tokens-count">${displayCount}</span> 条新信号】`;
+    bar.style.display = 'block';
+    // 保存新token数据到bar元素
+    bar.dataset.newTokens = JSON.stringify(newTokens);
+    bar.onclick = function() {
+        bar.style.display = 'none';
+        loadNewTokens();
+    };
 }
 
 /**
- * 开始检查新token
+ * 移除原有表格tr提示条的创建函数
+ */
+function createNewTokensNotification() {
+    // 不再需要表格内tr提示条，保留空实现
+}
+
+/**
+ * 初始化定时检查新token
  */
 function startCheckingNewTokens() {
-    // 清除可能存在的定时器
+    // 清除可能存在的旧定时器
     if (checkNewTokensInterval) {
         clearInterval(checkNewTokensInterval);
     }
     
-    // 设置定时器，每45秒检查一次新token（比原来30秒延长，减少请求频率）
-    checkNewTokensInterval = setInterval(checkNewTokens, 45000);
-    
-    // 初始检查延迟10秒，确保首次加载完成
-    setTimeout(checkNewTokens, 10000);
-    
-    console.log("已启动定时检查新token功能，每45秒检查一次");
-}
-
-/**
- * 检查是否有新token
- */
-function checkNewTokens() {
-    // 如果还未加载数据，跳过检查
-    if (newestTokenId === 0) {
-        return;
-    }
-    
-    console.log(`检查新token，当前最新ID: ${newestTokenId}`);
-    
-    // 构建API请求参数
-    const params = new URLSearchParams();
-    params.append('check_new', '1');
-    params.append('last_id', newestTokenId);
-    params.append('ajax', '1');
-    
-    if (chain && chain !== 'all') {
-        params.append('chain', chain);
-    }
-    if (searchQuery) {
-        params.append('search', searchQuery);
-    }
-    
-    // 发送请求
-    fetch(`/?${params.toString()}`)
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`请求失败(${response.status})`);
-        }
-        return response.json();
-    })
-    .then(data => {
-        // 检查是否请求成功
-        if (data.success && data.new_tokens && data.new_tokens.length > 0) {
-            // 更新最新的token ID
-            if (data.new_tokens[0].id > newestTokenId) {
-                newestTokenId = data.new_tokens[0].id;
-            }
-            
-            // 显示新token通知
-            updateNewTokensNotification(data.count, data.new_tokens);
-        } else {
-            // 请求成功但没有新数据
-            console.log("没有新的token数据");
-            
-            // 如果有错误信息，记录日志但不显示给用户
-            if (data.error) {
-                console.error("检查新token时收到错误:", data.error);
-            }
-        }
-    })
-    .catch(error => {
-        console.error('检查新token出错:', error);
+    // 每10秒检查一次新token
+    checkNewTokensInterval = setInterval(() => {
+        // 只在有已加载token时检测
+        if (tokenCount === 0) return;
         
-        // 即使请求失败，也继续保持定时检查
-        // 不需要通知用户，因为这是后台操作
-    });
+        // 获取当前最新token的ID
+        const firstRow = document.querySelector('#tokens-container tr.token-row');
+        if (!firstRow) return;
+        const latestId = firstRow.dataset.id;
+        if (!latestId) return;
+
+        // 构建参数
+        const params = new URLSearchParams();
+        params.append('check_new', '1');
+        params.append('last_id', latestId);
+        params.append('ajax', '1');
+        if (chain && chain !== 'all') params.append('chain', chain);
+        if (searchQuery) params.append('search', searchQuery);
+
+        fetch('/?' + params.toString())
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.new_tokens && data.new_tokens.length > 0) {
+                    // 确保通知栏显示
+                    updateNewTokensNotification(data.count, data.new_tokens);
+                    console.log(`发现${data.count}个新token，已显示通知`);
+                }
+            })
+            .catch(error => {
+                console.error('检查新token时出错:', error);
+            });
+    }, 10000); // 改为10秒检查一次
 }
 
 /**
- * 更新新token通知
+ * 更新新token通知，调用悬浮提示条
  */
 function updateNewTokensNotification(count, newTokens) {
-    const notification = document.getElementById('new-tokens-notification');
-    const countElement = document.getElementById('new-tokens-count');
+    if (!count || !newTokens || newTokens.length === 0) return;
     
-    if (notification && countElement) {
-        // 保存新token数据到notification元素
-        notification.dataset.newTokens = JSON.stringify(newTokens);
-        
-        // 更新计数
-        let displayCount = count;
-        if (count >= 100) {
-            displayCount = '99+';
-        }
-        countElement.textContent = displayCount;
-        
-        // 显示通知
-        notification.style.display = 'table-row';
-    }
+    // 确保通知栏显示
+    showNotificationBar(count, newTokens);
 }
 
 /**
- * 加载新token到列表顶部
+ * 加载新token到列表顶部，适配悬浮div
  */
 function loadNewTokens() {
-    // 获取通知元素
-    const notification = document.getElementById('new-tokens-notification');
-    if (!notification || !notification.dataset.newTokens) {
+    const bar = document.getElementById('new-tokens-notification-bar');
+    if (!bar || !bar.dataset.newTokens) {
         return;
     }
-    
     try {
-        // 解析存储的新token数据
-        const newTokens = JSON.parse(notification.dataset.newTokens);
-        
+        const newTokens = JSON.parse(bar.dataset.newTokens);
         if (newTokens && newTokens.length > 0) {
-            console.log(`加载 ${newTokens.length} 个新token到列表顶部`);
-            
-            // 将新token添加到顶部
             const container = document.getElementById('tokens-container');
             if (container) {
                 // 过滤掉已加载的token
                 const filteredTokens = newTokens.filter(token => !loadedTokenIds.has(token.id));
                 
-                // 渲染到列表顶部
+                // 按照first_update降序排序，确保最新的token在最前面
+                filteredTokens.sort((a, b) => {
+                    const timeA = new Date(a.first_update || 0).getTime();
+                    const timeB = new Date(b.first_update || 0).getTime();
+                    return timeB - timeA; // 降序排列
+                });
+                
+                // 创建文档片段，提高性能
+                const fragment = document.createDocumentFragment();
+                
+                // 按顺序创建并添加token行
                 filteredTokens.forEach(token => {
-                    // 创建token行并添加到顶部
                     const row = createTokenRow(token);
-                    if (row && container.firstChild) {
-                        container.insertBefore(row, container.firstChild.nextSibling); // 插入到通知条之后
-                        
-                        // 添加高亮动画类
+                    if (row) {
+                        fragment.appendChild(row);
                         row.classList.add('new-token-highlight');
-                        
-                        // 5秒后移除动画类
                         setTimeout(() => {
                             row.classList.remove('new-token-highlight');
                         }, 5000);
-                    } else if (row) {
-                        container.appendChild(row);
-                        row.classList.add('new-token-highlight');
                         
-                        setTimeout(() => {
-                            row.classList.remove('new-token-highlight');
-                        }, 5000);
-                    }
-                    
-                    // 记录ID防止重复加载
-                    if (token.id) {
-                        loadedTokenIds.add(token.id);
+                        if (token.id) {
+                            loadedTokenIds.add(token.id);
+                        }
                     }
                 });
                 
-                // 更新token计数
+                // 一次性插入所有新token到容器顶部
+                if (container.firstChild) {
+                    container.insertBefore(fragment, container.firstChild);
+                } else {
+                    container.appendChild(fragment);
+                }
+                
+                // 更新计数器和状态
                 tokenCount += filteredTokens.length;
                 updateTokenCounter();
                 
                 // 更新最新token ID
-                if (newTokens[0].id > newestTokenId) {
-                    newestTokenId = newTokens[0].id;
+                if (filteredTokens.length > 0 && filteredTokens[0].id > newestTokenId) {
+                    newestTokenId = filteredTokens[0].id;
                 }
                 
-                // 隐藏通知条
-                notification.style.display = 'none';
-                notification.dataset.newTokens = '';
+                // 清理通知栏
+                bar.style.display = 'none';
+                bar.dataset.newTokens = '';
                 
-                // 初始化新添加行的工具提示
+                // 初始化工具提示
                 initTooltips();
                 
                 // 显示成功提示
@@ -1081,6 +1052,9 @@ function createTokenRow(token) {
     const trElement = row.querySelector('tr');
     if (trElement) {
         trElement.dataset.id = token.id || '';
+        trElement.setAttribute('data-chain', token.chain);
+        trElement.setAttribute('data-contract', token.contract);
+        trElement.setAttribute('data-token-symbol', token.token_symbol || token.symbol || '');
     }
     
     // 代币名称和图标
@@ -1187,10 +1161,17 @@ function createTokenRow(token) {
     // 设置各种数值
     safeSetTextContent(row.querySelector('td:nth-child(3)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
     
-    // 24h变化
+    // 涨跌幅
     const changeElem = row.querySelector('td:nth-child(4)');
     if (changeElem) {
-        const changeValue = parseFloat(token.change_pct_value) || 0;
+        const currentMarketCap = parseFloat(token.market_cap) || 0;
+        const firstMarketCap = parseFloat(token.first_market_cap) || 0;
+        let changeValue = 0;
+        
+        if (firstMarketCap > 0) {
+            changeValue = ((currentMarketCap - firstMarketCap) / firstMarketCap) * 100;
+        }
+        
         changeElem.textContent = formatPercentage(changeValue);
         changeElem.className = `d-none d-lg-table-cell ${changeValue > 0 ? 'positive-change' : changeValue < 0 ? 'negative-change' : ''}`;
     }
@@ -1199,10 +1180,10 @@ function createTokenRow(token) {
     safeSetTextContent(row.querySelector('td:nth-child(5)'), token.volume_formatted || formatVolume(token.volume_24h));
     
     // 买入/卖出
-    const buysElem = row.querySelector('.positive-change');
-    const sellsElem = row.querySelector('.negative-change');
-    if (buysElem) buysElem.textContent = (token.buys || 0) + ' ';
-    if (sellsElem) sellsElem.textContent = (token.sells || 0) + ' ';
+    const buysElem = row.querySelector('.buy-count');
+    const sellsElem = row.querySelector('.sell-count');
+    if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
+    if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
     
     // 持有者数量
     safeSetTextContent(row.querySelector('td:nth-child(7)'), formatNumber(token.holders_count));
@@ -1214,9 +1195,9 @@ function createTokenRow(token) {
     safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.spread_count));
     
     // 首次发现时间
-    const firstSeenElem = row.querySelector('td:nth-child(10) span');
+    const firstSeenElem = row.querySelector('td:nth-child(10) .small');
     if (firstSeenElem) {
-        firstSeenElem.textContent = formatDate(token.first_update || token.first_seen);
+        firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
     }
     
     // 操作按钮数据
@@ -1234,4 +1215,103 @@ function createTokenRow(token) {
     }
     
     return trElement;
+}
+
+// 添加新函数，用于给详情按钮添加点击事件
+function attachTokenDetailClickHandlers() {
+    // 查找所有token详情按钮
+    const detailButtons = document.querySelectorAll('.view-token-btn');
+    
+    // 为每个按钮添加点击事件
+    detailButtons.forEach(button => {
+        // 移除可能已存在的点击事件处理器，避免重复绑定
+        button.removeEventListener('click', handleTokenDetailClick);
+        // 添加新的点击事件处理器
+        button.addEventListener('click', handleTokenDetailClick);
+    });
+    
+    console.log(`已为${detailButtons.length}个token详情按钮添加点击事件处理器`);
+}
+
+// 处理token详情按钮点击
+function handleTokenDetailClick(event) {
+    // 阻止默认行为，避免可能的页面跳转
+    event.preventDefault();
+    
+    // 获取按钮元素
+    const button = event.currentTarget;
+    
+    // 获取所在行
+    const row = button.closest('tr');
+    if (!row) {
+        console.error('无法找到token行元素');
+        return;
+    }
+    
+    // 从行中获取链和合约信息
+    // 首先尝试从刷新按钮获取，因为它有完整的数据属性
+    const refreshBtn = row.querySelector('.refresh-token-btn');
+    let chain = '';
+    let contract = '';
+    
+    if (refreshBtn) {
+        chain = refreshBtn.dataset.chain;
+        contract = refreshBtn.dataset.contract;
+    }
+    
+    // 如果上面的方法获取不到，尝试从其他元素获取
+    if (!chain || !contract) {
+        // 尝试从链徽章获取
+        const chainBadge = row.querySelector('.badge-chain');
+        if (chainBadge) {
+            chain = chainBadge.textContent.trim();
+        }
+        
+        // 尝试从地址复制按钮获取合约地址
+        const copyBtn = row.querySelector('.copy-btn');
+        if (copyBtn && copyBtn.dataset.address) {
+            contract = copyBtn.dataset.address;
+        }
+        
+        // 如果还是获取不到，尝试从合约地址显示元素获取
+        if (!contract) {
+            const addressSpan = row.querySelector('[data-address]');
+            if (addressSpan && addressSpan.dataset.address) {
+                contract = addressSpan.dataset.address;
+            }
+        }
+    }
+    
+    // 检查chain和contract是否有效
+    if (!chain || !contract) {
+        console.error('获取chain或contract失败', { chain, contract, button, row });
+        if (typeof showToast === 'function') {
+            showToast('无法获取代币信息，请尝试刷新页面', 'error');
+        }
+        return;
+    }
+    
+    console.log(`打开代币详情: ${chain}/${contract}`);
+    
+    // 调用全局openTokenDetailModal函数
+    if (typeof window.openTokenDetailModal === 'function') {
+        window.openTokenDetailModal(chain, contract);
+    } else {
+        console.error('找不到openTokenDetailModal函数');
+        if (typeof showToast === 'function') {
+            showToast('详情功能不可用，请刷新页面再试', 'error');
+        }
+    }
+}
+
+// 新增：渲染首次发现带样式
+function renderFirstSeenWithStyle(dateString) {
+    const formatted = formatDate(dateString);
+    if (formatted === '刚刚') {
+        return `<span class="first-seen-badge first-seen-now">${formatted}</span>`;
+    } else if (/^\d+m$/.test(formatted)) {
+        return `<span class="first-seen-badge first-seen-min">${formatted}</span>`;
+    } else {
+        return formatted;
+    }
 } 

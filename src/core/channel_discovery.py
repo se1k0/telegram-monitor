@@ -113,6 +113,14 @@ class ChannelDiscovery:
                         channel_info['about'] = getattr(full_channel.full_chat, 'about', '')
                     except (ChannelPrivateError, ChatAdminRequiredError) as e:
                         logger.warning(f"无法获取{channel_type} {entity.title} 的完整信息: {str(e)}")
+                        # 对于私有频道，我们仍然记录，但标记为私有
+                        channel_info['participants_count'] = 0
+                        channel_info['about'] = ''
+                        channel_info['is_private'] = True
+                        # 对于私有频道，继续处理但不添加到发现列表
+                        if "private and you lack permission" in str(e) or "banned from it" in str(e):
+                            logger.warning(f"频道 {entity.title} 是私有的或已被禁止访问，跳过此频道")
+                            continue
                     
                     # 如果用户名为空，设置为ID
                     if not channel_info['username']:
@@ -259,7 +267,13 @@ class ChannelDiscovery:
             channel_id = channel.get('id')
             is_group = channel.get('is_group', False)
             is_supergroup = channel.get('is_supergroup', False)
+            is_private = channel.get('is_private', False)
             
+            # 如果是私有频道，跳过
+            if is_private:
+                logger.info(f"跳过私有频道: {channel.get('title', 'Unknown')}")
+                continue
+                
             # 如果没有用户名也没有ID，跳过
             if not username and not channel_id:
                 channel_type = "频道"

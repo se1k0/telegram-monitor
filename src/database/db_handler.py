@@ -1000,8 +1000,7 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
                     parsed_mc = parse_market_cap(mc_clean)
                     if parsed_mc:
                         info.market_cap = str(parsed_mc)
-                        # 第一次见到的市值就是first_market_cap
-                        info.first_market_cap = parsed_mc
+                        # 删除设置first_market_cap的逻辑，因为从消息提取的市值可能不准确
                         
                         # 从市值单位判断链
                         mc_lower = mc_clean.lower()
@@ -1024,7 +1023,7 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
                             parsed_mc = parse_market_cap(mc_numeric.group(1))
                             if parsed_mc:
                                 info.market_cap = str(parsed_mc)
-                                info.first_market_cap = parsed_mc
+                                # 删除设置first_market_cap的逻辑，因为从消息提取的市值可能不准确
                     except Exception as e2:
                         logger.debug(f"二次解析市值失败: {str(e2)}")
             
@@ -1489,49 +1488,6 @@ def extract_contract_from_url(url: str) -> Tuple[Optional[str], Optional[str]]:
         import traceback
         logger.debug(traceback.format_exc())
         return None, None
-
-def format_token_history(history: list) -> str:
-    """格式化代币历史数据为易读的字符串"""
-    if not history:
-        return "未找到该代币的历史数据"
-    
-    output = []
-    output.append("=== 代币历史数据 ===\n")
-    
-    # 获取第一条数据中的代币信息
-    _, first_promo = history[0]
-    if first_promo:
-        output.append(f"代币符号: {first_promo.token_symbol}")
-        output.append(f"合约地址: {first_promo.contract_address}\n")
-    
-    # 添加每条记录的详细信息
-    for message, promo in history:
-        # 正确处理时区转换
-        date = message['date']
-        if isinstance(date, (int, float)):
-            # 假设时间戳是UTC时间
-            utc_time = datetime.fromtimestamp(date, timezone.utc)
-        else:
-            # 如果是datetime对象，确保它有UTC时区信息
-            utc_time = timezone.utc.localize(date) if not date.tzinfo else date
-            
-        # 转换为北京时间 (UTC+8)
-        beijing_tz = timezone(timedelta(hours=8))
-        beijing_time = utc_time.astimezone(beijing_tz)
-        
-        # 输出北京时间，明确标注时区
-        output.append(f"时间: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')} (UTC+8)")
-        if promo:
-            if promo.market_cap is not None:
-                output.append(f"市值: ${promo.market_cap:,.2f}")
-            if promo.promotion_count is not None:
-                output.append(f"推广次数: {promo.promotion_count}")
-        output.append(f"消息ID: {message['message_id']}")
-        output.append("消息内容:")
-        output.append(message['text'])
-        output.append("-" * 50 + "\n")
-    
-    return "\n".join(output)
 
 def get_db_performance_stats():
     """获取数据库性能统计信息

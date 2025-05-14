@@ -53,6 +53,14 @@
 
         // 初始化token流式加载器
         initTokenStreamLoader();
+        
+        // 确保启动新token检查
+        if (typeof startCheckingNewTokens === 'function') {
+            startCheckingNewTokens();
+            console.log('已启动新token检查功能');
+        } else {
+            console.error('startCheckingNewTokens函数未定义');
+        }
     });
 </script>
 {% endblock %} 

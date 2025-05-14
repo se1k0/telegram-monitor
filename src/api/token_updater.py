@@ -4,7 +4,7 @@
 """
 代币数据更新模块
 用于在项目运行期间自动更新代币数据
-设计为每小时整点自动执行
+设计为配置的频率执行（默认2分钟一次）
 """
 
 import logging
@@ -21,6 +21,9 @@ from src.database.db_factory import get_db_adapter
 # 导入链ID标准化函数
 from src.api.token_market_updater import _normalize_chain_id
 
+# 导入配置
+from config.settings import env_config
+
 # 设置日志
 try:
     from src.utils.logger import get_logger
@@ -28,15 +31,21 @@ try:
 except ImportError:
     logger = logging.getLogger(__name__)
 
+# 全局变量标记功能是否被禁用
+TOKEN_UPDATE_DISABLED = True
+
 class TokenDataUpdater:
     """代币数据更新器"""
     
     def __init__(self):
         """初始化更新器"""
         self.running = False
-        self.default_batch_size = 50
-        self.default_min_delay = 0.5
-        self.default_max_delay = 2.0
+        # 从配置文件获取参数
+        self.default_limit = env_config.TOKEN_UPDATE_LIMIT
+        self.default_batch_size = env_config.TOKEN_UPDATE_BATCH_SIZE
+        self.default_min_delay = env_config.TOKEN_UPDATE_MIN_DELAY
+        self.default_max_delay = env_config.TOKEN_UPDATE_MAX_DELAY
+        self.default_update_interval = env_config.TOKEN_UPDATE_INTERVAL
     
     async def get_tokens_to_update(self, limit: int = None) -> List[Dict[str, str]]:
         """
@@ -52,17 +61,31 @@ class TokenDataUpdater:
             # 获取数据库适配器
             db_adapter = get_db_adapter()
             
-            # 构建查询参数
-            query_params = {'limit': limit} if limit else {}
+            # 构建查询参数，按first_update字段倒序排列，获取最新添加的token
+            # 修正order_by参数格式，使用字段名作为key，排序方向作为value
+            order_by = {'first_update': 'desc'}
             
-            # 查询所有代币
-            tokens = await db_adapter.execute_query('tokens', 'select', limit=limit)
+            # 查询所有代币，按first_update字段倒序排序
+            tokens = await db_adapter.execute_query(
+                'tokens',
+                'select',
+                order_by=order_by,
+                limit=limit
+            )
             
             if not tokens or not isinstance(tokens, list):
                 logger.warning("获取代币列表失败或结果为空")
                 return []
                 
             # 提取需要的字段
+            logger.info(f"获取到 {len(tokens)} 个代币，按添加时间倒序排列")
+            
+            # 确保这些是最新的Token
+            if len(tokens) > 0 and 'first_update' in tokens[0]:
+                first_token_time = tokens[0].get('first_update', 'unknown')
+                last_token_time = tokens[-1].get('first_update', 'unknown') if len(tokens) > 1 else 'n/a'
+                logger.info(f"最新Token添加时间: {first_token_time}, 最后一个Token添加时间: {last_token_time}")
+            
             return [{"chain": token.get('chain'), 
                      "contract": token.get('contract'), 
                      "symbol": token.get('token_symbol')} 
@@ -129,18 +152,6 @@ class TokenDataUpdater:
                     normalized_chain_id = chain.lower()  # 仍使用小写作为后备方案
                     
                 pools = get_token_pools(normalized_chain_id, contract)
-                
-                # 记录API返回的实际内容，便于调试
-                # import json
-                # try:
-                #     # 使用 json.dumps 格式化和截断输出
-                #     sample_content = json.dumps(pools, ensure_ascii=False, indent=2)
-                #     # 如果内容太长，截断显示
-                #     if len(sample_content) > 1000:
-                #         sample_content = sample_content[:1000] + "... [截断剩余内容]"
-                #     logger.info(f"DEX Screener API ({chain}/{contract}) 返回内容:\n{sample_content}")
-                # except Exception as format_error:
-                #     logger.info(f"无法格式化API返回内容: {str(format_error)}")
                 
                 # 根据API文档，token-pairs/v1/{chainId}/{tokenAddress} 返回的是交易对数组
                 if pools and isinstance(pools, list) and len(pools) > 0:
@@ -222,6 +233,11 @@ class TokenDataUpdater:
                         # 添加详细的市值更新日志
                         logger.info(f"市值更新: {previous_market_cap} -> {max_market_cap}")
                         
+                        # 如果是首次发现代币，记录首次市值
+                        if previous_market_cap is None:
+                            updated_data['first_market_cap'] = max_market_cap
+                            logger.info(f"记录首次市值: {max_market_cap}")
+                        
                         # 始终将当前市值保存到market_cap_1h，然后更新最新市值
                         updated_data['market_cap_1h'] = previous_market_cap  # 当前值变为1小时前值
                         updated_data['market_cap'] = max_market_cap          # 新的市值
@@ -298,18 +314,6 @@ class TokenDataUpdater:
                         log_msg += "，API返回为空"
                         error_msg += "：API返回为空"
                     else:
-                        # # 记录完整的API返回内容，便于调试
-                        # import json
-                        # try:
-                        #     # 使用 json.dumps 格式化输出
-                        #     sample_content = json.dumps(pools, ensure_ascii=False, indent=2)
-                        #     # 如果内容太长，截断显示
-                        #     if len(sample_content) > 1000:
-                        #         sample_content = sample_content[:1000] + "... [截断剩余内容]"
-                        #     logger.warning(f"DEX Screener API 返回异常内容:\n{sample_content}")
-                        # except Exception as format_error:
-                        #     logger.warning(f"无法格式化API返回内容: {str(format_error)}")
-                        
                         # 根据API文档检查返回格式
                         if isinstance(pools, list):
                             if len(pools) == 0:
@@ -484,12 +488,12 @@ class TokenDataUpdater:
             result["error"] = str(e)
             return result
     
-    async def hourly_update_async(self, limit: int = 500, 
+    async def regular_update_async(self, limit: int = None, 
                               batch_size: int = None, 
                               min_delay: float = None, 
                               max_delay: float = None) -> Dict[str, Any]:
         """
-        执行每小时更新任务，获取最新的代币数据
+        执行定时更新任务，获取最新的代币数据
         
         Args:
             limit: 最大更新代币数量
@@ -508,6 +512,8 @@ class TokenDataUpdater:
         self.running = True
         
         # 如果未提供参数，使用默认值
+        if limit is None:
+            limit = self.default_limit
         if batch_size is None:
             batch_size = self.default_batch_size
         if min_delay is None:
@@ -517,7 +523,7 @@ class TokenDataUpdater:
         
         # 记录启动信息
         logger.info("="*50)
-        logger.info(f"开始每小时代币数据更新: {datetime.now()}")
+        logger.info(f"开始定时代币数据更新: {datetime.now()}")
         logger.info(f"最大更新数量: {limit}")
         logger.info(f"批次大小: {batch_size}")
         logger.info(f"请求延迟范围: {min_delay}-{max_delay}秒")
@@ -544,10 +550,10 @@ class TokenDataUpdater:
                 return results
             
             results["total"] = len(tokens)
-            logger.info(f"找到 {len(tokens)} 个代币需要更新")
+            logger.info(f"找到 {len(tokens)} 个代币需要更新，按添加时间倒序排列")
             
-            # 随机打乱代币列表顺序，避免按相同顺序请求
-            random.shuffle(tokens)
+            # 不再随机打乱代币列表顺序，保持按first_update字段倒序排列
+            # 原代码: random.shuffle(tokens)
             
             # 分批处理
             for i in range(0, len(tokens), batch_size):
@@ -591,7 +597,7 @@ class TokenDataUpdater:
                 logger.error(traceback.format_exc())
             
         except Exception as e:
-            logger.error(f"执行每小时更新任务时发生错误: {str(e)}")
+            logger.error(f"执行定时更新任务时发生错误: {str(e)}")
             logger.error(traceback.format_exc())
             
         finally:
@@ -611,28 +617,26 @@ class TokenDataUpdater:
             self.running = False
             return results
     
-    def hourly_update(self, limit: int = 500, 
-                     batch_size: int = None, 
-                     min_delay: float = None, 
-                     max_delay: float = None) -> Dict[str, Any]:
+    def token_update(self, limit: int = None) -> Dict[str, Any]:
         """
-        执行每小时更新任务（同步包装异步函数）
+        执行代币更新任务（同步包装异步函数）
         
         Args:
-            limit: 最大更新代币数量
-            batch_size: 每批处理的代币数量
-            min_delay: 请求间最小延迟(秒)
-            max_delay: 请求间最大延迟(秒)
+            limit: 最大更新代币数量，None则使用配置中的默认值
             
         Returns:
             Dict: 包含更新结果的字典
         """
+        # 使用默认限制如果没有提供
+        if limit is None:
+            limit = self.default_limit
+        
         # 创建新的事件循环来运行异步函数
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
             result = loop.run_until_complete(
-                self.hourly_update_async(limit, batch_size, min_delay, max_delay)
+                self.regular_update_async(limit)
             )
             return result
         finally:
@@ -706,14 +710,29 @@ class TokenDataUpdater:
 token_updater = TokenDataUpdater()
 
 # 直接调用的便捷函数
-def hourly_update(limit: int = 500) -> Dict[str, Any]:
+def token_update(limit: int = None) -> Dict[str, Any]:
     """
-    执行每小时更新任务的便捷函数
+    执行代币更新任务的便捷函数
     
     Args:
-        limit: 最大更新代币数量
+        limit: 最大更新代币数量，None则使用配置中的默认值
         
     Returns:
         Dict: 包含更新结果的字典
     """
-    return token_updater.hourly_update(limit=limit) 
+    # 检查功能是否被禁用
+    if TOKEN_UPDATE_DISABLED:
+        logger.info("代币更新功能已被禁用")
+        return {
+            "success": False,
+            "error": "代币更新功能已被禁用",
+            "disabled": True,
+            "start_time": datetime.now(),
+            "end_time": datetime.now(),
+            "duration": 0,
+            "total": 0,
+            "success": 0,
+            "failed": 0
+        }
+    
+    return token_updater.token_update(limit=limit)

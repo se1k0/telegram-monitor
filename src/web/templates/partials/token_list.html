@@ -49,7 +49,7 @@
                     </th>
                     <th class="text-nowrap d-none d-lg-table-cell">
                         <div class="d-flex align-items-center">
-                            24h 变化
+                            涨跌幅
                             <span class="sort-btn" data-sort="change_24h">
                                 <i class="bi bi-caret-up-fill"></i>
                                 <i class="bi bi-caret-down-fill"></i>
@@ -128,48 +128,103 @@
     </div>
 </div>
 
+<div id="new-tokens-notification-bar" style="display:none;"></div>
+
 <style>
-    /* 新token更新通知条样式 */
-    .new-tokens-notification {
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .new-tokens-notification:hover {
-        background-color: #e9f5ff !important;
-    }
-    
-    .new-tokens-notification::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(3, 169, 244, 0.1), transparent);
-        animation: wave 2s infinite linear;
-    }
-    
-    @keyframes wave {
-        0% { transform: translateX(-100%); }
-        100% { transform: translateX(100%); }
-    }
-    
     /* 新添加的token行的高亮动画 */
     @keyframes highlightNew {
         0% { background-color: rgba(76, 175, 80, 0.2); }
         100% { background-color: transparent; }
     }
-    
     .new-token-highlight {
         animation: highlightNew 5s ease-out;
+    }
+
+    .buy-count {
+        color: #198754 !important; /* Bootstrap 5 的 text-success 绿色 */
+        font-weight: 500;
+    }
+    .sell-count {
+        color: #dc3545 !important; /* Bootstrap 5 的 text-danger 红色 */
+        font-weight: 500;
+    }
+
+    .first-seen-badge {
+        display: inline-block;
+        padding: 0 6px;
+        border-radius: 6px;
+        font-size: 90%;
+        font-weight: 500;
+        margin-left: 2px;
+    }
+    .first-seen-now {
+        background: #eaffea;
+        color: #198754;
+        border: 1px solid #b6eab6;
+    }
+    .first-seen-min {
+        background: #fffbe6;
+        color: #b8860b;
+        border: 1px solid #ffe58f;
+    }
+
+    #new-tokens-notification-bar {
+        position: fixed;
+        left: 50%;
+        top: 90px; /* 距离顶部适当距离，避免遮挡搜索栏 */
+        transform: translateX(-50%);
+        z-index: 1000;
+        background: #e9f5ff;
+        border: 2px solid #2196f3;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(33, 150, 243, 0.15);
+        padding: 12px 32px;
+        font-weight: bold;
+        color: #1976d2;
+        min-width: 240px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        animation: notificationPulse 2s infinite;
+    }
+
+    @keyframes notificationPulse {
+        0% { box-shadow: 0 4px 16px rgba(33, 150, 243, 0.15); }
+        50% { box-shadow: 0 4px 24px rgba(33, 150, 243, 0.3); }
+        100% { box-shadow: 0 4px 16px rgba(33, 150, 243, 0.15); }
+    }
+
+    #new-tokens-notification-bar:hover {
+        background: #bbdefb;
+        transform: translateX(-50%) scale(1.02);
+        box-shadow: 0 6px 20px rgba(33, 150, 243, 0.25);
+    }
+
+    #new-tokens-notification-bar i {
+        animation: spin 2s linear infinite;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .value-flash {
+        animation: valueFlash 1.2s linear 2;
+    }
+    @keyframes valueFlash {
+        0%   { color: inherit; opacity: 1; }
+        20%  { color: #ff9800; opacity: 0.3; }
+        40%  { color: #ff9800; opacity: 1; }
+        60%  { color: #ff9800; opacity: 0.3; }
+        80%  { color: #ff9800; opacity: 1; }
+        100% { color: inherit; opacity: 1; }
     }
 </style>
 
 <!-- 代币行模板 -->
 <template id="token-row-template">
-    <tr class="token-row" data-id="TOKEN_ID">
+    <tr class="token-row" data-id="TOKEN_ID" data-chain="TOKEN_CHAIN" data-contract="TOKEN_CONTRACT" data-token-symbol="TOKEN_SYMBOL">
         <!-- 代币名称列 -->
         <td>
             <div class="d-flex align-items-center">
@@ -204,7 +259,7 @@
         <!-- 市值 -->
         <td class="d-none d-md-table-cell fw-medium">TOKEN_MARKET_CAP</td>
         
-        <!-- 24小时变化 -->
+        <!-- 涨跌幅 -->
         <td class="d-none d-lg-table-cell TOKEN_CHANGE_CLASS">TOKEN_CHANGE_24H</td>
         
         <!-- 成交量 -->
@@ -213,8 +268,8 @@
         <!-- 买入/卖出 -->
         <td class="d-none d-xl-table-cell">
             <div class="d-flex align-items-center">
-                <span class="me-2 positive-change">TOKEN_BUYS<i class="bi bi-arrow-up-short"></i></span>
-                <span class="negative-change">TOKEN_SELLS<i class="bi bi-arrow-down-short"></i></span>
+                <span class="me-2 buy-count">TOKEN_BUYS<i class="bi bi-arrow-up-short"></i></span>
+                <span class="sell-count">TOKEN_SELLS<i class="bi bi-arrow-down-short"></i></span>
             </div>
         </td>
         
@@ -238,15 +293,6 @@
         <!-- 操作 -->
         <td>
             <div class="d-flex">
-                <button class="btn btn-sm btn-outline-secondary me-1 refresh-token-btn" 
-                        data-token-id="TOKEN_ID" 
-                        data-chain="TOKEN_CHAIN" 
-                        data-contract="TOKEN_CONTRACT"
-                        data-token-symbol="TOKEN_SYMBOL"
-                        onclick="refreshTokenData(this)">
-                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
-                    <i class="bi bi-arrow-clockwise"></i>
-                </button>
                 <button class="btn btn-sm btn-primary view-token-btn" 
                         data-token-id="TOKEN_ID"
                         data-bs-toggle="modal" 
@@ -344,4 +390,51 @@ function initTooltips() {
 document.addEventListener('DOMContentLoaded', function() {
     initTooltips();
 });
+
+// ========== 自动刷新频率限制 ========== //
+let autoRefreshCount = 0;
+const AUTO_REFRESH_LIMIT = 25;
+const AUTO_REFRESH_WINDOW = 60 * 1000; // 1分钟
+function tryIncreaseAutoRefreshCount() {
+    if (autoRefreshCount >= AUTO_REFRESH_LIMIT) return false;
+    autoRefreshCount++;
+    setTimeout(() => {
+        autoRefreshCount--;
+    }, AUTO_REFRESH_WINDOW);
+    return true;
+}
+
+// ========== 自动刷新可视区token（每次只刷新一个，且每条目1分钟一次） ========== //
+function isElementInViewport(el) {
+    const rect = el.getBoundingClientRect();
+    return (
+        rect.top < window.innerHeight &&
+        rect.bottom > 0
+    );
+}
+let autoRefreshQueue = [];
+function autoRefreshOneToken() {
+    if (autoRefreshQueue.length === 0) {
+        const now = Date.now();
+        autoRefreshQueue = Array.from(document.querySelectorAll('.token-row')).filter(row => {
+            if (!isElementInViewport(row)) return false;
+            const lastRefresh = parseInt(row.dataset.lastAutoRefresh || '0', 10);
+            return (now - lastRefresh >= 60 * 1000);
+        });
+    }
+    if (autoRefreshQueue.length > 0) {
+        if (!tryIncreaseAutoRefreshCount()) return; // 超过限制则不刷新
+        const row = autoRefreshQueue.shift();
+        refreshTokenData(row);
+        row.dataset.lastAutoRefresh = Date.now().toString();
+    }
+}
+document.addEventListener('DOMContentLoaded', function() {
+    const rows = document.querySelectorAll('.token-row');
+    const now = Date.now();
+    rows.forEach(row => {
+        row.dataset.lastAutoRefresh = now.toString();
+    });
+});
+setInterval(autoRefreshOneToken, 2000);
 </script> 

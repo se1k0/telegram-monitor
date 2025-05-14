@@ -4,29 +4,17 @@
  */
 
 // Token刷新功能
-function refreshTokenData(button) {
-    // 获取代币信息
-    const chain = button.dataset.chain;
-    const contract = button.dataset.contract;
-    const tokenSymbol = button.dataset.tokenSymbol || 'Unknown';
-    
+function refreshTokenData(row) {
+    // 直接从tr行获取代币信息
+    const chain = row.getAttribute('data-chain');
+    const contract = row.getAttribute('data-contract');
+    const tokenSymbol = row.getAttribute('data-token-symbol') || 'Unknown';
+    // 刷新时立即更新时间戳，防止1分钟内重复自动刷新
+    row.dataset.lastAutoRefresh = Date.now().toString();
+    // 自动刷新时，理论上不会出现无效数据
     if (!chain || !contract) {
-        showToast('错误', '无法获取代币信息', 'error');
         return;
     }
-    
-    // 显示加载中状态
-    const spinner = button.querySelector('.spinner-border');
-    const icon = button.querySelector('.bi-arrow-clockwise');
-    if (spinner && icon) {
-        spinner.classList.remove('d-none');
-        icon.classList.add('d-none');
-    }
-    button.disabled = true;
-            
-    // 显示加载中提示
-    showToast('正在刷新 ' + tokenSymbol + ' 的数据...');
-            
     // 调用API刷新数据
     fetch(`/api/refresh_token/${chain}/${contract}`, {
         method: 'POST',
@@ -41,94 +29,70 @@ function refreshTokenData(button) {
         return response.json();
     })
     .then(data => {
-        // 恢复按钮状态
-        if (spinner && icon) {
-            spinner.classList.add('d-none');
-            icon.classList.remove('d-none');
-        }
-        button.disabled = false;
-                
         if (data.success) {
             // 检查代币是否已被删除
             if (data.deleted) {
-                // 显示已删除提示
-                showToast(tokenSymbol + ' 已从数据库中删除，因为该代币在DEX上不存在', true, 'warning');
-                
                 // 从UI中移除该代币行
-                const row = button.closest('tr');
-                if (row) {
-                    // 添加褪色效果
-                    row.style.transition = 'opacity 0.8s ease-out';
-                    row.style.opacity = '0';
-                    
-                    // 设置定时器，等动画完成后移除行
-                    setTimeout(() => {
-                        row.remove();
-                        
-                        // 检查是否需要更新表格统计信息
-                        updateTokensTableCount();
-                    }, 800);
-                }
+                row.style.transition = 'opacity 0.8s ease-out';
+                row.style.opacity = '0';
+                setTimeout(() => {
+                    row.remove();
+                    updateTokensTableCount();
+                }, 800);
                 return;
             }
-            
-            // 更新成功，显示提示
-            const marketCapChange = data.market_cap_change && data.market_cap_change.percent ? 
-                ` (${data.market_cap_change.percent > 0 ? '+' : ''}${data.market_cap_change.percent.toFixed(2)}%)` : '';
-                
-            showToast(tokenSymbol + ' 数据已更新' + marketCapChange, true);
-                    
-            // 更新页面上的数据而不是刷新整个页面
+            // 更新页面上的数据
             if (data.token) {
                 updateTokenDataInUI(chain, contract, data.token);
             }
-        } else {
-            // 更新失败
-            const errorMessage = data.error || '更新失败，请稍后再试';
-            showToast(tokenSymbol + ' 数据更新失败: ' + errorMessage, false);
         }
+        // 失败时不做任何UI提示
     })
     .catch(error => {
-        console.error('刷新代币数据出错:', error);
-        
-        // 恢复按钮状态
-        if (spinner && icon) {
-            spinner.classList.add('d-none');
-            icon.classList.remove('d-none');
-        }
-        button.disabled = false;
-        
-        // 显示错误提示
-        showToast('刷新 ' + tokenSymbol + ' 数据时出错: ' + error.message, false);
+        // 自动刷新失败时静默处理
     });
+}
+
+// 数值变化闪烁动画
+function flashIfChanged(cell, newValue) {
+    if (!cell) return;
+    if (cell.textContent !== newValue) {
+        cell.textContent = newValue;
+        cell.classList.add('value-flash');
+        setTimeout(() => cell.classList.remove('value-flash'), 4000);
+    }
 }
 
 // 更新UI上的代币数据
 function updateTokenDataInUI(chain, contract, tokenData) {
-    // 找到对应的行
-    const row = document.querySelector(`tr .refresh-token-btn[data-chain="${chain}"][data-contract="${contract}"]`).closest('tr');
+    // 直接通过tr的data属性查找对应行
+    const row = document.querySelector(`tr.token-row[data-chain="${chain}"][data-contract="${contract}"]`);
     if (!row) return;
     
     // 更新市值
     const marketCapCell = row.querySelector('td:nth-child(3)');
     if (marketCapCell && tokenData.market_cap_formatted) {
-        marketCapCell.textContent = tokenData.market_cap_formatted;
+        flashIfChanged(marketCapCell, tokenData.market_cap_formatted);
     }
     
     // 计算并更新涨跌幅
     const changePctCell = row.querySelector('td:nth-child(4)');
-    if (changePctCell && tokenData.market_cap && tokenData.market_cap_1h) {
-        const changePct = tokenData.market_cap_1h > 0 ? 
-            ((tokenData.market_cap - tokenData.market_cap_1h) / tokenData.market_cap_1h * 100) : 0;
-        
-        changePctCell.textContent = changePct > 0 ? `+${changePct.toFixed(2)}%` : `${changePct.toFixed(2)}%`;
-        
-        // 更新颜色
-        changePctCell.className = '';  // 清除现有类
-        if (changePct > 0) {
-            changePctCell.classList.add('text-success');
-        } else if (changePct < 0) {
-            changePctCell.classList.add('text-danger');
+    if (changePctCell) {
+        const currentMarketCap = parseFloat(tokenData.market_cap) || 0;
+        const firstMarketCap = parseFloat(tokenData.first_market_cap) || 0;
+        let changeValue = 0;
+        if (firstMarketCap > 0) {
+            changeValue = ((currentMarketCap - firstMarketCap) / firstMarketCap) * 100;
+        }
+        const pctText = (changeValue > 0 ? '+' : '') + changeValue.toFixed(2) + '%';
+        // 先移除正负色类，避免动画被覆盖
+        changePctCell.classList.remove('positive-change', 'negative-change');
+        flashIfChanged(changePctCell, pctText);
+        // 再加正负色
+        if (changeValue > 0) {
+            changePctCell.classList.add('positive-change');
+        } else if (changeValue < 0) {
+            changePctCell.classList.add('negative-change');
         }
     }
     
@@ -143,21 +107,39 @@ function updateTokenDataInUI(chain, contract, tokenData) {
         } else {
             formatted = `$${tokenData.volume_1h.toFixed(2)}`;
         }
-        volumeCell.textContent = formatted;
+        flashIfChanged(volumeCell, formatted);
     }
     
     // 更新买入/卖出
     const txnsCell = row.querySelector('td:nth-child(6)');
     if (txnsCell) {
-        txnsCell.textContent = `${tokenData.buys_1h || 0}/${tokenData.sells_1h || 0}`;
+        const buysElem = txnsCell.querySelector('.buy-count');
+        const sellsElem = txnsCell.querySelector('.sell-count');
+        if (buysElem) {
+            const buysHtml = `${tokenData.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
+            if (buysElem.innerHTML !== buysHtml) {
+                buysElem.innerHTML = buysHtml;
+                buysElem.classList.add('value-flash');
+                setTimeout(() => buysElem.classList.remove('value-flash'), 4000);
+            }
+        }
+        if (sellsElem) {
+            const sellsHtml = `${tokenData.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
+            if (sellsElem.innerHTML !== sellsHtml) {
+                sellsElem.innerHTML = sellsHtml;
+                sellsElem.classList.add('value-flash');
+                setTimeout(() => sellsElem.classList.remove('value-flash'), 4000);
+            }
+        }
     }
     
     // 更新持有者数量
     const holdersCell = row.querySelector('td:nth-child(7)');
     if (holdersCell) {
         if (tokenData.holders_count) {
-            holdersCell.textContent = tokenData.holders_count;
+            flashIfChanged(holdersCell, tokenData.holders_count.toString());
         } else {
+            flashIfChanged(holdersCell, '未知');
             holdersCell.innerHTML = '<span class="text-muted">未知</span>';
         }
     }
@@ -165,19 +147,23 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     // 更新社群覆盖
     const communityCell = row.querySelector('td:nth-child(8)');
     if (communityCell && tokenData.community_reach !== undefined) {
-        communityCell.textContent = tokenData.community_reach || 0;
+        flashIfChanged(communityCell, formatNumber(tokenData.community_reach || 0));
     }
     
     // 更新消息覆盖
     const spreadCell = row.querySelector('td:nth-child(9)');
     if (spreadCell && tokenData.spread_count !== undefined) {
-        spreadCell.textContent = tokenData.spread_count || 0;
+        flashIfChanged(spreadCell, (tokenData.spread_count || 0).toString());
     }
     
     // 更新代币图像
     const imgElement = row.querySelector('img');
     if (imgElement && tokenData.image_url) {
-        imgElement.src = tokenData.image_url;
+        if (imgElement.src !== tokenData.image_url) {
+            imgElement.src = tokenData.image_url;
+            imgElement.classList.add('value-flash');
+            setTimeout(() => imgElement.classList.remove('value-flash'), 4000);
+        }
     }
     
     // 刷新行的样式
@@ -190,6 +176,8 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     } else {
         row.classList.remove('table-success', 'table-danger');
     }
+    // 保证token条背景色始终为白色
+    row.classList.remove('table-success', 'table-danger');
 }
 
 // 显示提示消息

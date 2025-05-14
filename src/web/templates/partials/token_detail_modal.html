@@ -1,5 +1,5 @@
 <!-- Token详情弹出层 -->
-<div class="modal fade" id="tokenDetailModal" tabindex="-1" aria-labelledby="tokenDetailModalLabel" aria-hidden="true">
+<div class="modal fade token-modal" id="tokenDetailModal" tabindex="-1" aria-labelledby="tokenDetailModalLabel" aria-hidden="true" data-bs-backdrop="false">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
@@ -19,31 +19,35 @@
         <div id="tokenDetailContent" class="d-none">
           <!-- 基本信息部分 -->
           <div class="row mb-4">
-            <div class="col-md-6">
-              <div class="d-flex align-items-center mb-3">
-                <div id="tokenLogoContainer" class="me-3">
+            <div class="col-12">
+              <div class="d-flex align-items-start mb-3">
+                <div id="tokenLogoContainer" class="me-2">
                   <div class="token-placeholder">
                     <span id="tokenSymbolShort"></span>
                   </div>
                 </div>
-                <div class="token-info-container">
-                  <h4 id="tokenSymbol"></h4>
-                  <p class="text-muted mb-0 token-contract-container">
-                    <span id="tokenChain" class="badge bg-secondary me-2"></span>
-                    <span id="tokenContract" class="small"></span>
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-6 col-sm-6 d-flex align-items-start market-data-container">
-              <div class="market-data-pills">
-                <div class="market-data-pill">
-                  <span class="mini-label">市值</span>
-                  <span id="tokenMarketCap" class="mini-value"></span>
-                </div>
-                <div class="market-data-pill">
-                  <span class="mini-label">24h变化</span>
-                  <span id="tokenPriceChange" class="mini-value"></span>
+                <div class="token-title-container">
+                  <div class="d-flex align-items-center justify-content-between w-100">
+                    <div class="d-flex align-items-center">
+                      <h4 id="tokenSymbol" class="mb-0 me-2"></h4>
+                      <span id="tokenChain" class="badge bg-secondary me-2"></span>
+                    </div>
+                    <div class="token-market-data">
+                      <table class="market-table">
+                        <tr>
+                          <td class="market-label">市值</td>
+                          <td class="market-label">涨跌幅</td>
+                        </tr>
+                        <tr>
+                          <td class="market-value" id="tokenMarketCap"></td>
+                          <td class="market-value" id="tokenPriceChange"></td>
+                        </tr>
+                      </table>
+                    </div>
+                  </div>
+                  <div class="contract-row d-flex align-items-center mt-2">
+                    <div id="tokenContract" class="d-flex align-items-center"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -132,40 +136,53 @@
 
 <style>
   /* 详情弹窗样式 */
-  .token-info-container {
-    position: relative;
-    z-index: 10;
-    width: 100%;
+  .token-title-container {
+    flex: 1;
   }
   
-  .token-contract-container {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    width: 100%;
-    margin-top: 4px;
+  .token-market-data {
+    margin-left: auto;
+  }
+  
+  .market-table {
+    border-collapse: collapse;
+  }
+  
+  .market-table td {
+    padding: 0 10px 0 0;
+  }
+  
+  .market-label {
+    font-size: 0.7rem;
+    color: #6c757d;
+  }
+  
+  .market-value {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  
+  .contract-row {
+    width: fit-content;
   }
   
   #tokenContract {
     display: flex;
-    align-items: center;
-    max-width: 100%;
-    overflow: visible;
-    position: relative;
-    z-index: 20;
     gap: 8px;
+    align-items: center;
   }
   
   #tokenContract span {
+    display: inline-block;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
     font-family: monospace;
     background-color: #f8f9fa;
-    padding: 3px 6px;
-    border-radius: 3px;
+    padding: 4px 8px;
+    border-radius: 4px;
     border: 1px solid #e9ecef;
+    max-width: 260px;
   }
   
   #tokenContract .copy-address-btn {
@@ -174,20 +191,23 @@
     background-color: #f8f9fa;
     border: 1px solid #dee2e6;
     border-radius: 4px;
-    padding: 3px 8px !important;
-    display: flex;
+    padding: 4px 10px;
+    display: inline-flex;
     align-items: center;
-    gap: 4px;
+    justify-content: center;
     position: relative;
-    z-index: 30;
+    z-index: 2;
     cursor: pointer;
-    transition: all 0.2s ease;
+    height: 30px;
+    width: 34px;
+    min-width: unset;
   }
   
   #tokenContract .copy-address-btn:hover {
     color: #fff;
     background-color: #0d6efd;
     border-color: #0d6efd;
+    transition: all 0.2s ease;
   }
   
   #tokenContract .copy-address-btn.text-success {
@@ -196,47 +216,19 @@
     border-color: #198754;
   }
   
-  .market-data-container {
-    position: relative;
-    z-index: 5;
-  }
-  
   .text-success {
     color: #198754 !important;
   }
   
-  /* 极简市场数据样式 - 药丸式设计 */
-  .market-data-pills {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  
-  .market-data-pill {
-    display: flex;
-    flex-direction: column;
-    background-color: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 0.5rem;
-    padding: 0.1rem 0.5rem;
-    min-width: 80px;
-  }
-  
-  .mini-label {
-    font-size: 0.65rem;
-    color: #6c757d;
-    margin-bottom: -0.15rem;
-  }
-  
-  .mini-value {
-    font-size: 0.78rem;
-    font-weight: 600;
-  }
-  
   /* 响应式调整 */
-  @media (max-width: 576px) {
-    .market-data-pills {
-      margin-top: 0.5rem;
+  @media (max-width: 768px) {
+    .token-market-data {
+      margin-left: 0;
+      margin-top: 8px;
+    }
+    
+    .token-title-container .d-flex {
+      flex-wrap: wrap;
     }
   }
   
@@ -255,18 +247,20 @@
     position: fixed;
     bottom: 20px;
     right: 20px;
-    background-color: #198754;
-    color: white;
-    padding: 10px 15px;
-    border-radius: 4px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    background-color: #27c27c; /* 更柔和的绿色 */
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 3px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.12);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+    font-size: 0.92rem;
     z-index: 9999;
     opacity: 0;
-    transform: translateY(20px);
-    transition: opacity 0.3s ease, transform 0.3s ease;
+    min-width: 0;
+    transform: translateY(10px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
   }
   
   .copy-tooltip.show {
@@ -275,11 +269,33 @@
   }
   
   .copy-tooltip i {
-    font-size: 1.2rem;
+    font-size: 1rem;
   }
   
   /* 隐藏原始的Toast容器（将通过JS切换） */
   #copyToastContainer {
     display: none;
   }
-</style> 
+  
+  /* 修复遮罩层问题 */
+  .modal-backdrop {
+    pointer-events: none !important; /* 确保背景遮罩不会阻止点击 */
+  }
+  
+  /* 对于模态框内容仍然允许交互 */
+  .modal-dialog {
+    pointer-events: auto !important;
+  }
+</style>
+
+<!-- 添加遮罩层修复脚本 -->
+<script>
+  // 监听模态框打开事件
+  document.getElementById('tokenDetailModal').addEventListener('shown.bs.modal', function () {
+    // 查找并修复遮罩层
+    const backdrop = document.querySelector('.modal-backdrop');
+    if (backdrop) {
+      backdrop.style.pointerEvents = 'none';
+    }
+  });
+</script> 

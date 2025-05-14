@@ -11,6 +11,8 @@ from datetime import datetime
 from src.database.db_factory import get_db_adapter
 import asyncio
 from supabase import create_client
+# 导入Telegram客户端工厂
+from src.core.telegram_client_factory import TelegramClientFactory
 
 # 创建日志记录器
 logger = logging.getLogger(__name__)
@@ -52,6 +54,18 @@ class ChannelManager:
         if not self.client:
             logger.warning("未提供Telegram客户端，无法验证频道或群组")
             return None
+            
+        # 检查客户端连接状态
+        if not self.client.is_connected():
+            logger.warning("客户端未连接，尝试重新连接")
+            try:
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    logger.error("客户端未授权，无法验证频道")
+                    return None
+            except Exception as e:
+                logger.error(f"重新连接客户端失败: {str(e)}")
+                return None
             
         try:
             # 判断是否是整数ID（处理没有用户名的频道或群组情况）
@@ -497,113 +511,144 @@ class ChannelManager:
             return []
             
     async def update_channels(self, default_channels=None):
-        """更新频道列表状态
-        
-        检查已有频道的状态并更新
+        """
+        更新现有频道的信息
         
         Args:
-            default_channels: 不再使用的参数，保留是为了兼容性
-            
-        Returns:
-            list: 更新后的活跃频道列表
-        """
-        # 获取当前活跃频道
-        active_channels = self.get_active_channels()
+            default_channels: 默认频道列表
         
-        # 更新所有活跃频道的状态
-        if active_channels:
-            updated_channels = []
-            channels_to_update = []
-            
-            for channel in active_channels:
+        Returns:
+            list: 更新后的频道列表
+        """
+        try:
+            if not self.client:
+                logger.error("未提供Telegram客户端，无法更新频道信息")
+                return []
+                
+            # 检查客户端连接状态
+            if not self.client.is_connected():
+                logger.warning("客户端未连接，尝试重新连接")
                 try:
-                    # 使用ID或用户名验证频道
-                    identifier = channel.get('channel_id') or channel.get('channel_username')
-                    if not identifier:
-                        logger.warning(f"频道缺少有效标识符: {channel}")
+                    await self.client.connect()
+                    if not await self.client.is_user_authorized():
+                        logger.error("客户端未授权，无法更新频道")
+                        # 尝试使用客户端工厂获取新客户端
+                        try:
+                            # 从配置中获取API认证信息
+                            import config.settings as settings
+                            api_id = settings.env_config.API_ID
+                            api_hash = settings.env_config.API_HASH
+                            # 获取当前session路径
+                            session_path = self.client.session.filename.replace('.session', '')
+                            
+                            # 使用工厂获取新客户端
+                            self.client = await TelegramClientFactory.get_client(
+                                session_path,
+                                api_id,
+                                api_hash,
+                                connection_retries=5,
+                                auto_reconnect=True,
+                                retry_delay=5,
+                                request_retries=5,
+                                flood_sleep_threshold=60,
+                                timeout=30
+                            )
+                            
+                            if not self.client or not await self.client.is_user_authorized():
+                                logger.error("无法获取授权的客户端，更新频道失败")
+                                return []
+                        except Exception as client_error:
+                            logger.error(f"获取新客户端失败: {str(client_error)}")
+                            return []
+                except Exception as e:
+                    logger.error(f"重新连接客户端失败: {str(e)}")
+                    return []
+            
+            # 获取所有频道
+            channels = []
+            try:
+                # 首先从数据库获取频道列表
+                db_channels = await self.db_adapter.execute_query(
+                    'telegram_channels', 
+                    'select',
+                    order_by={'last_updated': 'asc'}
+                )
+                
+                # 如果没有找到任何频道，并且提供了默认频道，则使用默认频道
+                if (not db_channels or len(db_channels) == 0) and default_channels:
+                    channels = default_channels
+                    logger.info(f"使用提供的默认频道列表: {len(channels)} 个频道")
+                else:
+                    channels = db_channels
+                    logger.info(f"从数据库获取到 {len(channels)} 个频道")
+            except Exception as e:
+                logger.error(f"从数据库获取频道列表时出错: {str(e)}")
+                if default_channels:
+                    channels = default_channels
+                    logger.info(f"使用提供的默认频道列表: {len(channels)} 个频道")
+                else:
+                    return []
+            
+            # 更新频道信息
+            updated_channels = []
+            
+            for channel in channels:
+                try:
+                    channel_id = channel.get('channel_id')
+                    channel_username = channel.get('channel_username')
+                    
+                    # 跳过无效频道
+                    if not channel_id and not channel_username:
                         continue
                         
+                    identifier = channel_username or channel_id
+                    logger.info(f"正在更新频道: {identifier}")
+                    
+                    # 验证频道
                     channel_info = await self.verify_channel(identifier)
                     
-                    if channel_info and channel_info.get('exists'):
-                        # 更新频道信息
-                        update_data = {
-                            'id': channel.get('id'),
-                            'channel_username': channel_info.get('username'),
-                            'channel_id': channel_info.get('channel_id'),
-                            'channel_name': channel_info.get('name'),
-                            'chain': channel.get('chain'),
-                            'is_active': True,
-                            'is_group': channel_info.get('is_group', False),
-                            'is_supergroup': channel_info.get('is_supergroup', False),
-                            'member_count': channel_info.get('member_count', 0),
-                            'last_updated': datetime.now()
-                        }
+                    if not channel_info or not channel_info.get('exists', False):
+                        logger.warning(f"频道 {identifier} 不存在或无法访问")
+                        continue
+                    
+                    # 更新频道信息
+                    update_data = {
+                        'last_updated': datetime.now().isoformat(),
+                        'channel_name': channel_info.get('name'),
+                        'member_count': channel_info.get('member_count', 0),
+                        'is_group': channel_info.get('is_group', False),
+                        'is_supergroup': channel_info.get('is_supergroup', False)
+                    }
+                    
+                    # 如果有username，更新username
+                    if channel_info.get('username'):
+                        update_data['channel_username'] = channel_info.get('username')
+                    
+                    # 更新数据库
+                    try:
+                        await self.db_adapter.execute_query(
+                            'telegram_channels',
+                            'update',
+                            filters={'channel_id': channel_id},
+                            data=update_data
+                        )
+                        logger.info(f"已更新频道 {identifier} 的信息")
                         
-                        # 添加到更新列表
-                        channels_to_update.append(update_data)
-                        updated_channels.append(update_data)
-                    else:
-                        logger.warning(f"频道 {identifier} 不再可访问，标记为不活跃")
-                        # 标记为不活跃
-                        channel['is_active'] = False
-                        
-                        # 直接使用 Supabase 更新数据
-                        import config.settings as config
-                        from supabase import create_client
-                        
-                        supabase_url = config.SUPABASE_URL
-                        supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
-                        
-                        supabase = create_client(supabase_url, supabase_key)
-                        
-                        # 更新频道状态
-                        channel_id = channel.get('id')
-                        if channel_id:
-                            update_data = {'is_active': False, 'last_updated': datetime.now().isoformat()}
-                            response = supabase.table('telegram_channels').update(update_data).eq('id', channel_id).execute()
-                            if not hasattr(response, 'data') or not response.data:
-                                logger.warning(f"将频道 {identifier} 标记为不活跃时未返回数据: {response}")
-                        
+                        # 添加到更新后的频道列表
+                        updated_channels.append({**channel, **update_data})
+                    except Exception as db_error:
+                        logger.error(f"更新频道 {identifier} 数据库信息时出错: {str(db_error)}")
+                
                 except Exception as e:
-                    logger.error(f"更新频道 {channel.get('channel_username') or channel.get('channel_id')} 状态时出错: {str(e)}")
+                    logger.error(f"更新频道 {channel.get('channel_id') or channel.get('channel_username')} 时出错: {str(e)}")
+                    continue
             
-            # 批量更新频道信息
-            if channels_to_update:
-                try:
-                    # 使用 Supabase 客户端直接更新
-                    import config.settings as config
-                    from supabase import create_client
-                    
-                    supabase_url = config.SUPABASE_URL
-                    supabase_key = config.SUPABASE_SERVICE_KEY or config.SUPABASE_KEY
-                    
-                    supabase = create_client(supabase_url, supabase_key)
-                    
-                    # 逐个更新频道
-                    for channel_data in channels_to_update:
-                        channel_id = channel_data.get('id')
-                        if channel_id:
-                            # 格式化日期时间
-                            if isinstance(channel_data.get('last_updated'), datetime):
-                                channel_data['last_updated'] = channel_data['last_updated'].isoformat()
-                                
-                            # 直接更新
-                            response = supabase.table('telegram_channels').update(channel_data).eq('id', channel_id).execute()
-                            if hasattr(response, 'data') and response.data:
-                                logger.info(f"已更新频道: {channel_data.get('channel_name')}")
-                            else:
-                                logger.warning(f"更新频道 {channel_data.get('channel_name')} 时未返回数据: {response}")
-                        
-                    # 更新完成后清除缓存
-                    self._active_channels_cache = None
-                    self._cache_timestamp = None
-                        
-                except Exception as e:
-                    logger.error(f"批量更新频道信息时出错: {str(e)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+            # 清除缓存，确保下次获取最新数据
+            self._active_channels_cache = None
+            self._cache_timestamp = None
             
             return updated_channels
-        
-        return [] 
+                
+        except Exception as e:
+            logger.error(f"更新频道信息时出错: {str(e)}")
+            return [] 

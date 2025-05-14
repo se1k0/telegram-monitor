@@ -136,17 +136,6 @@
                     </div>
                 </div>
             </div>
-            
-            {% if token_history %}
-            <div class="card mt-4">
-                <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0">价格历史</h5>
-                </div>
-                <div class="card-body">
-                    <canvas id="priceChart" width="400" height="200"></canvas>
-                </div>
-            </div>
-            {% endif %}
         </div>
         
         <div class="col-md-4">
@@ -198,39 +187,6 @@
 {% endblock %}
 
 {% block scripts %}
-{% if token_history %}
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // 设置图表数据
-        const ctx = document.getElementById('priceChart').getContext('2d');
-        const chartData = JSON.parse('{{ chart_data|tojson|safe }}');
-        
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: chartData.labels,
-                datasets: [{
-                    label: '市值 ({{ token.chain }})',
-                    data: chartData.values,
-                    borderColor: '#AA96DA',
-                    backgroundColor: 'rgba(170, 150, 218, 0.2)',
-                    tension: 0.1,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    y: {
-                        beginAtZero: false
-                    }
-                }
-            }
-        });
-    });
-</script>
-{% endif %}
-
 <script>
     // 页面加载完成后设置活跃的导航项
     document.addEventListener('DOMContentLoaded', function() {

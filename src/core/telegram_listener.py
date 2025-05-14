@@ -38,11 +38,13 @@ sys.path.insert(0, project_root)
 # 导入项目模块
 from src.utils.logger import get_logger
 from src.core.channel_manager import ChannelManager
+from src.core.telegram_client_factory import TelegramClientFactory
 from src.database.models import TelegramChannel
 from src.database.db_handler import (
     extract_promotion_info, 
     process_message_batch, token_batch,
-    process_batches, cleanup_batch_tasks
+    process_batches, cleanup_batch_tasks,
+    save_telegram_message
 )
 import config.settings as config
 from src.utils.utils import parse_market_cap, format_market_cap
@@ -354,8 +356,8 @@ class TelegramListener:
             # 1. 首先尝试从备份恢复
             if await self.restore_session():
                 logger.info("已从备份恢复session,尝试重新连接...")
-                # 重新创建客户端
-                self.client = TelegramClient(
+                # 使用客户端工厂创建客户端
+                self.client = await TelegramClientFactory.get_client(
                     self.session_path,
                     self.api_id, 
                     self.api_hash,
@@ -368,7 +370,8 @@ class TelegramListener:
                 )
                 
                 try:
-                    await self.client.connect()
+                    if not self.client.is_connected():
+                        await self.client.connect()
                     if await self.client.is_user_authorized():
                         logger.info("从备份恢复session成功")
                         return True
@@ -391,8 +394,11 @@ class TelegramListener:
             # 重新初始化session路径
             self._init_session_path()
             
+            # 确保旧客户端的连接已关闭
+            await TelegramClientFactory.disconnect_client()
+            
             # 重新创建客户端
-            self.client = TelegramClient(
+            self.client = await TelegramClientFactory.get_client(
                 self.session_path,
                 self.api_id, 
                 self.api_hash,
@@ -405,7 +411,8 @@ class TelegramListener:
             )
             
             # 连接并重新登录
-            await self.client.connect()
+            if not self.client.is_connected():
+                await self.client.connect()
             
             if not await self.client.is_user_authorized():
                 logger.info("需要重新登录Telegram")
@@ -530,11 +537,34 @@ class TelegramListener:
                                     logger.info(f"成功将正整数ID {channel_id} 转换为频道实体")
                                 except Exception as e:
                                     logger.warning(f"无法将正整数ID {channel_id} 转换为频道实体: {str(e)}")
-                                    # 回退到原始ID
-                                    entity = await self.client.get_entity(PeerChannel(channel_id))
+                                    # 如果是权限问题，跳过这个频道而不是尝试其他方式
+                                    if "private and you lack permission" in str(e) or "banned from it" in str(e):
+                                        logger.error(f"频道 {channel_id} 是私有的或已被禁止访问，跳过此频道")
+                                        continue
+                                    # 尝试其他方式获取实体
+                                    try:
+                                        entity = await self.client.get_entity(PeerChannel(channel_id))
+                                    except Exception as e2:
+                                        logger.error(f"使用原始ID获取频道实体失败: {str(e2)}")
+                                        # 如果都失败了且有用户名，尝试用户名
+                                        if channel_username:
+                                            try:
+                                                entity = await self.client.get_entity(channel_username)
+                                            except Exception as e3:
+                                                logger.error(f"无法通过用户名 {channel_username} 获取频道实体: {str(e3)}")
+                                                continue
+                                        else:
+                                            continue
                             else:
                                 # 直接使用ID
-                                entity = await self.client.get_entity(PeerChannel(channel_id))
+                                try:
+                                    entity = await self.client.get_entity(PeerChannel(channel_id))
+                                except Exception as e:
+                                    logger.error(f"使用PeerChannel({channel_id})获取频道实体失败: {str(e)}")
+                                    # 如果是权限问题，跳过这个频道
+                                    if "private and you lack permission" in str(e) or "banned from it" in str(e):
+                                        logger.error(f"频道 {channel_id} 是私有的或已被禁止访问，跳过此频道")
+                                        continue
                         except ValueError as e:
                             logger.warning(f"无法通过ID {channel_id} 获取频道实体: {str(e)}")
                             if channel_username:
@@ -615,33 +645,49 @@ class TelegramListener:
                         # 尝试将正整数ID转换为频道格式（添加-100前缀）
                         # 这是Telegram内部存储格式的一种处理方式
                         channel_entity = await self.client.get_entity(PeerChannel(-1000000000000 - channel_id))
-                        full_channel = await self.client(GetFullChannelRequest(channel=channel_entity))
-                        members_count = getattr(full_channel.full_chat, 'participants_count', 0)
-                        logger.info(f"成功获取转换后频道 {channel_id} 的成员数: {members_count}")
-                        return members_count
+                        try:
+                            full_channel = await self.client(GetFullChannelRequest(channel=channel_entity))
+                            members_count = getattr(full_channel.full_chat, 'participants_count', 0)
+                            logger.info(f"成功获取转换后频道 {channel_id} 的成员数: {members_count}")
+                            return members_count
+                        except Exception as e:
+                            if "private and you lack permission" in str(e) or "banned from it" in str(e):
+                                logger.warning(f"频道 {channel_id} 是私有的或已被禁止访问，无法获取成员数")
+                                return 0
+                            else:
+                                logger.warning(f"获取频道 {channel_id} 完整信息时出错: {str(e)}")
+                                return 0
                     except Exception as e:
                         logger.warning(f"尝试将 {channel_id} 转换为频道格式后获取成员数失败: {str(e)}")
                         # 如果转换失败，尝试原始方法
             
-            if is_group:
-                if is_supergroup:
-                    # 超级群组使用GetFullChannelRequest
+            try:
+                if is_group:
+                    if is_supergroup:
+                        # 超级群组使用GetFullChannelRequest
+                        full_channel = await self.client(GetFullChannelRequest(
+                            channel=channel_id
+                        ))
+                        return getattr(full_channel.full_chat, 'participants_count', 0)
+                    else:
+                        # 普通群组使用GetFullChatRequest
+                        full_chat = await self.client(GetFullChatRequest(
+                            chat_id=channel_id
+                        ))
+                        return getattr(full_chat.full_chat, 'participants_count', 0)
+                else:
+                    # 普通频道
                     full_channel = await self.client(GetFullChannelRequest(
                         channel=channel_id
                     ))
                     return getattr(full_channel.full_chat, 'participants_count', 0)
+            except Exception as e:
+                if "private and you lack permission" in str(e) or "banned from it" in str(e):
+                    logger.warning(f"频道 {channel_id} 是私有的或已被禁止访问，无法获取成员数")
+                    return 0
                 else:
-                    # 普通群组使用GetFullChatRequest
-                    full_chat = await self.client(GetFullChatRequest(
-                        chat_id=channel_id
-                    ))
-                    return getattr(full_chat.full_chat, 'participants_count', 0)
-            else:
-                # 普通频道
-                full_channel = await self.client(GetFullChannelRequest(
-                    channel=channel_id
-                ))
-                return getattr(full_channel.full_chat, 'participants_count', 0)
+                    logger.warning(f"获取频道 {channel_id} 的成员数时出错: {str(e)}")
+                    return 0
         except Exception as e:
             logger.warning(f"获取频道 {channel_id} 的成员数时出错: {str(e)}")
             return 0
@@ -676,9 +722,20 @@ class TelegramListener:
             logger.info(f"收到新消息 - 普通频道: {channel_title}, ID: {channel_id}, 链: UNKNOWN, 消息ID: {message.id}")
             logger.info(f"消息内容:\n--------------------------------------------------\n{message.text[:500]}...\n--------------------------------------------------")
             
-            # 保存媒体文件
-            if message.media:
-                await self._save_media_from_message(message, channel_id)
+            # 保存消息到数据库
+            save_result = save_telegram_message(
+                chain='UNKNOWN',
+                message_id=message.id,
+                date=message.date,
+                text=message.text,
+                media_path=None,  # 不再保存媒体文件
+                channel_id=channel_id
+            )
+            
+            if save_result:
+                logger.info(f"成功保存消息到数据库: {message.id}")
+            else:
+                logger.error(f"保存消息到数据库失败: {message.id}")
             
             # 提取并处理消息中的代币信息
             await self._process_token_in_message(message, channel_id, channel_title)
@@ -700,55 +757,6 @@ class TelegramListener:
             if self.error_count >= self.max_errors:
                 logger.warning(f"错误次数达到{self.max_errors}次，尝试重新初始化处理器...")
                 await self.reinitialize_handlers()
-    
-    async def _save_media_from_message(self, message, channel_id):
-        """
-        保存消息中的媒体文件
-        
-        Args:
-            message: 消息对象
-            channel_id: 频道ID
-        """
-        try:
-            if not message.media:
-                return
-                
-            chain = "UNKNOWN"  # 默认链
-            # 创建目录（如果不存在）
-            os.makedirs(f"media/{chain}", exist_ok=True)
-            
-            # 设置文件名和路径
-            file_path = f"media/{chain}/{message.id}"
-            
-            # 下载媒体文件
-            await self.client.download_media(message, file_path)
-            logger.info(f"保存了媒体文件: {file_path}")
-            
-            # 更新消息记录
-            from src.database.db_factory import get_db_adapter
-            db_adapter = get_db_adapter()
-            
-            # 查询是否已存在记录
-            existing = await db_adapter.execute_query('messages', 'select', 
-                                                     filters={
-                                                         'channel_id': channel_id,
-                                                         'message_id': message.id
-                                                     }, 
-                                                     limit=1)
-            
-            # 更新或插入记录
-            if existing and len(existing) > 0:
-                message_id = existing[0].get('id')
-                await db_adapter.execute_query('messages', 'update', 
-                                              data={'has_media': True},
-                                              filters={'id': message_id})
-            else:
-                logger.debug(f"未找到消息记录，无法更新媒体状态: {channel_id}/{message.id}")
-                
-        except Exception as e:
-            logger.error(f"保存媒体文件时出错: {str(e)}")
-            import traceback as tb
-            logger.debug(tb.format_exc())
     
     async def _process_token_in_message(self, message, channel_id, channel_title):
         """
@@ -1043,8 +1051,8 @@ class TelegramListener:
                     logger.error("无法恢复或创建有效的session")
                     return False
             
-            # 初始化客户端
-            self.client = TelegramClient(
+            # 使用客户端工厂初始化客户端
+            self.client = await TelegramClientFactory.get_client(
                 self.session_path,
                 self.api_id, 
                 self.api_hash,
@@ -1058,7 +1066,8 @@ class TelegramListener:
             
             # 尝试连接
             try:
-                await self.client.connect()
+                if not self.client.is_connected():
+                    await self.client.connect()
             except Exception as e:
                 logger.error(f"连接Telegram服务器时出错: {str(e)}")
                 return False
@@ -1138,14 +1147,35 @@ class TelegramListener:
                     logger.error("无法恢复session")
                     return False
             
-            # 尝试重新连接
+            # 尝试使用客户端工厂重新连接
             try:
-                await self.client.connect()
-                if await self.client.is_user_authorized():
-                    logger.info("重新连接成功")
+                # 先尝试重连现有客户端
+                if self.client and not self.client.is_connected():
+                    await self.client.connect()
+                    if await self.client.is_user_authorized():
+                        logger.info("重新连接成功")
+                        return True
+                    else:
+                        logger.warning("重新连接后未授权")
+                
+                # 如果重连失败，尝试通过工厂获取新客户端
+                self.client = await TelegramClientFactory.get_client(
+                    self.session_path,
+                    self.api_id, 
+                    self.api_hash,
+                    connection_retries=self.connection_retries,
+                    auto_reconnect=self.auto_reconnect,
+                    retry_delay=self.retry_delay,
+                    request_retries=self.request_retries,
+                    flood_sleep_threshold=self.flood_sleep_threshold,
+                    timeout=30
+                )
+                
+                if self.client and await self.client.is_user_authorized():
+                    logger.info("成功获取新客户端并已授权")
                     return True
                 else:
-                    logger.warning("重新连接后未授权")
+                    logger.warning("获取新客户端后未授权")
                     return False
             except Exception as e:
                 logger.error(f"重新连接失败: {str(e)}")
@@ -1182,6 +1212,10 @@ class TelegramListener:
                     reconnect_attempts += 1
                     if reconnect_attempts >= self.max_reconnect_attempts:
                         logger.critical("多次重连失败,等待较长时间后重试...")
+                        
+                        # 先确保旧的连接已完全关闭
+                        await TelegramClientFactory.disconnect_client()
+                        
                         await asyncio.sleep(300)  # 等待5分钟后重试
                         reconnect_attempts = 0
                     else:
@@ -1309,7 +1343,7 @@ class TelegramListener:
                                 self.session_path = os.path.join(os.path.dirname(self.session_path), session_name)
                                 
                                 # 重新创建客户端
-                                self.client = TelegramClient(
+                                self.client = await TelegramClientFactory.get_client(
                                     self.session_path,
                                     self.api_id, 
                                     self.api_hash,
@@ -1449,10 +1483,10 @@ class TelegramListener:
                     pass
                 logger.info(f"{task_name}已取消")
         
-        # 断开与Telegram的连接
-        if self.client and self.client.is_connected():
-            await self.client.disconnect()
-            logger.info("已断开与Telegram的连接")
+        # 使用工厂方法断开与Telegram的连接
+        await TelegramClientFactory.disconnect_client()
+        self.client = None
+        logger.info("已断开与Telegram的连接")
         
         # 清理会话文件
         try:
@@ -1623,37 +1657,7 @@ class TelegramListener:
             logger.info(f"成功创建新代币 {token_data.get('chain')}/{token_data.get('contract')}")
             
             # 记录历史数据
-            try:
-                # 创建历史记录
-                history_data = {
-                    'chain': token_data.get('chain'),
-                    'contract': token_data.get('contract'),
-                    'token_symbol': token_data.get('symbol', ''),
-                    'timestamp': datetime.now().isoformat(),
-                    'market_cap': token_data.get('marketCap', 0),
-                    'price': token_data.get('price', 0),
-                    'liquidity': token_data.get('liquidity', 0),
-                    'volume_24h': 0,
-                    'volume_1h': token_data.get('volume_1h', 0),
-                    'holders_count': token_data.get('holders_count', 0),
-                    'buys_1h': token_data.get('buys_1h', 0),
-                    'sells_1h': token_data.get('sells_1h', 0),
-                    'community_reach': community_reach,  # 使用计算的社群覆盖人数
-                    'spread_count': spread_count,  # 使用计算的传播次数
-                    'market_cap_change_pct': 0,
-                    'price_change_pct': 0
-                }
-                
-                # 插入历史记录
-                await db_adapter.execute_query(
-                    'token_history', 
-                    'insert', 
-                    data=history_data
-                )
-                logger.info(f"成功记录新代币 {token_data.get('chain')}/{token_data.get('contract')} 的历史数据")
-            except Exception as history_error:
-                logger.error(f"记录新代币历史数据时出错: {str(history_error)}")
-            
+            # （已彻底删除 token_history 表相关插入和日志）
             # 返回成功结果
             return {
                 "success": True,

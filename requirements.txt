@@ -39,6 +39,7 @@ certifi==2025.1.31
     #   httpcore
     #   httpx
     #   requests
+    #   pyOpenSSL
 cffi==1.17.1
     # via
     #   cryptography
@@ -325,6 +326,7 @@ yarl==1.19.0
     # via
     #   -r requirements.in
     #   aiohttp
+pyOpenSSL==23.2.0
 
 # The following packages are considered to be unsafe in a requirements file:
 # setuptools

@@ -12,6 +12,7 @@ from src.database.models import Token, Message, TelegramChannel, TokensMark
 from functools import wraps
 import threading
 import asyncio
+from functools import wraps
 
 # 辅助函数：确保数值转换正确
 def to_decimal_or_float(value):
@@ -31,6 +32,34 @@ def to_decimal_or_float(value):
             except (ValueError, TypeError):
                 return 0.0
         return 0.0
+
+# 添加异步支持装饰器
+def async_route(f):
+    """
+    装饰器，用于在Flask中支持异步路由处理函数
+    将异步函数转换为同步函数，供Flask调用
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # 获取或创建事件循环
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # 如果当前线程没有事件循环，创建一个新的
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # 运行异步函数并返回结果
+        try:
+            result = loop.run_until_complete(f(*args, **kwargs))
+            return result
+        except Exception as e:
+            logger.error(f"异步路由执行错误: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({"success": False, "error": f"异步处理错误: {str(e)}"}), 500
+    
+    return wrapper
 
 # 缓存和速率限制相关
 # 使用简单的内存字典实现缓存，生产环境可考虑使用Redis
@@ -347,8 +376,9 @@ def index():
         return handle_error(str(e))
 
 @app.route('/api/tokens/stream')
+@async_route
 async def stream_tokens():
-    """流式获取代币数据"""
+    """流式返回代币列表，支持分页、排序和过滤"""
     try:
         # 获取查询参数
         chain = request.args.get('chain', 'all')
@@ -422,7 +452,7 @@ async def stream_tokens():
             'select', 
             filters=query_filters, 
             limit=batch_size,
-            order_by={'column': 'first_update', 'ascending': False}  # 按照首次发现时间降序排列(新的在前)
+            order_by={'first_update': 'desc'}  # 按照首次发现时间降序排列(新的在前)
         )
         
         # 处理查询结果
@@ -751,7 +781,7 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
                 global app
                 try:
                     logger.info(f"Flask线程启动: {host}:{port}")
-                    app.run(host=host, port=port, debug=debug)
+                    app.run(host=host, port=port, debug=debug, ssl_context=None)
                 except Exception as e:
                     logger.error(f"Flask线程崩溃: {str(e)}")
                     import traceback
@@ -783,7 +813,7 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
                 
                 def run_flask_app():
                     global app
-                    app.run(host=host, port=port, debug=debug)
+                    app.run(host=host, port=port, debug=debug, ssl_context=None)
                     
                 import threading
                 thread = threading.Thread(target=run_flask_app)
@@ -822,7 +852,7 @@ def run_flask_server(host, port, debug):
     
     try:
         logger.info(f"Flask进程启动: {host}:{port}")
-        app.run(host=host, port=port, debug=debug)
+        app.run(host=host, port=port, debug=debug, ssl_context=None)
     except Exception as e:
         logger.error(f"Flask进程崩溃: {str(e)}")
         import traceback
@@ -842,6 +872,7 @@ def internal_server_error(e):
 
 
 @app.route('/api/token_market_history/<chain>/<contract>')
+@async_route
 async def api_token_market_history(chain, contract):
     """获取代币市值历史数据和提及统计API，并更新关键数据"""
     try:
@@ -1325,6 +1356,7 @@ def process_token_data(token):
             'contract': token.get('contract', ''),
             'market_cap': market_cap_value,  # 保留原始数值，供前端JS处理
             'market_cap_formatted': format_market_cap(market_cap_value),  # 添加格式化后的市值
+            'first_market_cap': token.get('first_market_cap', market_cap_value),  # 添加首次市值，如果没有则使用当前市值
             'price': format_number(token.get('price', 0)),
             'volume_1h': format_number(token.get('volume_1h', 0)),
             'volume_1h_formatted': format_number(token.get('volume_1h', 0)),  # 添加格式化后的1小时交易量
@@ -1344,6 +1376,7 @@ def process_token_data(token):
             'change_percentage': token.get('change_percentage', '0.00%'),
             'image_url': token.get('image_url', ''),  # 添加图片URL
             'likes_count': token.get('likes_count', 0),  # 添加点赞数
+            'first_update': token.get('first_update', ''),
         }
         
         # 添加社交链接
@@ -1556,45 +1589,7 @@ async def update_token_data_background(chain, contract, cache_key):
         
         # 执行数据库更新
         if updated_data:
-            # 记录历史数据到token_history表
-            try:
-                # 在更新数据库前，创建历史记录
-                history_data = {
-                    'chain': chain,
-                    'contract': contract,
-                    'token_symbol': token.get('token_symbol', ''),
-                    'timestamp': datetime.now().isoformat(),  # 将datetime对象转换为ISO格式字符串
-                    'market_cap': updated_market_cap or current_market_cap,
-                    'price': token.get('price'),
-                    'liquidity': updated_liquidity or token.get('liquidity'),
-                    'volume_24h': token.get('volume_24h'),
-                    'volume_1h': updated_volume_1h or token.get('volume_1h'),
-                    'holders_count': updated_holders_count or token.get('holders_count'),
-                    'buys_1h': updated_buys_1h or token.get('buys_1h'),
-                    'sells_1h': updated_sells_1h or token.get('sells_1h'),
-                    'community_reach': updated_community_reach or token.get('community_reach'),
-                    'spread_count': updated_spread_count or token.get('spread_count'),
-                    'market_cap_change_pct': to_decimal_or_float(change_pct) if 'change_pct' in locals() else None,
-                    'price_change_pct': token.get('price_change_24h')
-                }
-                
-                # 插入历史记录
-                history_result = await db_adapter.execute_query(
-                    'token_history',
-                    'insert',
-                    data=history_data
-                )
-                
-                if isinstance(history_result, dict) and history_result.get('error'):
-                    logger.error(f"后台更新: 记录历史数据失败: {history_result.get('error')}")
-                else:
-                    logger.info(f"后台更新: 成功记录历史数据")
-            except Exception as e:
-                logger.error(f"后台更新: 记录历史数据时出错: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-            
-            # 更新主表数据
+            # 只更新主表数据，不再记录任何历史数据
             update_result = await db_adapter.execute_query(
                 'tokens',
                 'update',
@@ -1604,24 +1599,18 @@ async def update_token_data_background(chain, contract, cache_key):
                     'contract': contract
                 }
             )
-            
             if isinstance(update_result, dict) and update_result.get('error'):
                 logger.error(f"后台更新: 更新数据库失败: {update_result.get('error')}")
             else:
                 logger.info(f"后台更新: 成功更新代币数据: {chain}/{contract}")
-                
-                # 更新缓存
                 if cache_key in API_CACHE:
                     with API_LOCK:
-                        # 获取处理后的token数据
                         processed_token = process_token_data({**token, **updated_data})
-                        # 更新缓存中的token数据部分
                         API_CACHE[cache_key]['data']['token'].update(processed_token)
-                        API_CACHE[cache_key]['timestamp'] = time.time()  # 刷新时间戳
+                        API_CACHE[cache_key]['timestamp'] = time.time()
                     logger.info(f"后台更新: 更新了API缓存数据: {cache_key}")
         else:
             logger.info(f"后台更新: 没有需要更新的数据: {chain}/{contract}")
-            
     except Exception as e:
         logger.error(f"后台更新: 更新过程中发生错误: {str(e)}")
         import traceback
@@ -1642,6 +1631,7 @@ def _format_market_cap(market_cap: float) -> str:
     return f"${market_cap:.2f}"
 
 @app.route('/api/refresh_tokens', methods=['POST'])
+@async_route
 async def api_refresh_tokens():
     """强制刷新所有代币数据或特定代币数据"""
     try:
@@ -1734,291 +1724,168 @@ async def api_refresh_tokens():
         logger.error(traceback.format_exc())
         return jsonify({"success": False, "error": f"处理请求时出错: {str(e)}"})
 
-@app.route('/api/token_history/<chain>/<contract>')
-async def api_token_history(chain, contract):
-    """获取代币历史数据API，支持时间范围过滤和数据聚合"""
-    try:
-        # 记录请求开始
-        logger.info(f"收到历史数据请求: {chain}/{contract}")
-        
-        # 获取查询参数
-        start_date = request.args.get('start_date')  # 开始日期，格式：YYYY-MM-DD
-        end_date = request.args.get('end_date')      # 结束日期，格式：YYYY-MM-DD
-        interval = request.args.get('interval', 'day') # 数据聚合间隔：hour, day, week, month
-        metrics = request.args.get('metrics', 'market_cap,price,community_reach,spread_count')  # 需要的指标
-        
-        logger.info(f"历史数据请求参数: start_date={start_date}, end_date={end_date}, interval={interval}, metrics={metrics}")
-        
-        try:
-            # 获取数据库适配器
-            from src.database.db_factory import get_db_adapter
-            db_adapter = get_db_adapter()
-            
-            # 获取代币基本信息
-            token = await db_adapter.get_token_by_contract(chain, contract)
-            
-            if not token:
-                logger.warning(f"未找到代币: {chain}/{contract}")
-                return jsonify({"success": False, "error": f"未找到代币 {chain}/{contract}"})
-            
-            # 解析需要的指标
-            metrics_list = metrics.split(',')
-            valid_metrics = ['market_cap', 'price', 'liquidity', 'volume_24h', 'volume_1h', 
-                          'holders_count', 'buys_1h', 'sells_1h', 'community_reach', 
-                          'spread_count', 'market_cap_change_pct', 'price_change_pct']
-            
-            # 过滤有效的指标
-            metrics_list = [m for m in metrics_list if m in valid_metrics]
-            
-            if not metrics_list:
-                metrics_list = ['market_cap', 'price', 'community_reach', 'spread_count']  # 默认指标
-            
-            logger.info(f"使用的指标: {metrics_list}")
-            
-            # 构建过滤条件
-            filters = {
-                'chain': chain,
-                'contract': contract
-            }
-            
-            if start_date:
-                # 过滤条件添加，实际筛选在后面处理
-                filters['start_date'] = start_date
-            
-            if end_date:
-                # 过滤条件添加，实际筛选在后面处理
-                filters['end_date'] = end_date
-            
-            # 查询历史数据
-            try:
-                result = await db_adapter.execute_query(
-                    'token_history',
-                    'select',
-                    filters={'chain': chain, 'contract': contract}
-                )
-                logger.info(f"查询历史数据结果: 获取到 {len(result) if result else 0} 条记录")
-            except Exception as e:
-                logger.error(f"查询历史数据失败: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-                result = []
-            
-            # 如果没有历史数据，使用当前数据
-            if not result or not isinstance(result, list) or len(result) == 0:
-                logger.warning(f"无历史数据，使用当前数据: {chain}/{contract}")
-                current_data = {
-                    "time_interval": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                
-                # 添加当前值
-                for metric in metrics_list:
-                    current_data[metric] = to_decimal_or_float(token.get(metric, 0))
-                    
-                history_data = [current_data]
-            else:
-                # 手动处理日期过滤和聚合
-                filtered_result = []
-                
-                # 解析起止日期
-                start_datetime = None
-                end_datetime = None
-                try:
-                    if start_date:
-                        start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
-                    if end_date:
-                        end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
-                        end_datetime = end_datetime.replace(hour=23, minute=59, second=59)
-                except ValueError as e:
-                    logger.error(f"日期格式无效: {str(e)}")
-                    return jsonify({"success": False, "error": f"日期格式无效: {str(e)}"})
-                
-                logger.info(f"过滤日期: {start_datetime} 到 {end_datetime}")
-                
-                # 筛选日期范围
-                for record in result:
-                    if 'timestamp' in record:
-                        try:
-                            # 处理不同格式的时间戳
-                            if isinstance(record['timestamp'], str):
-                                record_time = datetime.strptime(record['timestamp'].split('.')[0], '%Y-%m-%d %H:%M:%S')
-                            elif isinstance(record['timestamp'], datetime):
-                                record_time = record['timestamp']
-                            else:
-                                logger.warning(f"无效的时间戳格式: {type(record['timestamp'])} - {record['timestamp']}")
-                                continue
-                                
-                            # 应用日期过滤
-                            if start_datetime and record_time < start_datetime:
-                                continue
-                            if end_datetime and record_time > end_datetime:
-                                continue
-                                
-                            # 通过筛选的记录
-                            filtered_result.append(record)
-                        except Exception as e:
-                            logger.error(f"处理时间戳时出错: {str(e)}")
-                            continue
-                
-                logger.info(f"筛选后的记录数: {len(filtered_result)}")
-                
-                # 按照interval进行聚合
-                grouped_data = {}
-                
-                for record in filtered_result:
-                    if 'timestamp' not in record:
-                        continue
-                        
-                    timestamp = record['timestamp']
-                    if isinstance(timestamp, str):
-                        timestamp = datetime.strptime(timestamp.split('.')[0], '%Y-%m-%d %H:%M:%S')
-                    
-                    # 根据interval确定聚合键
-                    if interval == 'hour':
-                        group_key = timestamp.strftime('%Y-%m-%d %H:00:00')
-                    elif interval == 'day':
-                        group_key = timestamp.strftime('%Y-%m-%d 00:00:00')
-                    elif interval == 'week':
-                        # 计算周开始日期
-                        week_start = timestamp - timedelta(days=timestamp.weekday())
-                        group_key = week_start.strftime('%Y-%m-%d 00:00:00')
-                    elif interval == 'month':
-                        group_key = timestamp.strftime('%Y-%m-01 00:00:00')
-                    else:
-                        group_key = timestamp.strftime('%Y-%m-%d 00:00:00')  # 默认按天
-                    
-                    # 初始化分组
-                    if group_key not in grouped_data:
-                        grouped_data[group_key] = {
-                            'time_interval': group_key,
-                            'count': 0
-                        }
-                        for metric in metrics_list:
-                            grouped_data[group_key][metric] = 0
-                    
-                    # 累加指标值
-                    grouped_data[group_key]['count'] += 1
-                    for metric in metrics_list:
-                        if metric in record and record[metric] is not None:
-                            try:
-                                metric_value = to_decimal_or_float(record[metric])
-                                grouped_data[group_key][metric] += metric_value
-                            except Exception as e:
-                                logger.error(f"处理指标值出错: {metric}={record[metric]}, 错误: {str(e)}")
-                
-                # 计算平均值
-                history_data = []
-                for group_key, group_data in grouped_data.items():
-                    if group_data['count'] > 0:
-                        for metric in metrics_list:
-                            if metric in group_data:
-                                group_data[metric] = group_data[metric] / group_data['count']
-                        # 删除计数字段
-                        del group_data['count']
-                        history_data.append(group_data)
-                
-                # 按时间排序
-                history_data.sort(key=lambda x: x['time_interval'])
-                
-                logger.info(f"生成了 {len(history_data)} 条历史数据点")
-            
-            # 处理token数据
-            processed_token = process_token_data(token)
-            
-            # 构建响应数据
-            response_data = {
-                "success": True,
-                "token": processed_token,
-                "history": history_data,
-                "interval": interval,
-                "metrics": metrics_list,
-                "timestamp": time.time()
-            }
-            
-            # 返回数据
-            return jsonify(response_data)
-                
-        except Exception as e:
-            logger.error(f"获取代币历史数据时出错: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return jsonify({"success": False, "error": f"获取代币历史数据时出错: {str(e)}"})
-            
-    except Exception as e:
-        logger.error(f"处理代币历史数据请求时出错: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return jsonify({"success": False, "error": f"处理请求时出错: {str(e)}"})
-
 @app.route('/api/token_detail/<chain>/<contract>')
+@async_route
 async def api_token_detail(chain, contract):
     """获取代币详细信息API，包括基本信息、市场数据和提及历史"""
     try:
         logger.info(f"获取代币详细信息: {chain}/{contract}")
+        
+        # 设置响应超时控制
+        start_time = time.time()
+        timeout_seconds = 20  # 整个函数的最大执行时间
         
         # 检查缓存
         cache_key = f"detail_{chain}_{contract}"
         force_refresh = request.args.get('refresh', '0') == '1'
         current_time = time.time()
         
-        # 缓存时间（秒）- 30秒
-        cache_duration = 30
-        
-        # 首先检查是否存在缓存数据且未过期
-        cached_data = None
+        # 强制清除所有可能的缓存键，确保不使用旧缓存
         with API_LOCK:
-            if cache_key in API_CACHE and not force_refresh:
-                cache_data = API_CACHE[cache_key]
-                # 如果缓存有效且未过期，直接返回缓存数据
-                if current_time - cache_data['timestamp'] < cache_duration:
-                    logger.info(f"返回详情缓存数据: {chain}/{contract}")
-                    return jsonify(cache_data['data'])
+            # 清除可能的不同格式的缓存键
+            possible_keys = [
+                f"detail_{chain}_{contract}",
+                f"token_detail:{chain}:{contract}",
+                f"{chain}_{contract}"
+            ]
+            for key in possible_keys:
+                if key in API_CACHE:
+                    logger.info(f"清除缓存: {key}")
+                    del API_CACHE[key]
         
-        # 使用Supabase适配器获取数据
-        from supabase import create_client
-        
-        supabase_url = config.SUPABASE_URL
-        supabase_key = config.SUPABASE_KEY
-        
-        if not supabase_url or not supabase_key:
-            logger.error("缺少SUPABASE_URL或SUPABASE_KEY配置")
-            return jsonify({"success": False, "error": "数据库配置不完整"})
-            
-        # 创建Supabase客户端
-        supabase = create_client(supabase_url, supabase_key)
+        # 使用数据库适配器获取数据
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        logger.info(f"已获取数据库适配器: {db_adapter.__class__.__name__}")
         
         # 获取代币基本信息
-        token_response = supabase.table('tokens').select('*').eq('chain', chain).eq('contract', contract).limit(1).execute()
-        token = token_response.data[0] if hasattr(token_response, 'data') and token_response.data and len(token_response.data) > 0 else None
+        logger.info(f"正在查询代币基本信息: chain={chain}, contract={contract}")
+        try:
+            # 添加超时控制
+            token_result = await asyncio.wait_for(
+                db_adapter.execute_query(
+                    'tokens',
+                    'select',
+                    filters={'chain': chain, 'contract': contract},
+                    limit=1
+                ),
+                timeout=10  # 最多等待10秒
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"查询代币基本信息超时: {chain}/{contract}")
+            return jsonify({
+                "success": False, 
+                "error": "查询代币信息超时，请稍后重试",
+                "timeout": True
+            }), 408
+        
+        logger.info(f"代币查询结果: {token_result != None}, 类型: {type(token_result)}, 长度: {len(token_result) if token_result else 0}")
+        
+        token = token_result[0] if token_result and len(token_result) > 0 else None
         
         if not token:
             logger.warning(f"未找到代币: {chain}/{contract}")
-            return jsonify({"success": False, "error": f"未找到代币 {chain}/{contract}"})
+            return jsonify({"success": False, "error": f"未找到代币 {chain}/{contract}"}), 404
         
         # 处理token数据，确保格式一致
         processed_token = process_token_data(token)
+        logger.info(f"已处理token数据: {processed_token.get('token_symbol')}")
+        
+        # 检查是否已经接近超时阈值，如果是，直接返回简化结果
+        if time.time() - start_time > timeout_seconds * 0.6:
+            logger.warning(f"处理时间过长，返回简化结果: {time.time() - start_time:.2f}秒")
+            return jsonify({
+                "success": True,
+                "token": processed_token,
+                "mention_history": [],
+                "channel_stats": [],
+                "market_cap_history": [],
+                "timestamp": time.time(),
+                "simplified": True,
+                "elapsed_time": time.time() - start_time
+            })
         
         # 获取代币提及历史
-        mentions_response = supabase.table('tokens_mark').select('*').eq('chain', chain).eq('contract', contract).order('mention_time', desc=True).limit(20).execute()
-        mentions = mentions_response.data if hasattr(mentions_response, 'data') else []
+        logger.info(f"正在查询代币提及历史")
+        try:
+            # 添加超时控制
+            mentions_result = await asyncio.wait_for(
+                db_adapter.execute_query(
+                    'tokens_mark',
+                    'select',
+                    filters={'chain': chain, 'contract': contract},
+                    order_by={'mention_time': 'desc'},
+                    limit=20
+                ),
+                timeout=6  # 最多等待6秒
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"查询提及历史超时: {chain}/{contract}")
+            # 返回简化结果，只包含基本token信息
+            return jsonify({
+                "success": True,
+                "token": processed_token,
+                "mention_history": [],
+                "channel_stats": [],
+                "market_cap_history": [],
+                "timestamp": time.time(),
+                "timeout": True
+            })
+        
+        logger.info(f"提及历史查询结果: {mentions_result != None}, 长度: {len(mentions_result) if mentions_result else 0}")
+        
+        mentions = mentions_result if mentions_result else []
         
         # 格式化提及历史数据
         mention_history = []
         channel_stats = {}  # 用于统计各频道的提及情况
+        channel_cache = {}  # 缓存频道信息，避免重复查询
         
-        for mention in mentions:
+        # 限制处理的记录数量
+        max_mentions = min(10, len(mentions))
+        logger.info(f"将处理前 {max_mentions} 条提及记录")
+        
+        for i in range(max_mentions):
+            mention = mentions[i]
             channel_id = mention.get('channel_id')
             mention_time = mention.get('mention_time')
             market_cap = mention.get('market_cap')
             message_id = mention.get('message_id')
             
+            # 检查是否已接近超时
+            if time.time() - start_time > timeout_seconds * 0.8:
+                logger.warning(f"处理提及记录时间过长，提前中断: {time.time() - start_time:.2f}秒")
+                break
+            
             if channel_id and mention_time:
                 try:
-                    # 获取频道信息
-                    channel_response = supabase.table('telegram_channels').select('*').eq('channel_id', channel_id).limit(1).execute()
-                    channel = channel_response.data[0] if hasattr(channel_response, 'data') and channel_response.data and len(channel_response.data) > 0 else None
-                    
-                    channel_name = channel.get('channel_name') if channel else '未知频道'
-                    member_count = channel.get('member_count') if channel else 0
+                    # 优先从缓存中获取频道信息
+                    if channel_id in channel_cache:
+                        channel = channel_cache[channel_id]
+                        channel_name = channel.get('channel_name') if channel else '未知频道'
+                        member_count = channel.get('member_count') if channel else 0
+                    else:
+                        # 获取频道信息
+                        try:
+                            channel_result = await asyncio.wait_for(
+                                db_adapter.execute_query(
+                                    'telegram_channels',
+                                    'select',
+                                    filters={'channel_id': channel_id},
+                                    limit=1
+                                ),
+                                timeout=3  # 每个频道查询最多3秒
+                            )
+                            
+                            channel = channel_result[0] if channel_result and len(channel_result) > 0 else None
+                            channel_cache[channel_id] = channel  # 缓存频道信息
+                            
+                            channel_name = channel.get('channel_name') if channel else '未知频道'
+                            member_count = channel.get('member_count') if channel else 0
+                        except asyncio.TimeoutError:
+                            logger.warning(f"查询频道信息超时: {channel_id}")
+                            channel_name = '未知频道'
+                            member_count = 0
                     
                     # 添加到历史记录
                     mention_history.append({
@@ -2054,27 +1921,80 @@ async def api_token_detail(chain, contract):
                     logger.error(f"处理频道提及数据错误: {str(e)}")
                     continue
         
+        # 检查是否已接近超时
+        if time.time() - start_time > timeout_seconds * 0.85:
+            logger.warning(f"市值历史处理前已接近超时: {time.time() - start_time:.2f}秒")
+            # 构建简化响应数据，不处理市值历史
+            response_data = {
+                "success": True,
+                "token": processed_token,
+                "mention_history": mention_history,
+                "channel_stats": list(channel_stats.values()),
+                "market_cap_history": [],
+                "timestamp": time.time(),
+                "simplified": True,
+                "elapsed_time": time.time() - start_time
+            }
+            
+            logger.info(f"由于接近超时，返回简化数据，不包含市值历史")
+            return jsonify(response_data)
+        
         # 构建市值历史数据，用于绘制图表
+        logger.info("构建市值历史数据")
+        
+        # 确保所有提及历史记录都有有效的mention_time
+        valid_mentions = []
+        for mention in mention_history:
+            if mention.get('mention_time'):
+                valid_mentions.append(mention)
+            else:
+                logger.warning(f"跳过无效的提及记录: 缺少mention_time")
+        
         # 按时间排序
-        mention_history.sort(key=lambda x: x['mention_time'] if isinstance(x['mention_time'], str) else x['mention_time'].isoformat())
+        try:
+            # 确保所有mention_time都是相同的格式
+            for mention in valid_mentions:
+                if isinstance(mention['mention_time'], str):
+                    try:
+                        # 尝试转换为datetime对象以确保格式一致
+                        dt = datetime.fromisoformat(mention['mention_time'].replace('Z', '+00:00'))
+                        mention['mention_time'] = dt.isoformat()
+                    except ValueError:
+                        logger.warning(f"无法解析时间格式: {mention['mention_time']}")
+            
+            valid_mentions.sort(key=lambda x: x['mention_time'])
+            logger.info(f"已排序 {len(valid_mentions)} 条提及历史数据")
+        except Exception as e:
+            logger.error(f"排序提及历史时出错: {str(e)}")
+            # 出错时不排序，保持原始顺序
         
         # 提取市值历史数据
         market_cap_history = []
-        for mention in mention_history:
+        for mention in valid_mentions:
             if mention.get('market_cap'):
-                market_cap_history.append({
-                    'time': mention['mention_time'] if isinstance(mention['mention_time'], str) else mention['mention_time'].isoformat(),
-                    'value': float(mention['market_cap'])
-                })
+                try:
+                    market_cap_history.append({
+                        'time': mention['mention_time'],
+                        'value': float(mention['market_cap'])
+                    })
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"处理市值历史数据出错: {str(e)}, market_cap={mention.get('market_cap')}")
+        
+        logger.info(f"生成了 {len(market_cap_history)} 条市值历史数据")
+        
+        # 记录总处理时间
+        elapsed_time = time.time() - start_time
+        logger.info(f"总处理时间: {elapsed_time:.2f}秒")
         
         # 构建响应数据
         response_data = {
             "success": True,
             "token": processed_token,
-            "mention_history": mention_history,
+            "mention_history": valid_mentions,  # 使用有效的提及历史记录
             "channel_stats": list(channel_stats.values()),
             "market_cap_history": market_cap_history,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "elapsed_time": elapsed_time
         }
         
         # 更新缓存
@@ -2083,16 +2003,31 @@ async def api_token_detail(chain, contract):
                 'data': response_data,
                 'timestamp': time.time()
             }
+            logger.info(f"已更新缓存: {cache_key}")
         
+        logger.info("准备返回token详情数据")
         return jsonify(response_data)
+    
+    except asyncio.CancelledError:
+        logger.error(f"请求被取消: {chain}/{contract}")
+        return jsonify({
+            "success": False, 
+            "error": "请求被取消，可能是由于客户端断开连接",
+            "cancelled": True
+        }), 499
         
     except Exception as e:
         logger.error(f"获取代币详情时出错: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
-        return jsonify({"success": False, "error": f"获取代币详情时出错: {str(e)}"})
+        return jsonify({
+            "success": False, 
+            "error": f"获取代币详情时出错: {str(e)}",
+            "error_traceback": traceback.format_exc() if app.debug else None
+        }), 500
 
 @app.route('/api/refresh_token/<chain>/<contract>', methods=['POST'])
+@async_route
 async def api_refresh_token(chain, contract):
     """
     刷新单个代币的所有数据

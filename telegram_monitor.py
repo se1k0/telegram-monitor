@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 导入项目模块
 from src.utils.logger import setup_logger, get_logger
 from src.core.telegram_listener import TelegramListener
+from src.core.telegram_client_factory import TelegramClientFactory
 from src.database.models import init_db
 from src.database.db_handler import cleanup_batch_tasks
 from src.web.web_app import start_web_server
@@ -31,11 +32,9 @@ from src.utils.error_handler import ErrorMonitor, monitor_errors
 from config.settings import load_config, DATABASE_URI
 # 导入调度器和代币更新器
 from src.utils.scheduler import scheduler
-from src.api.token_updater import hourly_update
+from src.api.token_updater import token_update
 # 导入数据库工厂
 from src.database.db_factory import get_db_adapter
-# 导入代币历史数据调度器
-from src.utils.token_history_scheduler import register_token_history_tasks
 
 # 设置日志
 logger = get_logger(__name__)
@@ -229,7 +228,7 @@ async def start_telegram_listener(config: Dict[str, Any]):
         config: 配置字典
         
     Returns:
-        TelegramListener: 启动后的监听器实例
+        TelegramListener: 启动后的监听器实例，如果启动失败则返回None
     """
     try:
         # 导入TelegramListener类
@@ -237,9 +236,14 @@ async def start_telegram_listener(config: Dict[str, Any]):
         
         # 创建并启动监听器
         listener = TelegramListener()
-        started_listener = await listener.start()
-        logger.info("Telegram监听器已成功启动")
-        return started_listener
+        start_result = await listener.start()
+        
+        if start_result:
+            logger.info("Telegram监听器已成功启动")
+            return listener
+        else:
+            logger.error("Telegram监听器启动失败")
+            return None
     except Exception as e:
         logger.error(f"启动Telegram监听器时出错: {str(e)}")
         import traceback
@@ -351,48 +355,128 @@ async def start_scheduler(config: Dict[str, Any]) -> None:
         
         # 获取代币更新配置
         token_update_config = config.get('token_update', {})
-        token_limit = token_update_config.get('limit', 500)
+        token_limit = token_update_config.get('limit', 20)
+        token_interval = token_update_config.get('interval', 2)
         
-        # 注册每小时整点执行的代币更新任务
-        logger.info("注册每小时整点代币数据更新任务...")
+        # 注册按配置的间隔时间执行代币更新任务 - 已禁用
+        logger.info(f"代币数据更新任务已被禁用")
         
-        # 确保token_updater模块被正确导入
-        try:
-            from src.api.token_updater import hourly_update
-            logger.info("成功导入hourly_update函数")
-        except Exception as e:
-            logger.error(f"导入hourly_update函数失败: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return
-            
-        # 设置每小时更新任务
-        scheduler.schedule_hourly_task(
-            'hourly_token_update',
-            hourly_update,
-            args=(token_limit,)
-        )
-        
-        logger.info(f"代币数据更新任务已注册，每小时整点执行，限制更新数量: {token_limit}")
-        
-        # 注册每天0点和12点执行的token历史数据记录任务
-        logger.info("注册每天0点和12点token历史数据记录任务...")
-        try:
-            from src.utils.token_history_scheduler import register_token_history_tasks
-            register_success = register_token_history_tasks()
-            if register_success:
-                logger.info("token历史数据记录任务注册成功")
-            else:
-                logger.error("token历史数据记录任务注册失败")
-        except Exception as e:
-            logger.error(f"注册token历史数据记录任务时出错: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+        # # 确保token_updater模块被正确导入
+        # try:
+        #     from src.api.token_updater import token_update
+        #     logger.info("成功导入token_update函数")
+        # except Exception as e:
+        #     logger.error(f"导入token_update函数失败: {str(e)}")
+        #     import traceback
+        #     logger.error(traceback.format_exc())
+        #     return
+        #     
+        # # 计算间隔时间（秒）
+        # interval_seconds = token_interval * 60
+        # 
+        # # 设置定时更新任务
+        # scheduler.schedule_task(
+        #     'token_update_task',
+        #     token_update,
+        #     args=(token_limit,),
+        #     interval=interval_seconds
+        # )
+        # 
+        # logger.info(f"代币数据更新任务已注册，每{token_interval}分钟执行一次，限制更新数量: {token_limit}")
         
     except Exception as e:
         logger.error(f"启动调度器和定时任务失败: {str(e)}")
         import traceback
         logger.debug(traceback.format_exc())
+
+
+async def health_check():
+    """
+    执行应用的健康检查
+    
+    Returns:
+        tuple: (是否健康, 消息)
+    """
+    try:
+        # 检查全局变量
+        global telegram_listener
+        
+        # 1. 检查监听器实例是否存在
+        if telegram_listener is None:
+            return False, "Telegram监听器未初始化"
+            
+        # 2. 检查监听器是否正在运行
+        if not telegram_listener.is_running:
+            return False, "Telegram监听器未运行"
+            
+        # 3. 检查客户端连接状态
+        if not telegram_listener.client or not telegram_listener.client.is_connected():
+            logger.warning("Telegram客户端未连接，尝试重新连接...")
+            
+            # 使用工厂类进行更有效的重连
+            try:
+                # 如果客户端存在，尝试直接重连
+                if telegram_listener.client:
+                    logger.info("尝试重新连接现有客户端...")
+                    if not telegram_listener.client.is_connected():
+                        await telegram_listener.client.connect()
+                    if await telegram_listener.client.is_user_authorized():
+                        logger.info("重新连接现有客户端成功")
+                        return True, "重新连接现有客户端成功"
+                
+                # 如果直接重连失败，使用工厂类获取新客户端
+                logger.info("使用客户端工厂重连...")
+                telegram_listener.client = await TelegramClientFactory.get_client(
+                    telegram_listener.session_path,
+                    telegram_listener.api_id,
+                    telegram_listener.api_hash,
+                    connection_retries=telegram_listener.connection_retries,
+                    auto_reconnect=telegram_listener.auto_reconnect,
+                    retry_delay=telegram_listener.retry_delay,
+                    request_retries=telegram_listener.request_retries,
+                    flood_sleep_threshold=telegram_listener.flood_sleep_threshold,
+                    timeout=30
+                )
+                
+                # 检查新客户端是否连接成功
+                if telegram_listener.client and telegram_listener.client.is_connected() and await telegram_listener.client.is_user_authorized():
+                    logger.info("使用客户端工厂重连成功")
+                    
+                    # 重新注册消息处理器
+                    await telegram_listener.reinitialize_handlers()
+                    logger.info("已重新注册消息处理器")
+                    
+                    return True, "使用客户端工厂重连成功"
+                else:
+                    logger.error("重连失败，客户端未授权")
+                    return False, "重连失败，客户端未授权"
+                    
+            except Exception as e:
+                logger.error(f"重连过程中出错: {e}")
+                return False, f"重连过程中出错: {str(e)}"
+            
+        # 4. 检查客户端授权状态
+        try:
+            if not await telegram_listener.client.is_user_authorized():
+                logger.error("Telegram客户端未授权")
+                return False, "Telegram客户端未授权"
+        except Exception as e:
+            logger.error(f"检查授权状态时出错: {str(e)}")
+            return False, f"检查授权状态时出错: {str(e)}"
+            
+        # 5. 获取当前连接计数
+        connection_count = TelegramClientFactory.get_connection_count()
+        if connection_count > 5:  # 如果连接计数异常高，记录警告
+            logger.warning(f"检测到高连接计数: {connection_count}，可能存在连接泄漏")
+            
+        # 一切正常
+        return True, "Telegram监听服务正常运行"
+            
+    except Exception as e:
+        logger.error(f"健康检查时出错: {str(e)}")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return False, f"健康检查时出错: {str(e)}"
 
 
 async def shutdown() -> None:
@@ -425,6 +509,13 @@ async def shutdown() -> None:
             logger.debug(traceback.format_exc())
         # 确保引用被释放
         telegram_listener = None
+    
+    # 确保所有Telegram连接都已关闭
+    try:
+        await TelegramClientFactory.disconnect_client()
+        logger.info("已断开所有Telegram连接")
+    except Exception as e:
+        logger.error(f"断开Telegram连接时出错: {str(e)}")
     
     # 关闭Web服务器
     global web_server_process
@@ -486,26 +577,63 @@ async def periodic_tasks() -> None:
     """
     try:
         while not shutdown_event.is_set():
-            try:
-                # 监控错误
-                monitor_errors()
+            # 检查连接状态
+            if telegram_listener and telegram_listener.client and not telegram_listener.client.is_connected():
+                logger.warning("检测到Telegram连接已断开，尝试重新连接...")
                 
-                # 等待一段时间，但可以被中断
-                try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=60)  # 每分钟检查一次，而不是每小时
-                    if shutdown_event.is_set():
-                        logger.info("检测到关闭事件，定期任务退出")
-                        break
-                except asyncio.TimeoutError:
-                    # 超时，继续循环
-                    pass
-            except Exception as e:
-                logger.error(f"执行定期任务时出错: {str(e)}")
-                await asyncio.sleep(10)  # 出错后短暂休息
+                # 使用客户端工厂进行重连
+                telegram_listener.client = await TelegramClientFactory.get_client(
+                    telegram_listener.session_path,
+                    telegram_listener.api_id,
+                    telegram_listener.api_hash,
+                    connection_retries=telegram_listener.connection_retries,
+                    auto_reconnect=telegram_listener.auto_reconnect,
+                    retry_delay=telegram_listener.retry_delay,
+                    request_retries=telegram_listener.request_retries,
+                    flood_sleep_threshold=telegram_listener.flood_sleep_threshold,
+                    timeout=30
+                )
+                
+                # 重新注册消息处理器
+                if telegram_listener.client and telegram_listener.client.is_connected():
+                    logger.info("重连成功，重新注册消息处理器")
+                    await telegram_listener.reinitialize_handlers()
+            
+            # 清理过多的会话
+            try:
+                # 如果连接计数过高，尝试进行一次连接重置
+                connection_count = TelegramClientFactory.get_connection_count()
+                if connection_count > 5:  # 如果连接计数异常高
+                    logger.warning(f"检测到高连接计数: {connection_count}，正在尝试重置连接...")
+                    await TelegramClientFactory.disconnect_client()
+                    
+                    # 重新获取连接
+                    telegram_listener.client = await TelegramClientFactory.get_client(
+                        telegram_listener.session_path,
+                        telegram_listener.api_id,
+                        telegram_listener.api_hash,
+                        connection_retries=telegram_listener.connection_retries,
+                        auto_reconnect=telegram_listener.auto_reconnect,
+                        retry_delay=telegram_listener.retry_delay,
+                        request_retries=telegram_listener.request_retries,
+                        flood_sleep_threshold=telegram_listener.flood_sleep_threshold,
+                        timeout=30
+                    )
+                    
+                    # 重新注册消息处理器
+                    if telegram_listener.client and telegram_listener.client.is_connected():
+                        await telegram_listener.reinitialize_handlers()
+                        logger.info("连接已重置，消息处理器已重新注册")
+            except Exception as cleanup_error:
+                logger.error(f"清理连接时出错: {str(cleanup_error)}")
+            
+            # 等待下一次检查
+            await asyncio.sleep(60)  # 每分钟检查一次
+            
     except asyncio.CancelledError:
-        logger.info("定期任务被取消")
-    finally:
-        logger.info("定期任务已退出")
+        logger.info("定期任务已取消")
+    except Exception as e:
+        logger.error(f"执行定期任务时出错: {str(e)}")
 
 
 async def main_async(config: Dict[str, Any], no_web: bool, no_telegram: bool) -> None:
@@ -534,12 +662,23 @@ async def main_async(config: Dict[str, Any], no_web: bool, no_telegram: bool) ->
         periodic_task = asyncio.create_task(periodic_tasks())
         
         # 启动Telegram监听器
+        telegram_task = None
         if not no_telegram:
             logger.info("开始启动Telegram监听器...")
             global telegram_listener
             
             # 不同操作系统使用统一的启动方式
             telegram_task = asyncio.create_task(start_telegram_listener_background(config))
+            
+            # 等待监听器启动完成
+            try:
+                await asyncio.wait_for(telegram_task, timeout=30)
+                if not telegram_listener:
+                    logger.error("Telegram监听器启动失败")
+            except asyncio.TimeoutError:
+                logger.error("Telegram监听器启动超时")
+            except Exception as e:
+                logger.error(f"Telegram监听器启动出错: {str(e)}")
             
         # 等待关闭事件
         try:
@@ -557,7 +696,12 @@ async def main_async(config: Dict[str, Any], no_web: bool, no_telegram: bool) ->
             # 确保Telegram监听器正确关闭
             if not no_telegram and telegram_listener:
                 logger.debug("关闭Telegram监听器...")
-                await telegram_listener.stop()
+                try:
+                    await telegram_listener.stop()
+                except Exception as e:
+                    logger.error(f"关闭Telegram监听器时出错: {str(e)}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
     except KeyboardInterrupt:
         logger.info("接收到键盘中断")
         shutdown_event.set()

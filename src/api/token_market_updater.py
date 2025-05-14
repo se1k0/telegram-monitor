@@ -625,27 +625,6 @@ class TokenMarketUpdater:
             if isinstance(token_result, list) and len(token_result) > 0:
                 token = token_result[0]
                 prev_market_cap = token.get('market_cap')
-                
-                # 查询1小时前的历史记录来获取真实的1小时前市值
-                one_hour_ago = (datetime.now() - timedelta(hours=1)).isoformat()
-                history_result = await db_adapter.execute_query(
-                    'token_history',
-                    'select',
-                    filters={
-                        'chain': chain,
-                        'contract': contract,
-                        'timestamp': {'$lte': one_hour_ago}
-                    },
-                    order_by={'timestamp': 'desc'},
-                    limit=1
-                )
-                
-                # 如果找到了1小时前的记录，使用它的市值作为market_cap_1h
-                if isinstance(history_result, list) and len(history_result) > 0:
-                    one_hour_ago_record = history_result[0]
-                    if 'market_cap' in one_hour_ago_record and one_hour_ago_record['market_cap'] > 0:
-                        logger.info(f"从历史记录中获取到1小时前的市值: {one_hour_ago_record['market_cap']}")
-                        prev_market_cap = one_hour_ago_record['market_cap']
             
             # 准备更新数据
             token_data = {
@@ -705,44 +684,6 @@ class TokenMarketUpdater:
             
             logger.info(f"成功更新代币 {chain}/{contract} 的综合数据")
             logger.info(f"市值: {max_market_cap}, 上一小时市值: {prev_market_cap}, 流动性: {max_liquidity}, 1小时买入: {total_buys_1h}, 1小时卖出: {total_sells_1h}, 1小时交易量: {total_volume_1h}")
-            
-            # 记录历史数据到token_history表
-            try:
-                # 创建历史记录
-                history_data = {
-                    'chain': chain,
-                    'contract': contract,
-                    'token_symbol': symbol or (token.get('token_symbol') if token else ""),
-                    'timestamp': datetime.now().isoformat(),  # 将datetime对象转换为ISO格式字符串
-                    'market_cap': max_market_cap,
-                    'price': price,
-                    'liquidity': max_liquidity,
-                    'volume_24h': token.get('volume_24h') if token else None,
-                    'volume_1h': total_volume_1h,
-                    'holders_count': holders_count or (token.get('holders_count') if token else 0),
-                    'buys_1h': total_buys_1h,
-                    'sells_1h': total_sells_1h,
-                    'community_reach': token.get('community_reach') if token else 0,
-                    'spread_count': token.get('spread_count') if token else 0,
-                    'market_cap_change_pct': token.get('last_calculated_change_pct') if token else 0,
-                    'price_change_pct': token.get('price_change_24h') if token else 0
-                }
-                
-                # 插入历史记录
-                history_result = await db_adapter.execute_query(
-                    'token_history',
-                    'insert',
-                    data=history_data
-                )
-                
-                if isinstance(history_result, dict) and history_result.get('error'):
-                    logger.error(f"记录代币 {chain}/{contract} 历史数据失败: {history_result.get('error')}")
-                else:
-                    logger.info(f"成功记录代币 {chain}/{contract} 的历史数据")
-            except Exception as history_error:
-                logger.error(f"记录代币历史数据时出错: {str(history_error)}")
-                import traceback
-                logger.error(traceback.format_exc())
             
             # 在返回结果中包含所有字段
             return {
@@ -1114,39 +1055,7 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             if dex_screener_url:
                 token_data['dexscreener_url'] = dex_screener_url
             
-            # 记录历史数据
-            try:
-                # 创建历史记录
-                history_data = {
-                    'chain': chain,
-                    'contract': contract,
-                    'token_symbol': symbol or token.get('token_symbol', ''),
-                    'timestamp': datetime.now().isoformat(),
-                    'market_cap': max_market_cap,
-                    'price': price or token.get('price'),
-                    'liquidity': max_liquidity,
-                    'volume_24h': token.get('volume_24h', 0),
-                    'volume_1h': volume_1h,
-                    'holders_count': holders_count or token.get('holders_count', 0),
-                    'buys_1h': buys_1h,
-                    'sells_1h': sells_1h,
-                    'community_reach': token.get('community_reach', 0),
-                    'spread_count': token.get('spread_count', 0),
-                    'market_cap_change_pct': (max_market_cap - token.get('market_cap')) / token.get('market_cap') * 100 if token.get('market_cap') and token.get('market_cap') > 0 and max_market_cap > 0 else 0,
-                    'price_change_pct': token.get('price_change_24h', 0)
-                }
-                
-                # 插入历史记录
-                await db_adapter.execute_query(
-                    'token_history', 
-                    'insert', 
-                    data=history_data
-                )
-                logger.info(f"成功记录代币 {chain}/{contract} 的历史数据")
-            except Exception as history_error:
-                logger.error(f"记录历史数据时出错: {str(history_error)}")
-            
-            # 执行更新
+            # 更新数据库
             update_result = await db_adapter.execute_query('tokens', 'update', data=token_data, filters={'chain': chain, 'contract': contract})
             
             if isinstance(update_result, dict) and update_result.get('error'):
@@ -1358,14 +1267,7 @@ async def delete_token_data(chain: str, contract: str, double_check: bool = True
                     pools_data = get_token_pools(chain_id, contract)
                     
                     # 验证API返回结果
-                    if not isinstance(pools_data, dict) or "error" not in pools_data:
-                        # 如果API没有返回错误且返回了有效数据，说明代币可能仍然存在
-                        if isinstance(pools_data, list) and len(pools_data) > 0:
-                            logger.warning(f"代币 {chain}/{contract} 在DEX上仍然存在，取消删除操作")
-                            result["error"] = "代币在DEX上仍然存在，取消删除操作"
-                            result["pools_data"] = pools_data
-                            return result
-                    else:
+                    if isinstance(pools_data, dict) and "error" in pools_data:
                         # API返回了错误，检查错误类型
                         error_msg = str(pools_data.get("error", "")).lower()
                         if "not found" in error_msg or "no pools found" in error_msg:
@@ -1374,6 +1276,20 @@ async def delete_token_data(chain: str, contract: str, double_check: bool = True
                             # 其他类型的错误，可能是API限制等
                             logger.warning(f"二次验证时遇到API错误: {error_msg}，谨慎处理")
                             # 如果是API限制或其他类型的错误，我们仍然继续删除流程
+                    elif isinstance(pools_data, list):
+                        # 处理列表类型的返回结果
+                        if len(pools_data) > 0:
+                            # 如果返回非空列表，说明代币存在
+                            logger.warning(f"代币 {chain}/{contract} 在DEX上仍然存在，取消删除操作")
+                            result["error"] = "代币在DEX上仍然存在，取消删除操作"
+                            result["pools_data"] = pools_data
+                            return result
+                        else:
+                            # 明确处理空列表情况，确认代币不存在
+                            logger.info(f"二次验证确认: 代币 {chain}/{contract} 在DEX上不存在（API返回空列表）")
+                    else:
+                        # 处理其他未预期的返回类型
+                        logger.warning(f"DEX API返回了未预期的数据类型: {type(pools_data).__name__}, 谨慎处理")
             except Exception as e:
                 logger.error(f"二次验证时出错: {str(e)}")
                 # 发生错误时，我们继续删除流程，但记录警告
@@ -1413,18 +1329,6 @@ async def delete_token_data(chain: str, contract: str, double_check: bool = True
             logger.info(f"已删除代币 {chain}/{contract} 的标记数据")
         except Exception as e:
             logger.error(f"删除代币标记数据时出错: {str(e)}")
-            # 继续执行，不中断流程
-        
-        # 删除代币历史数据
-        try:
-            history_result = await db_adapter.execute_query(
-                'token_history',
-                'delete',
-                filters={'chain': chain, 'contract': contract}
-            )
-            logger.info(f"已删除代币 {chain}/{contract} 的历史数据")
-        except Exception as e:
-            logger.error(f"删除代币历史数据时出错: {str(e)}")
             # 继续执行，不中断流程
         
         # 最后删除代币主记录

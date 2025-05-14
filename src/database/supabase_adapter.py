@@ -10,13 +10,16 @@ import os
 import sys
 import logging
 import asyncio
+import time
+import random
 from typing import Dict, Any, List, Optional, Union, Tuple
 from datetime import datetime
 
 try:
     from supabase import create_client, Client
+    import httpx
 except ImportError:
-    raise ImportError("未安装supabase库，请运行：pip install supabase")
+    raise ImportError("未安装supabase库，请运行：pip install supabase httpx")
 
 # 导入配置
 try:
@@ -79,166 +82,280 @@ class SupabaseAdapter:
         """初始化Supabase适配器"""
         self.supabase = supabase
         self.supabase_admin = supabase_admin if supabase_admin else supabase
+        # 设置重试配置
+        self.max_retries = 5  # 最大重试次数
+        self.base_delay = 1   # 初始延迟秒数
+        self.max_delay = 30   # 最大延迟秒数
         
     async def execute_query(self, table: str, query_type: str, data: Dict[str, Any] = None, 
                            filters: Dict[str, Any] = None, limit: int = None, fields: List[str] = None,
                            order_by: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        执行Supabase查询
+        执行数据库查询
         
         Args:
             table: 表名
-            query_type: 查询类型 (select, insert, update, upsert, delete)
+            query_type: 查询类型 (select/insert/update/delete/upsert)
             data: 要插入或更新的数据
             filters: 过滤条件
-            limit: 限制返回记录数
-            fields: 要选择的字段列表（仅用于select操作）
-            order_by: 排序参数，例如 {'column': 'created_at', 'ascending': False}
+            limit: 限制返回结果数量
+            fields: 要查询的字段列表
+            order_by: 排序条件
             
         Returns:
             查询结果
         """
-        try:
-            # 根据操作类型选择合适的客户端
-            # 读取操作使用普通客户端，写入操作使用管理客户端
-            if query_type == 'select':
+        retry_count = 0
+        last_error = None
+        
+        while retry_count <= self.max_retries:
+            try:
+                # 重试逻辑：第一次尝试立即执行，后续重试则增加延迟
+                if retry_count > 0:
+                    # 计算指数退避延迟时间（带随机抖动）
+                    delay = min(self.base_delay * (2 ** (retry_count - 1)) + random.uniform(0, 1), self.max_delay)
+                    logger.warning(f"第 {retry_count} 次重试执行查询 {query_type} on {table}，等待 {delay:.2f} 秒...")
+                    await asyncio.sleep(delay)
+                
+                # 获取表引用
                 query = self.supabase.table(table)
-            else:
-                query = self.supabase_admin.table(table)
-            
-            if query_type == 'select':
-                # 构建查询
-                # 处理字段选择
-                if fields and isinstance(fields, list) and len(fields) > 0:
-                    # 使用指定的字段列表
-                    field_str = ",".join(fields)
-                    select_query = query.select(field_str)
-                else:
-                    # 默认选择所有字段
-                    select_query = query.select("*")
                 
-                if filters:
-                    # 对于Supabase的Python客户端，我们需要使用eq、gt等方法来过滤
-                    # 应用过滤条件
-                    for key, value in filters.items():
-                        # 处理不同类型的过滤条件
-                        if isinstance(value, tuple) and len(value) == 2:
-                            operator, val = value
-                            if operator == '=':
-                                select_query = select_query.eq(key, val)
-                            elif operator == '>':
-                                select_query = select_query.gt(key, val)
-                            elif operator == '<':
-                                select_query = select_query.lt(key, val)
-                            # 其他操作符...
-                        else:
-                            # 默认使用相等操作符
-                            select_query = select_query.eq(key, value)
-                
-                # 应用排序
-                if order_by and isinstance(order_by, dict) and 'column' in order_by:
-                    column = order_by['column']
-                    # 默认为升序，除非显式指定为降序
-                    ascending = order_by.get('ascending', True)
-                    select_query = select_query.order(column, desc=(not ascending))
-                    
-                # 应用限制
-                if limit:
-                    select_query = select_query.limit(limit)
-                
-                # 执行查询
-                result = select_query.execute()
-                return result.data
-                
-            elif query_type == 'insert':
+                # 处理datetime对象
                 if data:
-                    # 如果提供了数据字典，去除id字段，让数据库自动生成
-                    if isinstance(data, dict) and 'id' in data and data['id'] is None:
-                        data = {k: v for k, v in data.items() if k != 'id'}
-                    # 如果提供了数据列表，对每一项都去除id字段
+                    if isinstance(data, dict):
+                        for key, value in data.items():
+                            if isinstance(value, datetime):
+                                data[key] = value.isoformat()
                     elif isinstance(data, list):
                         for item in data:
-                            if isinstance(item, dict) and 'id' in item and item['id'] is None:
-                                item.pop('id')
-                    
-                    result = query.insert(data).execute()
-                    return result.data
-                    
-            elif query_type == 'update':
-                if data and filters:
-                    # 从data中移除id字段，避免更新主键
-                    if isinstance(data, dict) and 'id' in data:
-                        data = {k: v for k, v in data.items() if k != 'id'}
+                            if isinstance(item, dict):
+                                for key, value in item.items():
+                                    if isinstance(value, datetime):
+                                        item[key] = value.isoformat()
                 
-                    # 构建更新查询
-                    update_query = query.update(data)
+                # 处理filters中的datetime对象
+                if filters:
+                    for key, value in filters.items():
+                        if isinstance(value, datetime):
+                            filters[key] = value.isoformat()
+                
+                # 根据查询类型执行相应的操作
+                if query_type == 'select':
+                    # 构建查询
+                    select_query = query.select('*' if not fields else ','.join(fields))
                     
                     # 应用过滤条件
-                    for key, value in filters.items():
-                        update_query = update_query.eq(key, value)
-                    
-                    # 执行更新
-                    result = update_query.execute()
-                    
-                    # 检查更新结果
-                    if not result or not hasattr(result, 'data'):
-                        logger.error(f"更新操作没有返回预期的结果: {result}")
-                        return {'error': '更新操作失败，没有返回预期的结果'}
-                        
-                    # 检查是否真的更新了数据
-                    if not result.data:
-                        logger.warning(f"更新操作可能未影响任何记录，返回空结果: {result}")
-                        
-                        # 使用查询确认记录是否存在
-                        check_query = self.supabase.table(table).select('*')
+                    if filters:
                         for key, value in filters.items():
-                            check_query = check_query.eq(key, value)
+                            # 处理比较操作 - 支持元组形式的比较操作符
+                            if isinstance(value, tuple) and len(value) == 2:
+                                operator, val = value
+                                if operator == '<':
+                                    select_query = select_query.lt(key, val)
+                                elif operator == '<=':
+                                    select_query = select_query.lte(key, val)
+                                elif operator == '>':
+                                    select_query = select_query.gt(key, val)
+                                elif operator == '>=':
+                                    select_query = select_query.gte(key, val)
+                                else:
+                                    # 默认使用相等比较
+                                    select_query = select_query.eq(key, val)
+                            else:
+                                # 默认使用相等比较
+                                select_query = select_query.eq(key, value)
+                    
+                    # 应用排序
+                    if order_by:
+                        for field, order in order_by.items():
+                            if order.lower() == 'desc':
+                                select_query = select_query.order(field, desc=True)
+                            else:
+                                select_query = select_query.order(field)
+                    
+                    # 应用限制
+                    if limit:
+                        select_query = select_query.limit(limit)
+                    
+                    result = select_query.execute()
+                    return result.data
+                    
+                elif query_type == 'insert':
+                    if data:
+                        # 如果提供了数据字典，去除id字段，让数据库自动生成
+                        if isinstance(data, dict) and 'id' in data and data['id'] is None:
+                            data = {k: v for k, v in data.items() if k != 'id'}
+                        # 如果提供了数据列表，对每一项都去除id字段
+                        elif isinstance(data, list):
+                            for item in data:
+                                if isinstance(item, dict) and 'id' in item and item['id'] is None:
+                                    item.pop('id')
                         
-                        check_result = check_query.execute()
-                        if hasattr(check_result, 'data') and check_result.data:
-                            logger.info(f"记录确实存在，但更新操作未返回数据，这可能是Supabase API的特性")
-                            return check_result.data
-                        else:
-                            logger.error(f"更新操作失败，记录不存在: {filters}")
-                            return {'error': '更新操作失败，记录不存在'}
+                        # 使用管理员客户端执行插入操作
+                        admin_query = self.supabase_admin.table(table)
+                        result = admin_query.insert(data).execute()
+                        return result.data
                     
-                    return result.data
+                elif query_type == 'update':
+                    if data and filters:
+                        # 从data中移除id字段，避免更新主键
+                        if isinstance(data, dict) and 'id' in data:
+                            data = {k: v for k, v in data.items() if k != 'id'}
                     
-            elif query_type == 'upsert':
-                if data:
-                    # 对于upsert操作，需要确保不提供无效的id值
-                    if isinstance(data, dict) and 'id' in data and data['id'] is None:
-                        data = {k: v for k, v in data.items() if k != 'id'}
-                    elif isinstance(data, list):
-                        for item in data:
-                            if isinstance(item, dict) and 'id' in item and item['id'] is None:
-                                item.pop('id')
-                    
-                    result = query.upsert(data).execute()
-                    return result.data
-                    
-            elif query_type == 'delete':
-                if filters:
-                    # 构建删除查询
-                    delete_query = query.delete()
-                    
-                    # 应用过滤条件
-                    for key, value in filters.items():
-                        delete_query = delete_query.eq(key, value)
-                    
-                    # 执行删除
-                    result = delete_query.execute()
-                    return result.data
-            
-            # 如果没有任何操作被执行，返回空结果
-            return []
+                        # 构建更新查询，使用管理员客户端
+                        admin_query = self.supabase_admin.table(table)
+                        update_query = admin_query.update(data)
+                        
+                        # 应用过滤条件
+                        for key, value in filters.items():
+                            # 处理比较操作 - 支持元组形式的比较操作符
+                            if isinstance(value, tuple) and len(value) == 2:
+                                operator, val = value
+                                if operator == '<':
+                                    update_query = update_query.lt(key, val)
+                                elif operator == '<=':
+                                    update_query = update_query.lte(key, val)
+                                elif operator == '>':
+                                    update_query = update_query.gt(key, val)
+                                elif operator == '>=':
+                                    update_query = update_query.gte(key, val)
+                                else:
+                                    # 默认使用相等比较
+                                    update_query = update_query.eq(key, val)
+                            else:
+                                update_query = update_query.eq(key, value)
+                        
+                        # 执行更新
+                        result = update_query.execute()
+                        
+                        # 检查更新结果
+                        if not result or not hasattr(result, 'data'):
+                            logger.error(f"更新操作没有返回预期的结果: {result}")
+                            return {'error': '更新操作失败，没有返回预期的结果'}
+                            
+                        # 检查是否真的更新了数据
+                        if not result.data:
+                            logger.warning(f"更新操作可能未影响任何记录，返回空结果: {result}")
+                            
+                            # 使用查询确认记录是否存在
+                            check_query = self.supabase.table(table).select('*')
+                            for key, value in filters.items():
+                                # 处理比较操作 - 支持元组形式的比较操作符
+                                if isinstance(value, tuple) and len(value) == 2:
+                                    operator, val = value
+                                    if operator == '<':
+                                        check_query = check_query.lt(key, val)
+                                    elif operator == '<=':
+                                        check_query = check_query.lte(key, val)
+                                    elif operator == '>':
+                                        check_query = check_query.gt(key, val)
+                                    elif operator == '>=':
+                                        check_query = check_query.gte(key, val)
+                                    else:
+                                        # 默认使用相等比较
+                                        check_query = check_query.eq(key, val)
+                                else:
+                                    check_query = check_query.eq(key, value)
+                            
+                            check_result = check_query.execute()
+                            if hasattr(check_result, 'data') and check_result.data:
+                                logger.info(f"记录确实存在，但更新操作未返回数据，这可能是Supabase API的特性")
+                                return check_result.data
+                            else:
+                                logger.error(f"更新操作失败，记录不存在: {filters}")
+                                return {'error': '更新操作失败，记录不存在'}
+                        
+                        return result.data
+                        
+                elif query_type == 'upsert':
+                    if data:
+                        # 对于upsert操作，需要确保不提供无效的id值
+                        if isinstance(data, dict) and 'id' in data and data['id'] is None:
+                            data = {k: v for k, v in data.items() if k != 'id'}
+                        elif isinstance(data, list):
+                            for item in data:
+                                if isinstance(item, dict) and 'id' in item and item['id'] is None:
+                                    item.pop('id')
+                        
+                        # 使用管理员客户端执行upsert操作
+                        admin_query = self.supabase_admin.table(table)
+                        result = admin_query.upsert(data).execute()
+                        return result.data
+                        
+                elif query_type == 'delete':
+                    if filters:
+                        # 构建删除查询，使用管理员客户端
+                        admin_query = self.supabase_admin.table(table)
+                        delete_query = admin_query.delete()
+                        
+                        # 应用过滤条件
+                        for key, value in filters.items():
+                            # 处理比较操作 - 支持元组形式的比较操作符
+                            if isinstance(value, tuple) and len(value) == 2:
+                                operator, val = value
+                                if operator == '<':
+                                    delete_query = delete_query.lt(key, val)
+                                elif operator == '<=':
+                                    delete_query = delete_query.lte(key, val)
+                                elif operator == '>':
+                                    delete_query = delete_query.gt(key, val)
+                                elif operator == '>=':
+                                    delete_query = delete_query.gte(key, val)
+                                else:
+                                    # 默认使用相等比较
+                                    delete_query = delete_query.eq(key, val)
+                            else:
+                                delete_query = delete_query.eq(key, value)
+                        
+                        # 执行删除
+                        result = delete_query.execute()
+                        return result.data
                 
-        except Exception as e:
-            logger.error(f"执行查询时出错: {query_type} on {table} - {str(e)}")
-            logger.error(f"查询参数: data={data}, filters={filters}, limit={limit}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return {'error': str(e)}
+                # 如果没有任何操作被执行，返回空结果
+                return []
+                    
+            except httpx.RemoteProtocolError as e:
+                last_error = e
+                retry_count += 1
+                logger.warning(f"远程协议错误 ({retry_count}/{self.max_retries}): {str(e)}")
+                
+                # 最后一次重试也失败
+                if retry_count > self.max_retries:
+                    logger.error(f"执行查询失败，已达到最大重试次数 ({self.max_retries}): {query_type} on {table}")
+                    break
+                
+                # 尝试重新初始化连接
+                if retry_count > 2:  # 第二次重试后尝试重新初始化连接
+                    try:
+                        logger.info("尝试重新初始化 Supabase 连接...")
+                        global supabase, supabase_admin
+                        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                        if SUPABASE_SERVICE_KEY:
+                            supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+                        else:
+                            supabase_admin = supabase
+                        
+                        # 更新当前实例的连接
+                        self.supabase = supabase
+                        self.supabase_admin = supabase_admin
+                        logger.info("Supabase 连接已重新初始化")
+                    except Exception as reinit_error:
+                        logger.error(f"重新初始化 Supabase 连接失败: {str(reinit_error)}")
+            
+            except Exception as e:
+                # 处理其他类型的异常
+                last_error = e
+                logger.error(f"执行查询时出错: {query_type} on {table} - {str(e)}")
+                logger.error(f"查询参数: data={data}, filters={filters}, limit={limit}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return {'error': str(e)}
+        
+        # 所有重试都失败后返回错误
+        error_msg = str(last_error) if last_error else "未知错误"
+        logger.error(f"执行查询最终失败: {query_type} on {table} - {error_msg}")
+        logger.error(f"查询参数: data={data}, filters={filters}, limit={limit}")
+        return {'error': error_msg}
     
     async def save_message(self, message_data: Dict[str, Any]) -> bool:
         """
@@ -411,7 +528,14 @@ class SupabaseAdapter:
                     
                     # 使用Supabase服务角色密钥执行更新操作，绕过RLS策略
                     try:
-                        update_result = self.supabase_admin.table('tokens').update(updated_data).eq('id', existing_token['id']).execute()
+                        # update_result = self.supabase_admin.table('tokens').update(updated_data).eq('id', existing_token['id']).execute()
+                        # 使用执行execute_query方法进行更新操作，而不是直接调用API
+                        update_result = await self.execute_query(
+                            'tokens',
+                            'update',
+                            data=updated_data,
+                            filters={'id': existing_token['id']}
+                        )
                         logger.debug(f"更新结果: {update_result}")
                         
                         # 验证更新是否成功
@@ -432,7 +556,13 @@ class SupabaseAdapter:
                             else:
                                 logger.warning(f"⚠️ 代币似乎未更新: {chain}/{contract}, 时间戳未变: {new_update_time}")
                                 # 尝试使用upsert操作
-                                upsert_result = self.supabase_admin.table('tokens').upsert(updated_data).execute()
+                                # upsert_result = self.supabase_admin.table('tokens').upsert(updated_data).execute()
+                                # 使用execute_query进行upsert操作
+                                upsert_result = await self.execute_query(
+                                    'tokens', 
+                                    'upsert',
+                                    data=updated_data
+                                )
                                 logger.info(f"尝试使用upsert: {upsert_result}")
                                 return True  # 假设upsert成功
                         else:
@@ -460,7 +590,13 @@ class SupabaseAdapter:
                     
                     logger.info(f"插入新代币数据: {chain}/{contract}, 数据: {token_data}")
                     try:
-                        insert_result = self.supabase_admin.table('tokens').insert(token_data).execute()
+                        # insert_result = self.supabase_admin.table('tokens').insert(token_data).execute()
+                        # 使用execute_query方法进行插入操作
+                        insert_result = await self.execute_query(
+                            'tokens',
+                            'insert',
+                            data=token_data
+                        )
                         logger.debug(f"插入结果: {insert_result}")
                         return True
                     except Exception as e:
@@ -492,7 +628,13 @@ class SupabaseAdapter:
                 
                 logger.info(f"创建新代币记录: {chain}/{contract}, 数据: {token_data}")
                 try:
-                    insert_result = self.supabase_admin.table('tokens').insert(token_data).execute()
+                    # insert_result = self.supabase_admin.table('tokens').insert(token_data).execute()
+                    # 使用execute_query方法进行插入操作
+                    insert_result = await self.execute_query(
+                        'tokens',
+                        'insert',
+                        data=token_data
+                    )
                     logger.debug(f"插入结果: {insert_result}")
                     
                     # 验证插入是否成功

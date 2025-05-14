@@ -581,38 +581,3 @@ def init_db():
         logger.error(traceback.format_exc())
         return False
 
-
-class TokenHistory(Base):
-    """代币历史数据表，记录代币关键指标的历史变化"""
-    __tablename__ = 'token_history'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    chain = Column(String(10), nullable=False)
-    contract = Column(String(255), nullable=False)
-    token_symbol = Column(String(50))
-    timestamp = Column(DateTime, nullable=False, default=datetime.now)
-    
-    # 关键指标历史
-    market_cap = Column(Float)           # 市值
-    price = Column(Float)                # 价格
-    liquidity = Column(Float)            # 流动性
-    volume_24h = Column(Float)           # 24小时交易量
-    volume_1h = Column(Float)            # 1小时交易量
-    holders_count = Column(Integer)      # 持有者数量
-    buys_1h = Column(Integer)            # 1小时买入交易数
-    sells_1h = Column(Integer)           # 1小时卖出交易数
-    
-    # 社区数据历史
-    community_reach = Column(Integer)    # 社区覆盖人数
-    spread_count = Column(Integer)       # 传播次数
-    
-    # 变化率记录
-    market_cap_change_pct = Column(Float)  # 市值变化百分比
-    price_change_pct = Column(Float)      # 价格变化百分比
-    
-    # 索引
-    __table_args__ = (
-        Index('idx_token_history_token', 'chain', 'contract'),
-        Index('idx_token_history_time', 'timestamp'),
-    )
-
