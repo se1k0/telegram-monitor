@@ -254,7 +254,7 @@ async def start_telegram_listener(config: Dict[str, Any]):
 def start_web_interface(config: Dict[str, Any]) -> None:
     """
     启动Web界面
-    Linux下启用https，其它环境保持http
+    临时方案：无论什么系统都只用http，Linux下启用https的代码已注释
     """
     try:
         # 确保配置不为空
@@ -303,14 +303,14 @@ def start_web_interface(config: Dict[str, Any]) -> None:
             try:
                 from src.web.web_app import app
                 import threading
-                import platform
+                # import platform
                 def run_flask():
-                    # Linux环境，启用自签名证书
-                    if platform.system().lower() == 'linux':
-                        ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
-                        app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
-                    else:
-                        app.run(host=host, port=port, debug=debug)
+                    # # Linux环境，启用自签名证书（已注释）
+                    # if platform.system().lower() == 'linux':
+                    #     ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
+                    #     app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
+                    # else:
+                    app.run(host=host, port=port, debug=debug)
                 web_thread = threading.Thread(target=run_flask)
                 web_thread.daemon = True
                 web_thread.start()
@@ -329,13 +329,13 @@ def start_web_interface(config: Dict[str, Any]) -> None:
             logger.info("尝试使用最基本配置启动Web界面")
             from src.web.web_app import app
             import threading
-            import platform
+            # import platform
             def run_flask():
-                if platform.system().lower() == 'linux':
-                    ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
-                    app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
-                else:
-                    app.run(host='0.0.0.0', port=5000, debug=False)
+                # if platform.system().lower() == 'linux':
+                #     ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
+                #     app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
+                # else:
+                app.run(host='0.0.0.0', port=5000, debug=False)
             web_thread = threading.Thread(target=run_flask)
             web_thread.daemon = True
             web_thread.start()

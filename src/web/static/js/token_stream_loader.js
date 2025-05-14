@@ -1345,23 +1345,28 @@ function renderFirstSeenWithStyle(dateString) {
     }
 }
 
-// 工具函数：复制文本到剪贴板，兼容所有主流浏览器
+// 工具函数：通用复制到剪贴板，兼容 http/https
 function copyToClipboard(text) {
-    if (navigator.clipboard) {
+    // 优先用 Clipboard API（仅 HTTPS/localhost 可用）
+    if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text).then(() => true, () => false);
     } else {
-        // 兼容旧浏览器
+        // 兜底方案：用 textarea + execCommand
         const textarea = document.createElement('textarea');
         textarea.value = text;
+        textarea.style.position = 'fixed';  // 防止页面跳动
+        textarea.style.top = '-1000px';
+        textarea.style.left = '-1000px';
         document.body.appendChild(textarea);
+        textarea.focus();
         textarea.select();
+        let success = false;
         try {
-            const successful = document.execCommand('copy');
-            document.body.removeChild(textarea);
-            return Promise.resolve(successful);
+            success = document.execCommand('copy');
         } catch (err) {
-            document.body.removeChild(textarea);
-            return Promise.resolve(false);
+            success = false;
         }
+        document.body.removeChild(textarea);
+        return Promise.resolve(success);
     }
 } 
