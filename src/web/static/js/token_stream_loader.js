@@ -1005,6 +1005,10 @@ function loadNewTokens() {
                     container.appendChild(fragment);
                 }
                 
+                // 关键修复：每次插入新token行后，必须重新绑定所有详情按钮的点击事件
+                // 否则新插入的token行的按钮不会有正确的事件处理，导致跳转异常
+                attachTokenDetailClickHandlers();
+                
                 // 更新计数器和状态
                 tokenCount += filteredTokens.length;
                 updateTokenCounter();

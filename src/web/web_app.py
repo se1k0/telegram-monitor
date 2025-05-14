@@ -1119,8 +1119,8 @@ def message_detail(chain, message_id):
         # 创建Supabase客户端
         supabase = create_client(supabase_url, supabase_key)
         
-        # 获取消息数据
-        message_response = supabase.table('messages').select('*').eq('chain', chain).eq('message_id', message_id).limit(1).execute()
+        # 获取消息数据 - 同时检查指定链和UNKNOWN链
+        message_response = supabase.table('messages').select('*').or_(f'chain.eq.{chain},chain.eq.UNKNOWN').eq('message_id', message_id).limit(1).execute()
         message = message_response.data[0] if hasattr(message_response, 'data') and message_response.data else None
         
         if not message:

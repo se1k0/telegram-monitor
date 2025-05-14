@@ -166,6 +166,13 @@ function updateTokenDataInUI(chain, contract, tokenData) {
         }
     }
     
+    // 新增：同步刷新“首次发现”列的数值和样式
+    // 这样可以保证每次自动刷新token数据时，“首次发现”天数/分钟等也会实时更新
+    const firstSeenElem = row.querySelector('td:nth-child(10) .small');
+    if (firstSeenElem && tokenData.first_update) {
+        firstSeenElem.innerHTML = renderFirstSeenWithStyle(tokenData.first_update);
+    }
+    
     // 刷新行的样式
     if (tokenData.market_cap > tokenData.market_cap_1h) {
         row.classList.add('table-success');
