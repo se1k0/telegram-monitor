@@ -254,9 +254,7 @@ async def start_telegram_listener(config: Dict[str, Any]):
 def start_web_interface(config: Dict[str, Any]) -> None:
     """
     启动Web界面
-    
-    Args:
-        config: 配置字典
+    Linux下启用https，其它环境保持http
     """
     try:
         # 确保配置不为空
@@ -305,10 +303,14 @@ def start_web_interface(config: Dict[str, Any]) -> None:
             try:
                 from src.web.web_app import app
                 import threading
-                
+                import platform
                 def run_flask():
-                    app.run(host=host, port=port, debug=debug)
-                
+                    # Linux环境，启用自签名证书
+                    if platform.system().lower() == 'linux':
+                        ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
+                        app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
+                    else:
+                        app.run(host=host, port=port, debug=debug)
                 web_thread = threading.Thread(target=run_flask)
                 web_thread.daemon = True
                 web_thread.start()
@@ -327,10 +329,13 @@ def start_web_interface(config: Dict[str, Any]) -> None:
             logger.info("尝试使用最基本配置启动Web界面")
             from src.web.web_app import app
             import threading
-            
+            import platform
             def run_flask():
-                app.run(host='0.0.0.0', port=5000, debug=False)
-            
+                if platform.system().lower() == 'linux':
+                    ssl_context = ('/home/ubuntu/certs/server.crt', '/home/ubuntu/certs/server.key')
+                    app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
+                else:
+                    app.run(host='0.0.0.0', port=5000, debug=False)
             web_thread = threading.Thread(target=run_flask)
             web_thread.daemon = True
             web_thread.start()

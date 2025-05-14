@@ -13,6 +13,7 @@ from functools import wraps
 import threading
 import asyncio
 from functools import wraps
+import platform
 
 # 辅助函数：确保数值转换正确
 def to_decimal_or_float(value):
@@ -735,14 +736,7 @@ def token_mention_details(channel_id, chain, contract):
 def start_web_server(host='0.0.0.0', port=5000, debug=False):
     """
     启动Web服务器
-    
-    Args:
-        host: 主机地址
-        port: 端口号
-        debug: 是否启用调试模式
-        
-    Returns:
-        Web服务器进程或线程
+    只在Linux下启用https，其它环境保持http
     """
     try:
         logger.info(f"正在启动Web服务器: {host}:{port}")
@@ -769,14 +763,12 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
             logger.error(f"初始化Supabase适配器时出错: {str(e)}")
             return None
         
-        # 检测操作系统环境
         import platform
         is_windows = platform.system() == 'Windows'
         
         # 在Windows环境下使用线程，在Linux环境下使用多进程
         if is_windows:
             logger.info("Windows环境：使用线程启动Web服务器")
-            
             def run_flask_app():
                 global app
                 try:
@@ -786,22 +778,22 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
                     logger.error(f"Flask线程崩溃: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
-            
             import threading
             thread = threading.Thread(target=run_flask_app)
             thread.daemon = True
             thread.start()
-            
             logger.info(f"已使用线程启动Web服务器")
             return thread
         else:
-            # 创建多进程 (Linux环境)
-            logger.info("Linux环境：使用多进程启动Web服务器")
-            
-            # 使用全局函数而非本地函数，解决pickling问题
-            process = multiprocessing.Process(target=run_flask_server, args=(host, port, debug))
+            # Linux环境，使用多进程并启用https
+            logger.info("Linux环境：使用多进程启动Web服务器，启用HTTPS")
+            ssl_context = ('../ubuntu/certs/server.crt', '../ubuntu/certs/server.key')
+            def run_flask_server_with_ssl(host, port, debug):
+                global app
+                app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
+            import multiprocessing
+            process = multiprocessing.Process(target=run_flask_server_with_ssl, args=(host, port, debug))
             process.daemon = True
-            
             try:
                 process.start()
                 logger.info(f"Web服务器已启动，进程ID: {process.pid}")
@@ -810,16 +802,13 @@ def start_web_server(host='0.0.0.0', port=5000, debug=False):
                 logger.error(f"使用多进程启动失败: {str(multi_error)}")
                 # 回退到线程方式
                 logger.info("回退到线程方式启动")
-                
                 def run_flask_app():
                     global app
-                    app.run(host=host, port=port, debug=debug, ssl_context=None)
-                    
+                    app.run(host=host, port=port, debug=debug, ssl_context=ssl_context)
                 import threading
                 thread = threading.Thread(target=run_flask_app)
                 thread.daemon = True
                 thread.start()
-                
                 logger.info(f"已使用线程启动Web服务器")
                 return thread
     except Exception as e:
@@ -2361,5 +2350,13 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"处理默认图像时出错: {str(e)}")
     
-    # 直接启动应用，不使用多进程/线程
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    # 判断操作系统，Linux下启用https，Windows下用http
+    if platform.system().lower() == 'linux':
+        # Linux环境，启用自签名证书
+        ssl_context = ('../home/ubuntu/certs/server.crt', '../home/ubuntu/certs/server.key')
+        logger.info('Linux环境，使用HTTPS启动Flask')
+        app.run(host='0.0.0.0', port=5000, debug=True, ssl_context=ssl_context)
+    else:
+        # Windows等其它环境，保持http
+        logger.info('非Linux环境，使用HTTP启动Flask')
+        app.run(host='0.0.0.0', port=5000, debug=True) 
