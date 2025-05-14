@@ -430,6 +430,31 @@ function renderTokens(tokens) {
             const copyBtn = row.querySelector('.copy-btn');
             if (copyBtn) {
                 copyBtn.dataset.address = token.contract;
+                // 绑定点击事件，复制合约地址，兼容所有系统
+                copyBtn.onclick = function(event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const address = this.dataset.address;
+                    if (!address) return;
+                    copyToClipboard(address).then(success => {
+                        if (success) {
+                            // 复制成功，按钮变色并显示提示
+                            this.setAttribute('title', '已复制！');
+                            this.classList.add('text-success');
+                            if (typeof showToast === 'function') {
+                                showToast('合约地址已复制', true);
+                            }
+                            setTimeout(() => {
+                                this.setAttribute('title', '复制合约地址');
+                                this.classList.remove('text-success');
+                            }, 2000);
+                        } else {
+                            if (typeof showToast === 'function') {
+                                showToast('复制失败，请手动复制', false);
+                            }
+                        }
+                    });
+                };
             }
             
             // 创建社交媒体链接 - 第一行

@@ -393,21 +393,23 @@ document.addEventListener('DOMContentLoaded', function() {
                         console.error('复制按钮缺少data-contract属性');
                         return;
                     }
-                    // 直接同步复制
-                    const success = copyToClipboard(contractAddr);
-                    if (success) {
-                        // 显示复制成功提示
-                        const originalTitle = this.getAttribute('title');
-                        this.setAttribute('title', '已复制！');
-                        this.classList.add('text-success');
-                        showCopySuccessToast(contractAddr);
-                        setTimeout(() => {
-                            this.setAttribute('title', originalTitle);
-                            this.classList.remove('text-success');
-                        }, 2000);
-                    } else {
-                        alert('复制失败，请手动复制');
-                    }
+                    
+                    // 使用异步方式调用复制函数
+                    copyToClipboard(contractAddr).then(success => {
+                        if (success) {
+                            // 显示复制成功提示
+                            const originalTitle = this.getAttribute('title');
+                            this.setAttribute('title', '已复制！');
+                            this.classList.add('text-success');
+                            showCopySuccessToast(contractAddr);
+                            setTimeout(() => {
+                                this.setAttribute('title', originalTitle);
+                                this.classList.remove('text-success');
+                            }, 2000);
+                        } else {
+                            alert('复制失败，请手动复制');
+                        }
+                    });
                 });
                 newCopyBtn.setAttribute('data-event-bound', 'true');
             }
