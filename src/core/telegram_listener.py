@@ -256,25 +256,26 @@ class TelegramListener:
                 # 按修改时间排序，获取最新的session
                 existing_sessions.sort(key=lambda x: x[1], reverse=True)
                 latest_session = existing_sessions[0][0]
-                logger.info(f"找到现有session文件: {latest_session}")
+                logger.info(f"找到现有session文件: {os.path.abspath(latest_session)}")
                 
                 # 检查session文件是否被锁定
                 if self._check_session_lock(latest_session):
                     # 使用现有的session文件
                     self.session_path = latest_session.replace('.session', '')
-                    logger.info(f"将使用现有session文件: {self.session_path}")
+                    logger.info(f"将使用现有session文件: {os.path.abspath(self.session_path)}")
                     return
             
             # 如果没有可用的session文件,创建新的
-            session_name = f'tg_session_{"win_" if is_windows else ""}{int(time.time())}'
+            # 跨平台拼接session文件名，兼容Windows和Linux
+            session_name = f"tg_session_{'win_' if is_windows else ''}{int(time.time())}"
             self.session_path = os.path.join(self.session_dir, session_name)
-            logger.info(f"创建新的session文件: {self.session_path}")
+            logger.info(f"创建新的session文件: {os.path.abspath(self.session_path)}")
             
         except Exception as e:
             logger.error(f"初始化session路径时出错: {str(e)}")
             # 确保至少有一个默认的session路径
             self.session_path = os.path.join(self.session_dir, f'tg_session_default_{int(time.time())}')
-            logger.info(f"使用默认session路径: {self.session_path}")
+            logger.info(f"使用默认session路径: {os.path.abspath(self.session_path)}")
 
     def _check_session_lock(self, session_path):
         """检查session文件是否被锁定,如果被锁定则尝试清理"""
@@ -323,7 +324,7 @@ class TelegramListener:
                     return False
             
             # 检查session文件是否存在且可用
-            session_file = f"{self.session_path}.session"
+            session_file = os.path.abspath(f"{self.session_path}.session")
             if not os.path.exists(session_file):
                 logger.warning(f"session文件不存在: {session_file}")
                 return False
@@ -383,7 +384,7 @@ class TelegramListener:
             logger.info("备份恢复失败,创建新的session...")
             
             # 删除旧的session文件
-            session_files = [f"{self.session_path}.session", f"{self.session_path}.session-journal"]
+            session_files = [os.path.abspath(f"{self.session_path}.session"), os.path.abspath(f"{self.session_path}.session-journal")]
             for file in session_files:
                 if os.path.exists(file):
                     try:
@@ -427,13 +428,10 @@ class TelegramListener:
                     # 登录
                     await self.client.sign_in(phone, code)
                     logger.info("Telegram登录成功")
-                    return True
                 except Exception as e:
                     logger.error(f"Telegram登录失败: {str(e)}")
                     return False
-            
             return True
-            
         except Exception as e:
             logger.error(f"处理session过期时出错: {str(e)}")
             return False
@@ -472,82 +470,88 @@ class TelegramListener:
             logger.debug(tb.format_exc())
             return False
     
-    @async_retry(max_retries=2, delay=1)
-    async def register_handlers(self, active_channels=None):
-        """注册消息处理程序
-        
-        Args:
-            active_channels: 可选的活跃频道列表，如果为None则自动获取
-            
-        Returns:
-            bool: 是否成功注册处理程序
+    import asyncio
+    # 全局异步锁，防止并发注册消息处理器
+    _register_lock = asyncio.Lock()
+    # 记录上次注册handler的时间戳
+    _last_register_time = None
+    # 记录上次注册时的频道实体快照（用于去重）
+    _last_entities_snapshot = None
+
+    async def register_handlers(self, active_channels=None, force=False):
         """
-        try:
-            # 获取活跃频道
+        注册消息处理程序（带防抖、去重、并发保护机制）
+        本方法确保在高并发、定时任务、异常恢复等复杂场景下，
+        不会重复注册handler，且注册前会彻底移除所有旧handler。
+        
+        参数：
+            active_channels: 可选，活跃频道列表，若为None则自动获取
+            force: 是否强制注册（如异常恢复、手动重载等场景）
+        返回：
+            bool: 是否成功注册消息处理程序
+        """
+        async with self._register_lock:
+            import time
+            now = time.time()
+            # === 1. 获取活跃频道 ===
             if active_channels is None:
-                # 使用channel_manager获取所有活跃频道
+                # 若未指定，自动从频道管理器获取
                 active_channels = self.channel_manager.get_active_channels()
-            
             if not active_channels:
                 logger.warning("没有活跃的频道，无法注册消息处理程序")
                 return False
-                
-            # 打印当前活跃频道数量
+            # === 2. 生成当前频道实体快照（用于去重） ===
+            entities_snapshot = tuple(sorted((c.get('channel_id'), c.get('channel_username')) for c in active_channels))
+            # === 3. 防抖与去重判断 ===
+            # 若频道实体未变且60秒内已注册过，则直接跳过，防止短时间重复注册
+            if not force and hasattr(self, '_last_register_time') and hasattr(self, '_last_entities_snapshot'):
+                if self._last_entities_snapshot == entities_snapshot and now - self._last_register_time < 3600:
+                    logger.info(f"防抖：60秒内频道实体无变化，跳过重复注册handler。")
+                    return True
+            # === 4. 注册前彻底移除所有旧handler ===
+            # 包括Telethon底层handler和self.event_handlers字典
+            if hasattr(self, 'event_handlers') and self.event_handlers:
+                for handler in list(self.event_handlers.values()):
+                    try:
+                        self.client.remove_event_handler(handler)
+                    except Exception as e:
+                        logger.warning(f"移除旧handler时出错: {str(e)}")
+                self.event_handlers.clear()
+                logger.info(f"已移除所有旧的消息处理器，准备注册新handler")
+            # === 5. 构建监听实体列表与辅助结构 ===
             logger.info(f"注册处理程序: {len(active_channels)} 个活跃频道")
-                
-            # 准备要监听的实体
-            entities = []
-            entity_names = []
-            
-            # 构建实体字典
-            self.channel_entities = {}
-            self.chain_map = {}
-            
-            # 添加每个频道或群组
+            entities = []  # Telethon实体对象列表
+            entity_names = []  # 频道名称/用户名列表
+            self.channel_entities = {}  # 频道ID到实体的映射
+            self.chain_map = {}         # 频道ID到链的映射
             for channel in active_channels:
                 try:
-                    # 优先使用channel_id
                     channel_id = channel.get('channel_id')
                     channel_username = channel.get('channel_username')
                     chain = channel.get('chain')
-                    
                     if not channel_id and not channel_username:
                         logger.warning(f"跳过缺少ID和用户名的频道: {channel}")
                         continue
-                        
-                    # 记录频道ID格式
-                    if channel_id:
-                        if isinstance(channel_id, int):
-                            id_type = "正整数" if channel_id > 0 else "负整数"
-                            logger.info(f"频道ID格式: {id_type}, 值: {channel_id}")
-                        else:
-                            logger.info(f"频道ID类型: {type(channel_id)}, 值: {channel_id}")
-                    
-                    # 添加到监听实体列表
                     entity = None
-                    
-                    # 尝试初始化实体类型
+                    # === 5.1 优先通过ID获取实体 ===
                     if channel_id:
-                        # 优先使用ID
                         try:
-                            # 如果是正整数，尝试转换为频道格式
+                            # 正整数ID需特殊处理（加-100前缀）
                             if isinstance(channel_id, int) and channel_id > 0:
                                 try:
-                                    # 尝试将正数ID作为频道处理（添加-100前缀）
                                     entity = await self.client.get_entity(PeerChannel(-1000000000000 - channel_id))
-                                    logger.info(f"成功将正整数ID {channel_id} 转换为频道实体")
                                 except Exception as e:
                                     logger.warning(f"无法将正整数ID {channel_id} 转换为频道实体: {str(e)}")
-                                    # 如果是权限问题，跳过这个频道而不是尝试其他方式
+                                    # 权限问题直接跳过
                                     if "private and you lack permission" in str(e) or "banned from it" in str(e):
                                         logger.error(f"频道 {channel_id} 是私有的或已被禁止访问，跳过此频道")
                                         continue
-                                    # 尝试其他方式获取实体
+                                    # 尝试用原始ID
                                     try:
                                         entity = await self.client.get_entity(PeerChannel(channel_id))
                                     except Exception as e2:
                                         logger.error(f"使用原始ID获取频道实体失败: {str(e2)}")
-                                        # 如果都失败了且有用户名，尝试用户名
+                                        # 若有用户名再尝试用户名
                                         if channel_username:
                                             try:
                                                 entity = await self.client.get_entity(channel_username)
@@ -557,12 +561,11 @@ class TelegramListener:
                                         else:
                                             continue
                             else:
-                                # 直接使用ID
+                                # 直接用ID
                                 try:
                                     entity = await self.client.get_entity(PeerChannel(channel_id))
                                 except Exception as e:
                                     logger.error(f"使用PeerChannel({channel_id})获取频道实体失败: {str(e)}")
-                                    # 如果是权限问题，跳过这个频道
                                     if "private and you lack permission" in str(e) or "banned from it" in str(e):
                                         logger.error(f"频道 {channel_id} 是私有的或已被禁止访问，跳过此频道")
                                         continue
@@ -570,50 +573,50 @@ class TelegramListener:
                             logger.warning(f"无法通过ID {channel_id} 获取频道实体: {str(e)}")
                             if channel_username:
                                 try:
-                                    # 尝试使用用户名
                                     entity = await self.client.get_entity(channel_username)
                                 except Exception as e2:
                                     logger.error(f"无法通过用户名 {channel_username} 获取频道实体: {str(e2)}")
                                     continue
                             else:
                                 continue
+                    # === 5.2 若无ID则尝试用户名 ===
                     elif channel_username:
-                        # 如果没有ID但有用户名
                         try:
                             entity = await self.client.get_entity(channel_username)
                         except Exception as e:
                             logger.error(f"无法通过用户名 {channel_username} 获取频道实体: {str(e)}")
                             continue
-                    
+                    # === 5.3 实体有效则加入监听列表 ===
                     if entity:
                         entities.append(entity)
                         entity_name = getattr(entity, 'title', None) or channel_username or f"ID:{channel_id}"
                         entity_names.append(entity_name)
-                        
-                        # 保存实体和链的映射
                         entity_key = str(entity.id)
                         self.channel_entities[entity_key] = entity
                         self.chain_map[entity_key] = chain
                 except Exception as e:
                     logger.error(f"处理频道时出错: {channel.get('channel_name', 'unknown')}, 错误: {str(e)}")
                     continue
-            
-            # 检查是否有需要监听的实体
+            # === 6. 检查是否有有效实体 ===
             if not entities:
                 logger.warning("没有有效的频道实体，无法注册消息处理程序")
                 return False
-                
-            # 注册新消息处理程序
+            # === 7. 注册新消息处理器 ===
+            # 只注册一次，防止重复
             @self.client.on(events.NewMessage(chats=entities))
             async def handler(event):
+                # 处理新消息事件，详见handle_new_message方法
                 await self.handle_new_message(event)
-                
-            logger.info(f"已注册消息处理程序，监听实体: {', '.join(entity_names)}")
+            # === 8. 记录handler到本地映射，便于后续移除 ===
+            if not hasattr(self, 'event_handlers'):
+                self.event_handlers = {}
+            self.event_handlers['new_message'] = handler
+            # === 9. 记录本次注册的时间和实体快照 ===
+            self._last_register_time = now
+            self._last_entities_snapshot = entities_snapshot
+            # === 10. 日志详细说明注册原因 ===
+            logger.info(f"已注册消息处理程序，监听实体: {', '.join(entity_names)}，当前handler数量: {len(self.event_handlers)}，注册原因: {'强制' if force else '定时/变更'}")
             return True
-        except Exception as e:
-            logger.error(f"注册处理程序时出错: {str(e)}")
-            logger.debug(tb.format_exc())
-            raise  # 让装饰器捕获异常并处理重试
     
     async def get_channel_members_count(self, channel_id, is_group=False, is_supergroup=False):
         """获取频道或群组的成员数量
@@ -776,27 +779,30 @@ class TelegramListener:
             channel_title: 频道名称
         """
         try:
-            # 提取代币信息
-            contract_info = await self._extract_contract_from_message(message.text, channel_id)
-            
-            if not contract_info:
+            # 提取代币信息，支持多合约
+            contract_infos = await self._extract_contract_from_message(message.text, channel_id)
+            if not contract_infos:
                 logger.info("未从消息中提取到合约地址，跳过代币信息处理")
                 return
-                
-            # 获取代币合约和初始链信息
-            contract_address = contract_info.get('contract_address')
-            chain = contract_info.get('chain', 'UNKNOWN')
-            
-            # 如果链未知，尝试识别链
-            if chain == 'UNKNOWN':
-                chain = await self._identify_chain_for_contract(contract_address)
-                
-            # 处理代币数据
-            if chain and chain != 'UNKNOWN':
-                await self._update_or_create_token(chain, contract_address, message.id, channel_id)
-            else:
-                logger.warning(f"未能确定合约地址 {contract_address} 所属的链，无法调用DEX API")
-                
+            # 循环处理每个合约地址，兼容单合约情况
+            for contract_info in contract_infos:
+                contract_address = contract_info.get('contract_address')
+                chain = contract_info.get('chain', 'UNKNOWN')
+                # 如果链未知，尝试识别链
+                if chain == 'UNKNOWN':
+                    chain = await self._identify_chain_for_contract(contract_address)
+                # 处理代币数据
+                if chain and chain != 'UNKNOWN':
+                    await self._update_or_create_token(
+                        chain, 
+                        contract_address, 
+                        message.id, 
+                        channel_id,
+                        risk_level=contract_info.get('risk_level'),
+                        promotion_count=contract_info.get('promotion_count', 1)
+                    )
+                else:
+                    logger.warning(f"未能确定合约地址 {contract_address} 所属的链，无法调用DEX API")
         except Exception as e:
             logger.error(f"处理代币信息时出错: {str(e)}")
             import traceback as tb
@@ -804,47 +810,37 @@ class TelegramListener:
     
     async def _extract_contract_from_message(self, message_text, channel_id):
         """
-        从消息文本中提取合约地址信息
+        从消息文本中提取合约地址信息，支持多合约提取
         
         Args:
             message_text: 消息文本
             channel_id: 频道ID
-            
         Returns:
-            Dict: 包含合约地址和链信息的字典，如果未找到则返回None
+            List[Dict]: 包含多个合约地址和链信息的字典列表，如果未找到则返回空列表
         """
         try:
-            # 获取数据库适配器
             from src.database.db_factory import get_db_adapter
             db_adapter = get_db_adapter()
-            
-            # 提取合约地址和链信息
             from datetime import datetime
             current_time = datetime.now()
-            
-            # 如果db_adapter中有extract_promotion_info方法则调用它
-            if hasattr(db_adapter, 'extract_promotion_info'):
-                promo = await db_adapter.extract_promotion_info(message_text, current_time, 'UNKNOWN', channel_id)
-            else:
-                # 否则使用传统方式调用
-                from src.database.db_handler import extract_promotion_info
-                promo = extract_promotion_info(message_text, current_time, 'UNKNOWN', None, channel_id)
-            
-            if not promo or not hasattr(promo, 'contract_address') or not promo.contract_address:
-                return None
-                
-            return {
-                'contract_address': promo.contract_address,
-                'chain': promo.chain if hasattr(promo, 'chain') else 'UNKNOWN',
-                'risk_level': promo.risk_level if hasattr(promo, 'risk_level') else None,
-                'promotion_count': promo.promotion_count if hasattr(promo, 'promotion_count') else 1
-            }
-            
+            # 直接调用新版批量接口
+            from src.database.db_handler import extract_promotion_info
+            promos = extract_promotion_info(message_text, current_time, 'UNKNOWN', None, channel_id)
+            contract_infos = []
+            for promo in promos:
+                if hasattr(promo, 'contract_address') and promo.contract_address:
+                    contract_infos.append({
+                        'contract_address': promo.contract_address,
+                        'chain': promo.chain if hasattr(promo, 'chain') else 'UNKNOWN',
+                        'risk_level': getattr(promo, 'risk_level', None),
+                        'promotion_count': getattr(promo, 'promotion_count', 1)
+                    })
+            return contract_infos
         except Exception as e:
             logger.error(f"提取合约地址时出错: {str(e)}")
             import traceback as tb
             logger.debug(tb.format_exc())
-            return None
+            return []
     
     async def _identify_chain_for_contract(self, contract_address):
         """
