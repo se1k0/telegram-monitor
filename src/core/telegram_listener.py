@@ -723,13 +723,15 @@ class TelegramListener:
             logger.info(f"收到新消息 - 普通频道: {channel_title}, ID: {channel_id}, 链: UNKNOWN, 消息ID: {message.id}")
             logger.info(f"消息内容:\n--------------------------------------------------\n{message.text[:500]}...\n--------------------------------------------------")
             
-            # 从消息内容中提取链信息
+            # 从消息内容中提取链信息，确保不为None
             from src.database.db_handler import extract_chain_from_message
-            chain = extract_chain_from_message(message.text) if message.text else 'UNKNOWN'
+            chain = extract_chain_from_message(message.text) if message.text else None
+            # 如果未能识别链，则使用'UNKNOWN'作为默认值，避免数据库插入失败
+            chain = chain or 'UNKNOWN'
             
             # 保存消息到数据库
             save_result = save_telegram_message(
-                chain=chain,  # 使用提取的链信息
+                chain=chain,  # 使用提取的链信息，保证非None
                 message_id=message.id,
                 date=message.date,
                 text=message.text,
