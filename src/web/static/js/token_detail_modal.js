@@ -76,27 +76,80 @@ function showCopySuccessToast(content) {
 
 // 工具函数：通用复制到剪贴板，兼容 http/https
 function copyToClipboard(text) {
-    // 优先用 Clipboard API（仅 HTTPS/localhost 可用）
-    if (navigator.clipboard && window.isSecureContext) {
-        return navigator.clipboard.writeText(text).then(() => true, () => false);
-    } else {
-        // 兜底方案：用 textarea + execCommand
-        const textarea = document.createElement('textarea');
-        textarea.value = text;
-        textarea.style.position = 'fixed';  // 防止页面跳动
-        textarea.style.top = '-1000px';
-        textarea.style.left = '-1000px';
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        let success = false;
-        try {
-            success = document.execCommand('copy');
-        } catch (err) {
-            success = false;
+    return new Promise((resolve) => {
+        // 优先使用 Clipboard API，但仅在 HTTPS 或 localhost 环境可用
+        if (navigator.clipboard && window.isSecureContext) {
+            console.log('使用现代Clipboard API复制');
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    console.log('Clipboard API复制成功');
+                    resolve(true);
+                })
+                .catch((err) => {
+                    console.error('Clipboard API复制失败:', err);
+                    // 失败时尝试备用方法
+                    resolve(fallbackCopyTextToClipboard(text));
+                });
+        } else {
+            // 非安全上下文，使用备用方法
+            console.log('使用备用方法复制');
+            resolve(fallbackCopyTextToClipboard(text));
         }
-        document.body.removeChild(textarea);
-        return Promise.resolve(success);
+    });
+}
+
+// 备用复制方法
+function fallbackCopyTextToClipboard(text) {
+    try {
+        // 创建临时DOM元素
+        const textArea = document.createElement('textarea');
+        
+        // 设置文本区域的值为要复制的文本
+        textArea.value = text;
+        
+        // 确保文本区域处于页面之外（不可见）
+        textArea.style.position = 'fixed';
+        textArea.style.top = '-999999px';
+        textArea.style.left = '-999999px';
+        textArea.style.width = '2em';
+        textArea.style.height = '2em';
+        textArea.style.padding = 0;
+        textArea.style.border = 'none';
+        textArea.style.outline = 'none';
+        textArea.style.boxShadow = 'none';
+        textArea.style.background = 'transparent';
+        
+        // 添加到DOM
+        document.body.appendChild(textArea);
+        
+        // 检查是否在iOS上
+        const isIos = navigator.userAgent.match(/ipad|iphone/i);
+        
+        // 选择文本
+        textArea.focus();
+        textArea.select();
+        
+        // iOS特殊处理
+        if (isIos) {
+            const range = document.createRange();
+            range.selectNodeContents(textArea);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            textArea.setSelectionRange(0, 999999);
+        }
+        
+        // 尝试执行复制命令
+        const successful = document.execCommand('copy');
+        console.log('备用方法复制' + (successful ? '成功' : '失败'));
+        
+        // 从DOM中移除元素
+        document.body.removeChild(textArea);
+        
+        return successful;
+    } catch (err) {
+        console.error('备用复制方法失败:', err);
+        return false;
     }
 }
 
