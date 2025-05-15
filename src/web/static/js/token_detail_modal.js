@@ -76,81 +76,75 @@ function showCopySuccessToast(content) {
 
 // 工具函数：通用复制到剪贴板，兼容 http/https
 function copyToClipboard(text) {
-    return new Promise((resolve) => {
-        // 优先使用 Clipboard API，但仅在 HTTPS 或 localhost 环境可用
-        if (navigator.clipboard && window.isSecureContext) {
-            console.log('使用现代Clipboard API复制');
-            navigator.clipboard.writeText(text)
-                .then(() => {
-                    console.log('Clipboard API复制成功');
-                    resolve(true);
-                })
-                .catch((err) => {
-                    console.error('Clipboard API复制失败:', err);
-                    // 失败时尝试备用方法
-                    resolve(fallbackCopyTextToClipboard(text));
-                });
-        } else {
-            // 非安全上下文，使用备用方法
-            console.log('使用备用方法复制');
-            resolve(fallbackCopyTextToClipboard(text));
-        }
-    });
-}
+    if (!text) {
+        console.error('copyToClipboard: 传入的文本为空');
+        return Promise.resolve(false);
+    }
 
-// 备用复制方法
-function fallbackCopyTextToClipboard(text) {
-    try {
-        // 创建临时DOM元素
-        const textArea = document.createElement('textarea');
-        
-        // 设置文本区域的值为要复制的文本
-        textArea.value = text;
-        
-        // 确保文本区域处于页面之外（不可见）
-        textArea.style.position = 'fixed';
-        textArea.style.top = '-999999px';
-        textArea.style.left = '-999999px';
-        textArea.style.width = '2em';
-        textArea.style.height = '2em';
-        textArea.style.padding = 0;
-        textArea.style.border = 'none';
-        textArea.style.outline = 'none';
-        textArea.style.boxShadow = 'none';
-        textArea.style.background = 'transparent';
-        
-        // 添加到DOM
-        document.body.appendChild(textArea);
-        
-        // 检查是否在iOS上
-        const isIos = navigator.userAgent.match(/ipad|iphone/i);
-        
-        // 选择文本
-        textArea.focus();
-        textArea.select();
-        
-        // iOS特殊处理
-        if (isIos) {
+    return new Promise((resolve) => {
+        try {
+            // 创建一个临时的div元素
+            const tempDiv = document.createElement('div');
+            tempDiv.style.position = 'fixed';
+            tempDiv.style.left = '-9999px';
+            tempDiv.style.top = '-9999px';
+            tempDiv.style.opacity = '0';
+            tempDiv.textContent = text;
+            
+            // 添加到DOM
+            document.body.appendChild(tempDiv);
+            
+            // 创建选区
             const range = document.createRange();
-            range.selectNodeContents(textArea);
+            range.selectNodeContents(tempDiv);
+            
+            // 清除当前选区
             const selection = window.getSelection();
             selection.removeAllRanges();
+            
+            // 添加新选区
             selection.addRange(range);
-            textArea.setSelectionRange(0, 999999);
+            
+            // 尝试复制
+            let successful = false;
+            try {
+                successful = document.execCommand('copy');
+            } catch (err) {
+                console.error('execCommand失败:', err);
+            }
+            
+            // 清理
+            selection.removeAllRanges();
+            document.body.removeChild(tempDiv);
+            
+            if (successful) {
+                console.log('复制成功');
+                resolve(true);
+            } else {
+                // 如果execCommand失败，尝试使用备用方案
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                textArea.style.top = '-9999px';
+                document.body.appendChild(textArea);
+                
+                try {
+                    textArea.focus();
+                    textArea.select();
+                    successful = document.execCommand('copy');
+                } catch (err) {
+                    console.error('备用方案也失败:', err);
+                }
+                
+                document.body.removeChild(textArea);
+                resolve(successful);
+            }
+        } catch (err) {
+            console.error('复制过程中出错:', err);
+            resolve(false);
         }
-        
-        // 尝试执行复制命令
-        const successful = document.execCommand('copy');
-        console.log('备用方法复制' + (successful ? '成功' : '失败'));
-        
-        // 从DOM中移除元素
-        document.body.removeChild(textArea);
-        
-        return successful;
-    } catch (err) {
-        console.error('备用复制方法失败:', err);
-        return false;
-    }
+    });
 }
 
 // 当文档加载完成后执行
@@ -431,40 +425,42 @@ document.addEventListener('DOMContentLoaded', function() {
                 </button>
             `;
             
-            // 绑定复制按钮事件（确保每次渲染都重新绑定）
-            let copyBtn = contractElement.querySelector('.copy-address-btn');
+            // 绑定复制按钮事件
+            const copyBtn = contractElement.querySelector('.copy-address-btn');
             if (copyBtn) {
-                // 先用 cloneNode(true) 替换原按钮，彻底移除所有旧事件监听，防止重复绑定或失效
-                const newCopyBtn = copyBtn.cloneNode(true);
-                copyBtn.parentNode.replaceChild(newCopyBtn, copyBtn);
-                newCopyBtn.addEventListener('click', function(event) {
+                copyBtn.addEventListener('click', async function(event) {
                     event.preventDefault();
                     event.stopPropagation();
-                    console.log('复制按钮被点击'); // 调试输出
+                    
                     const contractAddr = this.getAttribute('data-contract');
                     if (!contractAddr) {
                         console.error('复制按钮缺少data-contract属性');
                         return;
                     }
                     
-                    // 使用异步方式调用复制函数
-                    copyToClipboard(contractAddr).then(success => {
+                    try {
+                        const success = await copyToClipboard(contractAddr);
                         if (success) {
                             // 显示复制成功提示
                             const originalTitle = this.getAttribute('title');
                             this.setAttribute('title', '已复制！');
                             this.classList.add('text-success');
                             showCopySuccessToast(contractAddr);
+                            
+                            // 2秒后恢复按钮状态
                             setTimeout(() => {
                                 this.setAttribute('title', originalTitle);
                                 this.classList.remove('text-success');
                             }, 2000);
                         } else {
-                            alert('复制失败，请手动复制');
+                            console.error('复制失败');
+                            showCopySuccessToast('ERROR:复制失败，请手动复制');
                         }
-                    });
+                    } catch (error) {
+                        console.error('复制过程中出错:', error);
+                        showCopySuccessToast('CATCH:复制失败，请手动复制');
+                    }
                 });
-                newCopyBtn.setAttribute('data-event-bound', 'true');
             }
             
             // 更新市场数据
