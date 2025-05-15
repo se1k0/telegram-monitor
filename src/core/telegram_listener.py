@@ -44,7 +44,8 @@ from src.database.db_handler import (
     extract_promotion_info, 
     process_message_batch, token_batch,
     process_batches, cleanup_batch_tasks,
-    save_telegram_message
+    save_telegram_message,
+    extract_chain_from_message
 )
 import config.settings as config
 from src.utils.utils import parse_market_cap, format_market_cap
@@ -722,9 +723,13 @@ class TelegramListener:
             logger.info(f"收到新消息 - 普通频道: {channel_title}, ID: {channel_id}, 链: UNKNOWN, 消息ID: {message.id}")
             logger.info(f"消息内容:\n--------------------------------------------------\n{message.text[:500]}...\n--------------------------------------------------")
             
+            # 从消息内容中提取链信息
+            from src.database.db_handler import extract_chain_from_message
+            chain = extract_chain_from_message(message.text) if message.text else 'UNKNOWN'
+            
             # 保存消息到数据库
             save_result = save_telegram_message(
-                chain='UNKNOWN',
+                chain=chain,  # 使用提取的链信息
                 message_id=message.id,
                 date=message.date,
                 text=message.text,
@@ -735,7 +740,8 @@ class TelegramListener:
             if save_result:
                 logger.info(f"成功保存消息到数据库: {message.id}")
             else:
-                logger.error(f"保存消息到数据库失败: {message.id}")
+                logger.warning(f"消息 {chain}-{message.id} 已存在或保存失败，跳过本条消息")
+                return  # 直接跳过后续处理
             
             # 提取并处理消息中的代币信息
             await self._process_token_in_message(message, channel_id, channel_title)
