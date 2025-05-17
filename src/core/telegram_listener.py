@@ -237,6 +237,7 @@ class TelegramListener:
         self.session_expiry_threshold = 43200  # session过期阈值（12小时）
         self.last_authorized_check = None
         self.authorized_check_interval = 60  # 每1分钟检查一次授权状态
+        self.max_errors = 5  # 增加最大错误次数阈值，防止属性不存在
     
     def _init_session_path(self):
         """初始化session路径,选择最新的可用session或创建新的"""
@@ -733,7 +734,7 @@ class TelegramListener:
             chain = chain or 'UNKNOWN'
             
             # 保存消息到数据库
-            save_result = save_telegram_message(
+            save_result = await save_telegram_message(
                 chain=chain,  # 使用提取的链信息，保证非None
                 message_id=message.id,
                 date=message.date,
