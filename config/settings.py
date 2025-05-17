@@ -149,8 +149,8 @@ GROUPS_ONLY = os.getenv('GROUPS_ONLY', 'false').lower() == 'true'
 CHANNELS_ONLY = os.getenv('CHANNELS_ONLY', 'false').lower() == 'true'
 
 # 批处理配置
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', '10'))
-BATCH_INTERVAL = int(os.getenv('BATCH_INTERVAL', '30'))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '5'))
+BATCH_INTERVAL = int(os.getenv('BATCH_INTERVAL', '15'))
 
 # 错误处理配置
 ERROR_MAX_RETRIES = int(os.getenv('ERROR_MAX_RETRIES', '3'))
