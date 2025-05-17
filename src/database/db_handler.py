@@ -350,6 +350,8 @@ async def process_batches():
                     logger.error(f"消息批处理失败: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
+                    # 只记录日志，不抛出异常，保证主流程继续
+                    continue
                 
             if token_batch:
                 local_batch = token_batch.copy()
@@ -379,6 +381,8 @@ async def process_batches():
                     logger.error(f"代币批处理失败: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
+                    # 只记录日志，不抛出异常，保证主流程继续
+                    continue
                 
             await asyncio.sleep(BATCH_TIMEOUT)
         except Exception as e:
@@ -450,10 +454,19 @@ async def save_messages_batch(messages: List[Dict]):
         # 使用数据库适配器
         from src.database.db_factory import get_db_adapter
         db_adapter = get_db_adapter()
-        
-        # 使用适配器批量保存消息
-        successful = 0
+        # 新增：批量查重，过滤已存在的消息
+        filtered_msgs = []
         for msg in messages:
+            if not all(key in msg for key in ['chain', 'message_id', 'date']):
+                logger.warning(f"消息缺少必要字段: {msg}")
+                continue
+            exists = await db_adapter.check_message_exists(msg['chain'], msg['message_id'])
+            if exists:
+                logger.info(f"消息 {msg['chain']}-{msg['message_id']} 已存在，批量保存时跳过")
+                continue
+            filtered_msgs.append(msg)
+        successful = 0
+        for msg in filtered_msgs:
             # 初始检查，确保必须的字段存在
             if not all(key in msg for key in ['chain', 'message_id', 'date']):
                 logger.warning(f"消息缺少必要字段: {msg}")
@@ -489,8 +502,15 @@ async def save_messages_individually(messages: List[Dict]):
         messages: 消息数据列表
     """
     successful = 0
+    from src.database.db_factory import get_db_adapter
+    db_adapter = get_db_adapter()
     for msg_data in messages:
         try:
+            # 新增：保存前查重
+            exists = await db_adapter.check_message_exists(msg_data['chain'], msg_data['message_id'])
+            if exists:
+                logger.info(f"消息 {msg_data['chain']}-{msg_data['message_id']} 已存在，逐个保存时跳过")
+                continue
             # 使用已有的保存函数
             if save_telegram_message(
                 chain=msg_data['chain'],
@@ -503,7 +523,8 @@ async def save_messages_individually(messages: List[Dict]):
                 successful += 1
         except Exception as individual_error:
             logger.error(f"单独保存消息 {msg_data['message_id']} 时出错: {individual_error}")
-    
+            import traceback
+            logger.debug(traceback.format_exc())
     logger.info(f"逐个保存: 成功 {successful}/{len(messages)} 条消息")
 
 def save_telegram_message(
@@ -530,6 +551,18 @@ def save_telegram_message(
     # 如果大批量处理队列已开启，将消息添加到队列
     global message_batch
     if MAX_BATCH_SIZE > 0:
+        # 新增：保存前查重，防止重复入队
+        from src.database.db_factory import get_db_adapter
+        db_adapter = get_db_adapter()
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            exists = loop.run_until_complete(db_adapter.check_message_exists(chain, message_id))
+        finally:
+            loop.close()
+        if exists:
+            logger.info(f"消息 {chain}-{message_id} 已存在，跳过入队和保存")
+            return False
         message_batch.append({
             'chain': chain,
             'message_id': message_id,
@@ -547,7 +580,15 @@ def save_telegram_message(
         # 使用数据库适配器
         from src.database.db_factory import get_db_adapter
         db_adapter = get_db_adapter()
-        
+        # 新增：保存前查重
+        loop = asyncio.new_event_loop()
+        try:
+            exists = loop.run_until_complete(db_adapter.check_message_exists(chain, message_id))
+        finally:
+            loop.close()
+        if exists:
+            logger.info(f"消息 {chain}-{message_id} 已存在，跳过保存")
+            return False
         # 准备消息数据
         message_data = {
             'chain': chain,

@@ -378,7 +378,7 @@ class SupabaseAdapter:
                 'messages',
                 'select',
                 filters={
-                    'channel_id': message_data.get('channel_id'),
+                    'chain': message_data.get('chain'),
                     'message_id': message_data.get('message_id')
                 },
                 limit=1
@@ -426,6 +426,10 @@ class SupabaseAdapter:
                 
             # 检查结果
             if isinstance(result, dict) and result.get('error'):
+                # 新增：唯一键冲突时直接记录日志并返回False，不抛出异常
+                if result.get('code') == '23505':
+                    logger.warning(f"唯一键冲突，消息已存在: chain={message_data.get('chain')}, message_id={message_data.get('message_id')}")
+                    return False
                 logger.error(f"保存消息操作返回错误: {result.get('error')}")
                 return False
                 
@@ -975,6 +979,29 @@ class SupabaseAdapter:
                 'exists': False,
                 'error': str(e)
             }
+
+    async def check_message_exists(self, chain: str, message_id: int) -> bool:
+        """
+        检查指定chain和message_id的消息是否已存在
+        Args:
+            chain: 区块链名称
+            message_id: 消息ID
+        Returns:
+            bool: 是否已存在
+        """
+        try:
+            result = await self.execute_query(
+                'messages',
+                'select',
+                filters={'chain': chain, 'message_id': message_id},
+                limit=1
+            )
+            if result and isinstance(result, list) and len(result) > 0:
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"检查消息是否存在时出错: {str(e)}")
+            return False
 
 # 创建单例实例
 _adapter = None
