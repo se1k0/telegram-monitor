@@ -67,7 +67,7 @@
                     </th>
                     <th class="text-nowrap d-none d-lg-table-cell">
                         <div class="d-flex align-items-center">
-                            成交量
+                            1h交易额
                             <span class="sort-btn" data-sort="volume">
                                 <i class="bi bi-caret-up-fill"></i>
                                 <i class="bi bi-caret-down-fill"></i>
@@ -76,7 +76,7 @@
                     </th>
                     <th class="text-nowrap d-none d-xl-table-cell text-center">
                         <div class="d-flex align-items-center justify-content-center">
-                            买入/卖出
+                            1h交易数
                             <span class="sort-btn" data-sort="buys_sells">
                                 <i class="bi bi-caret-up-fill"></i>
                                 <i class="bi bi-caret-down-fill"></i>
@@ -166,6 +166,42 @@
         background: #fffbe6;
         color: #b8860b;
         border: 1px solid #ffe58f;
+    }
+    
+    /* 市值和交易额的高亮样式 */
+    .value-badge {
+        display: inline-block;
+        padding: 0 6px;
+        border-radius: 6px;
+        font-size: 90%;
+        font-weight: 500;
+    }
+    .high-value {
+        background: #fffbe6;
+        color: #b8860b;
+        border: 1px solid #ffe58f;
+    }
+
+    /* 高涨幅代币行高亮样式 */
+    .high-change-highlight {
+        background-color: #fffbe6 !important; /* 浅黄色背景 */
+    }
+    /* 提高优先级 */
+    tr.token-row.high-change-highlight {
+        background-color: #fffbe6 !important;
+    }
+    /* 确保高亮行的所有单元格都能显示高亮色 */
+    tr.token-row.high-change-highlight > td {
+        background-color: #fffbe6 !important;
+    }
+
+    /* 高交易额和高市值文字颜色 - 保留原有的颜色高亮，但不再使用 */
+    .high-volume-text {
+        color: #ffe600 !important; /* 浅黄色 */
+    }
+    
+    .high-marketcap-text {
+        color: #ffe600 !important; /* 浅黄色 */
     }
 
     #new-tokens-notification-bar {

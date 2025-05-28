@@ -535,7 +535,24 @@ function renderTokens(tokens) {
             }
             
             // 设置各种数值
-            safeSetTextContent(row.querySelector('td:nth-child(4)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
+            const marketCapCell = row.querySelector('td:nth-child(4)');
+            if (marketCapCell) {
+                const marketCapText = token.market_cap_formatted || formatMarketCap(token.market_cap);
+                let marketCapValue = 0;
+                
+                // 尝试直接从token数据获取数值
+                if (token.market_cap && !isNaN(parseFloat(token.market_cap))) {
+                    marketCapValue = parseFloat(token.market_cap);
+                } 
+                // 如果没有数值或无法解析，尝试从格式化文本解析
+                else if (marketCapText) {
+                    marketCapValue = parseCurrencyValue(marketCapText);
+                }
+                
+                // 使用新的渲染方式
+                const isHighValue = marketCapValue >= 1000000; // 1m = 1,000,000
+                marketCapCell.innerHTML = renderValueWithHighlightStyle(marketCapText, isHighValue);
+            }
             
             // 涨跌幅
             const changeElem = row.querySelector('td:nth-child(5)');
@@ -548,12 +565,30 @@ function renderTokens(tokens) {
                     changeValue = ((currentMarketCap - firstMarketCap) / firstMarketCap) * 100;
                 }
                 
-                changeElem.textContent = formatPercentage(changeValue);
+                // 需要使用innerHTML而不是textContent来正确应用HTML标签
+                changeElem.innerHTML = renderValueWithHighlightStyle(formatPercentage(changeValue), changeValue >= 400);
                 changeElem.className = `d-none d-lg-table-cell ${changeValue > 0 ? 'positive-change' : changeValue < 0 ? 'negative-change' : ''}`;
             }
             
             // 成交量
-            safeSetTextContent(row.querySelector('td:nth-child(6)'), formatVolume(token.volume_1h));
+            const volumeCell = row.querySelector('td:nth-child(6)');
+            if (volumeCell) {
+                const volumeText = formatVolume(token.volume_1h);
+                let volumeValue = 0;
+                
+                // 尝试直接从token数据获取数值
+                if (token.volume_1h && !isNaN(parseFloat(token.volume_1h))) {
+                    volumeValue = parseFloat(token.volume_1h);
+                } 
+                // 如果没有数值或无法解析，尝试从格式化文本解析
+                else if (volumeText) {
+                    volumeValue = parseCurrencyValue(volumeText);
+                }
+                
+                // 使用新的渲染方式
+                const isHighValue = volumeValue >= 150000; // 150k = 150,000
+                volumeCell.innerHTML = renderValueWithHighlightStyle(volumeText, isHighValue);
+            }
             
             // 买入/卖出
             const buysElem = row.querySelector('.buy-count');
@@ -1219,7 +1254,24 @@ function createTokenRow(token) {
     }
     
     // 设置各种数值
-    safeSetTextContent(row.querySelector('td:nth-child(4)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
+    const marketCapCell = row.querySelector('td:nth-child(4)');
+    if (marketCapCell) {
+        const marketCapText = token.market_cap_formatted || formatMarketCap(token.market_cap);
+        let marketCapValue = 0;
+        
+        // 尝试直接从token数据获取数值
+        if (token.market_cap && !isNaN(parseFloat(token.market_cap))) {
+            marketCapValue = parseFloat(token.market_cap);
+        } 
+        // 如果没有数值或无法解析，尝试从格式化文本解析
+        else if (marketCapText) {
+            marketCapValue = parseCurrencyValue(marketCapText);
+        }
+        
+        // 使用新的渲染方式
+        const isHighValue = marketCapValue >= 1000000; // 1m = 1,000,000
+        marketCapCell.innerHTML = renderValueWithHighlightStyle(marketCapText, isHighValue);
+    }
     
     // 涨跌幅
     const changeElem = row.querySelector('td:nth-child(5)');
@@ -1232,12 +1284,30 @@ function createTokenRow(token) {
             changeValue = ((currentMarketCap - firstMarketCap) / firstMarketCap) * 100;
         }
         
-        changeElem.textContent = formatPercentage(changeValue);
+        // 需要使用innerHTML而不是textContent来正确应用HTML标签
+        changeElem.innerHTML = renderValueWithHighlightStyle(formatPercentage(changeValue), changeValue >= 400);
         changeElem.className = `d-none d-lg-table-cell ${changeValue > 0 ? 'positive-change' : changeValue < 0 ? 'negative-change' : ''}`;
     }
     
     // 成交量
-    safeSetTextContent(row.querySelector('td:nth-child(6)'), formatVolume(token.volume_1h));
+    const volumeCell = row.querySelector('td:nth-child(6)');
+    if (volumeCell) {
+        const volumeText = formatVolume(token.volume_1h);
+        let volumeValue = 0;
+        
+        // 尝试直接从token数据获取数值
+        if (token.volume_1h && !isNaN(parseFloat(token.volume_1h))) {
+            volumeValue = parseFloat(token.volume_1h);
+        } 
+        // 如果没有数值或无法解析，尝试从格式化文本解析
+        else if (volumeText) {
+            volumeValue = parseCurrencyValue(volumeText);
+        }
+        
+        // 使用新的渲染方式
+        const isHighValue = volumeValue >= 150000; // 150k = 150,000
+        volumeCell.innerHTML = renderValueWithHighlightStyle(volumeText, isHighValue);
+    }
     
     // 买入/卖出
     const buysElem = row.querySelector('.buy-count');
@@ -1370,6 +1440,15 @@ function renderFirstSeenWithStyle(dateString) {
     }
 }
 
+// 新增：渲染数值带样式
+function renderValueWithHighlightStyle(value, isHighValue) {
+    if (isHighValue) {
+        return `<span class="value-badge high-value">${value}</span>`;
+    } else {
+        return value;
+    }
+}
+
 // 工具函数：通用复制到剪贴板，兼容 http/https
 function copyToClipboard(text) {
     // 优先用 Clipboard API（仅 HTTPS/localhost 可用）
@@ -1394,4 +1473,30 @@ function copyToClipboard(text) {
         document.body.removeChild(textarea);
         return Promise.resolve(success);
     }
-} 
+}
+
+/**
+ * 解析带单位的货币值文本
+ * @param {string} text 带单位的货币值文本，如 "$1.2M"、"$450K"
+ * @returns {number} 解析后的数值
+ */
+function parseCurrencyValue(text) {
+    if (!text) return 0;
+    
+    // 移除所有非数字、非小数点、非单位字符
+    const cleanText = text.replace(/[^0-9.KMBkmb]/g, '');
+    
+    // 提取数字部分和单位部分
+    const match = cleanText.match(/^(\d+\.?\d*)([KMBkmb])?$/);
+    if (!match) return 0;
+    
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || '').toUpperCase();
+    
+    // 根据单位转换为实际数值
+    if (unit === 'K') return value * 1000;
+    if (unit === 'M') return value * 1000000;
+    if (unit === 'B') return value * 1000000000;
+    
+    return value;
+}

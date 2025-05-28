@@ -1358,6 +1358,16 @@ def process_token_data(token):
         except:
             market_cap_value = 0
             
+        # 获取交易量原始值，确保为数值类型
+        volume_1h_value = token.get('volume_1h', 0)
+        try:
+            if isinstance(volume_1h_value, str):
+                volume_1h_value = float(volume_1h_value.replace(',', ''))
+            else:
+                volume_1h_value = float(volume_1h_value) if volume_1h_value is not None else 0
+        except:
+            volume_1h_value = 0
+            
         # 基础数据处理
         token_data = {
             'id': token.get('id', 0),  # 添加id字段
@@ -1370,8 +1380,8 @@ def process_token_data(token):
             'market_cap_formatted': format_market_cap(market_cap_value),  # 添加格式化后的市值
             'first_market_cap': token.get('first_market_cap', market_cap_value),  # 添加首次市值，如果没有则使用当前市值
             'price': format_number(token.get('price', 0)),
-            'volume_1h': format_number(token.get('volume_1h', 0)),
-            'volume_1h_formatted': format_number(token.get('volume_1h', 0)),  # 添加格式化后的1小时交易量
+            'volume_1h': volume_1h_value,  # 保留原始值，供前端JS处理
+            'volume_1h_formatted': _format_volume(volume_1h_value),  # 使用新的格式化函数
             'volume_24h': format_number(token.get('volume_24h', 0)),
             'holders': format_number(token.get('holders', 0)),
             'holders_count': token.get('holders_count', 0),  # 添加原始持有者数量
@@ -1640,6 +1650,20 @@ def _format_market_cap(market_cap: float) -> str:
     elif market_cap >= 1000:      # 千 (K)
         return f"${market_cap/1000:.2f}K"
     return f"${market_cap:.2f}"
+
+# 新增：格式化交易量的辅助函数
+def _format_volume(volume: float) -> str:
+    """格式化交易量显示，与前端formatVolume保持一致"""
+    if volume is None or volume == 0:
+        return "$0.00"
+    
+    if volume >= 1000000000:  # 十亿 (B)
+        return f"${volume/1000000000:.2f}B"
+    elif volume >= 1000000:   # 百万 (M)
+        return f"${volume/1000000:.2f}M"
+    elif volume >= 1000:      # 千 (K)
+        return f"${volume/1000:.2f}K"
+    return f"${volume:.2f}"
 
 @app.route('/api/refresh_tokens', methods=['POST'])
 @async_route
@@ -2292,14 +2316,7 @@ async def api_refresh_token(chain, contract):
             volume_1h = updated_token.get('volume_1h')
             # 确保volume_1h不是None且大于0
             if volume_1h is not None and volume_1h > 0:
-                volume_formatted = ''
-                if volume_1h >= 1000000:
-                    volume_formatted = f"${volume_1h / 1000000:.2f}M"
-                elif volume_1h >= 1000:
-                    volume_formatted = f"${volume_1h / 1000:.2f}K"
-                else:
-                    volume_formatted = f"${volume_1h:.2f}"
-                updated_token['volume_1h_formatted'] = volume_formatted
+                updated_token['volume_1h_formatted'] = _format_volume(volume_1h)
                 logger.info(f"格式化 {token_symbol} 的新交易量: {updated_token['volume_1h_formatted']}")
             else:
                 # 如果是None或0，设置默认格式化值

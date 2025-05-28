@@ -498,12 +498,12 @@ class TokenMarketUpdater:
         if market_cap is None:
             return "N/A"
             
-        if market_cap >= 1_000_000_000:
-            return f"${market_cap / 1_000_000_000:.2f}B"
-        elif market_cap >= 1_000_000:
-            return f"${market_cap / 1_000_000:.2f}M"
-        elif market_cap >= 1_000:
-            return f"${market_cap / 1_000:.2f}K"
+        if market_cap >= 1000000000:
+            return f"${market_cap / 1000000000:.2f}B"
+        elif market_cap >= 1000000:
+            return f"${market_cap / 1000000:.2f}M"
+        elif market_cap >= 1000:
+            return f"${market_cap / 1000:.2f}K"
         else:
             return f"${market_cap:.2f}"
     
@@ -742,13 +742,7 @@ class TokenMarketUpdater:
             
             # 格式化交易量数据
             if total_volume_1h is not None and total_volume_1h > 0:
-                if total_volume_1h >= 1000000:
-                    volume_formatted = f"${total_volume_1h / 1000000:.2f}M"
-                elif total_volume_1h >= 1000:
-                    volume_formatted = f"${total_volume_1h / 1000:.2f}K"
-                else:
-                    volume_formatted = f"${total_volume_1h:.2f}"
-                token_data['volume_1h_formatted'] = volume_formatted
+                token_data['volume_1h_formatted'] = _format_volume(total_volume_1h)
             else:
                 logger.info(f"交易量为空或为零: total_volume_1h={total_volume_1h}")
                 token_data['volume_1h_formatted'] = '$0.00'
@@ -1259,14 +1253,10 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
         return {"error": f"更新代币数据时出错: {str(e)}"}
 
 def _format_market_cap(market_cap: float) -> str:
-    """格式化市值显示
+    """格式化市值显示"""
+    if market_cap is None:
+        return "N/A"
     
-    Args:
-        market_cap: 市值数字
-        
-    Returns:
-        str: 格式化后的市值字符串
-    """
     if market_cap >= 1000000000:  # 十亿 (B)
         return f"${market_cap/1000000000:.2f}B"
     elif market_cap >= 1000000:   # 百万 (M)
@@ -1274,6 +1264,19 @@ def _format_market_cap(market_cap: float) -> str:
     elif market_cap >= 1000:      # 千 (K)
         return f"${market_cap/1000:.2f}K"
     return f"${market_cap:.2f}"
+
+def _format_volume(volume: float) -> str:
+    """格式化交易量显示，与前端formatVolume保持一致"""
+    if volume is None or volume == 0:
+        return "$0.00"
+    
+    if volume >= 1000000000:  # 十亿 (B)
+        return f"${volume/1000000000:.2f}B"
+    elif volume >= 1000000:   # 百万 (M)
+        return f"${volume/1000000:.2f}M"
+    elif volume >= 1000:      # 千 (K)
+        return f"${volume/1000:.2f}K"
+    return f"${volume:.2f}"
 
 def _normalize_chain_id(chain: str) -> Optional[str]:
     """标准化链ID到DexScreener API支持的格式

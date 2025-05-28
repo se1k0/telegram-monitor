@@ -3,6 +3,33 @@
  * 处理 Token 数据刷新和 UI 更新
  */
 
+/**
+ * 格式化交易量显示
+ * @param {number} value 交易量
+ * @returns {string} 格式化后的交易量
+ */
+function formatVolume(value) {
+    if (!value) return '$0';
+    if (isNaN(parseFloat(value))) return '$0';
+    
+    value = parseFloat(value);
+    
+    try {
+        // 格式化为美元表示
+        if (value >= 1000000000) {
+            return '$' + (value / 1000000000).toFixed(2) + 'B';
+        } else if (value >= 1000000) {
+            return '$' + (value / 1000000).toFixed(2) + 'M';
+        } else if (value >= 1000) {
+            return '$' + (value / 1000).toFixed(2) + 'K';
+        } else {
+            return '$' + value.toFixed(2);
+        }
+    } catch (e) {
+        return '$0';
+    }
+}
+
 // Token刷新功能
 function refreshTokenData(row) {
     // 直接从tr行获取代币信息
@@ -81,6 +108,24 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     const marketCapCell = row.querySelector('td:nth-child(4)');
     if (marketCapCell && tokenData.market_cap_formatted) {
         flashIfChanged(marketCapCell, tokenData.market_cap_formatted);
+        
+        // 判断市值是否≥1m，如果是则添加高亮类
+        let marketCapValue = 0;
+        
+        // 尝试直接从token数据获取数值
+        if (tokenData.market_cap && !isNaN(parseFloat(tokenData.market_cap))) {
+            marketCapValue = parseFloat(tokenData.market_cap);
+        } 
+        // 如果没有数值或无法解析，尝试从格式化文本解析
+        else if (tokenData.market_cap_formatted) {
+            marketCapValue = parseCurrencyValue(tokenData.market_cap_formatted);
+        }
+        
+        if (marketCapValue >= 1000000) { // 1m = 1,000,000
+            marketCapCell.classList.add('high-marketcap-text');
+        } else {
+            marketCapCell.classList.remove('high-marketcap-text');
+        }
     }
     
     // 计算并更新涨跌幅
@@ -102,20 +147,61 @@ function updateTokenDataInUI(chain, contract, tokenData) {
         } else if (changeValue < 0) {
             changePctCell.classList.add('negative-change');
         }
+        
+        // 添加高涨幅行高亮
+        if (changeValue >= 400) {
+            // 直接使用classList.toggle，减少不必要的DOM操作
+            row.classList.toggle('high-change-highlight', true);
+        } else {
+            // 只有当已经有这个类时才移除，避免不必要的DOM操作
+            if (row.classList.contains('high-change-highlight')) {
+                row.classList.toggle('high-change-highlight', false);
+            }
+        }
     }
     
     // 更新成交量
     const volumeCell = row.querySelector('td:nth-child(6)');
-    if (volumeCell && tokenData.volume_1h) {
-        let formatted = '';
-        if (tokenData.volume_1h >= 1000000) {
-            formatted = `$${(tokenData.volume_1h / 1000000).toFixed(2)}M`;
-        } else if (tokenData.volume_1h >= 1000) {
-            formatted = `$${(tokenData.volume_1h / 1000).toFixed(2)}K`;
-        } else {
-            formatted = `$${tokenData.volume_1h.toFixed(2)}`;
+    if (volumeCell) {
+        // 使用服务器返回的格式化字段，如果没有则使用formatVolume函数格式化
+        let formatted = tokenData.volume_1h_formatted;
+        if (!formatted && typeof formatVolume === 'function' && tokenData.volume_1h) {
+            formatted = formatVolume(tokenData.volume_1h);
+        } else if (!formatted) {
+            // 如果formatVolume函数不可用，使用内置逻辑
+            if (tokenData.volume_1h && !isNaN(parseFloat(tokenData.volume_1h))) {
+                const volume = parseFloat(tokenData.volume_1h);
+                if (volume >= 1000000) {
+                    formatted = `$${(volume / 1000000).toFixed(2)}M`;
+                } else if (volume >= 1000) {
+                    formatted = `$${(volume / 1000).toFixed(2)}K`;
+                } else {
+                    formatted = `$${volume.toFixed(2)}`;
+                }
+            } else {
+                formatted = '$0.00';
+            }
         }
+        
         flashIfChanged(volumeCell, formatted);
+        
+        // 判断1h交易额是否≥150k，如果是则添加高亮类
+        let volumeValue = 0;
+        
+        // 尝试直接从token数据获取数值
+        if (tokenData.volume_1h && !isNaN(parseFloat(tokenData.volume_1h))) {
+            volumeValue = parseFloat(tokenData.volume_1h);
+        } 
+        // 如果没有数值或无法解析，尝试从格式化文本解析
+        else if (formatted) {
+            volumeValue = parseCurrencyValue(formatted);
+        }
+        
+        if (volumeValue >= 150000) { // 150k = 150,000
+            volumeCell.classList.add('high-volume-text');
+        } else {
+            volumeCell.classList.remove('high-volume-text');
+        }
     }
     
     // 更新买入/卖出
@@ -178,16 +264,25 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     
     // 刷新行的样式
     if (tokenData.market_cap > tokenData.market_cap_1h) {
-        row.classList.add('table-success');
-        row.classList.remove('table-danger');
+        // 使用classList.toggle替代add/remove，减少DOM操作
+        row.classList.toggle('table-success', true);
+        row.classList.toggle('table-danger', false);
     } else if (tokenData.market_cap < tokenData.market_cap_1h) {
-        row.classList.add('table-danger');
-        row.classList.remove('table-success');
+        row.classList.toggle('table-danger', true);
+        row.classList.toggle('table-success', false);
     } else {
-        row.classList.remove('table-success', 'table-danger');
+        // 只有在已有这些类时才移除
+        if (row.classList.contains('table-success') || row.classList.contains('table-danger')) {
+            row.classList.toggle('table-success', false);
+            row.classList.toggle('table-danger', false);
+        }
     }
     // 保证token条背景色始终为白色
-    row.classList.remove('table-success', 'table-danger');
+    // 只有在已有这些类时才移除，避免不必要的DOM操作
+    if (row.classList.contains('table-success') || row.classList.contains('table-danger')) {
+        row.classList.toggle('table-success', false);
+        row.classList.toggle('table-danger', false);
+    }
 }
 
 // 显示提示消息
@@ -282,5 +377,31 @@ function updateTokensTableCount() {
         } else {
             emptyState.classList.remove('d-none');
         }
+    }
+}
+
+/**
+ * 解析格式化的货币字符串，返回数值
+ * @param {string} formattedValue 格式化的货币字符串，如 "$1.5M", "$500K" 等
+ * @returns {number} 转换后的数值
+ */
+function parseCurrencyValue(formattedValue) {
+    if (!formattedValue) return 0;
+    
+    // 如果已经是数字，直接返回
+    if (typeof formattedValue === 'number') return formattedValue;
+    
+    // 将字符串转换为统一格式
+    let value = formattedValue.toString().replace(/,/g, '').replace(/\$/g, '');
+    
+    // 检查单位后缀并转换
+    if (value.toUpperCase().endsWith('M')) {
+        return parseFloat(value.slice(0, -1)) * 1000000;
+    } else if (value.toUpperCase().endsWith('K')) {
+        return parseFloat(value.slice(0, -1)) * 1000;
+    } else if (value.toUpperCase().endsWith('B')) {
+        return parseFloat(value.slice(0, -1)) * 1000000000;
+    } else {
+        return parseFloat(value) || 0;
     }
 } 
