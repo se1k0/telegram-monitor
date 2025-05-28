@@ -426,7 +426,80 @@ function initTooltips() {
 // 页面加载完成后初始化工具提示
 document.addEventListener('DOMContentLoaded', function() {
     initTooltips();
+    
+    // 启动首次信号自动更新
+    startFirstSignalUpdater();
 });
+
+// 首次信号自动更新频率限制
+let firstSignalUpdateCount = 0;
+const FIRST_SIGNAL_UPDATE_LIMIT = 25;  // 每分钟最多更新25个
+const FIRST_SIGNAL_UPDATE_WINDOW = 60 * 1000;  // 1分钟
+
+function tryIncreaseFirstSignalUpdateCount() {
+    if (firstSignalUpdateCount >= FIRST_SIGNAL_UPDATE_LIMIT) return false;
+    firstSignalUpdateCount++;
+    setTimeout(() => {
+        firstSignalUpdateCount--;
+    }, FIRST_SIGNAL_UPDATE_WINDOW);
+    return true;
+}
+
+// 只更新首次信号的函数 - 使用本地存储的first_update数据，不再请求API
+function updateFirstSignalOnly(row) {
+    // 获取行的数据
+    const first_update = row.getAttribute('data-first-update');
+    if (!first_update) return;
+    
+    // 更新行的时间戳，防止短时间内重复更新
+    row.dataset.lastFirstSignalUpdate = Date.now().toString();
+    
+    // 直接在前端计算和更新首次信号，不再请求服务器
+    const firstSeenElem = row.querySelector('td:nth-child(3) .small');
+    if (firstSeenElem && typeof renderFirstSeenWithStyle === 'function') {
+        firstSeenElem.innerHTML = renderFirstSeenWithStyle(first_update);
+    } else if (firstSeenElem) {
+        // 如果renderFirstSeenWithStyle函数不存在，使用简单的文本更新
+        firstSeenElem.textContent = formatDate ? formatDate(first_update) : first_update;
+    }
+}
+
+// 自动更新可视区域内的token的首次信号
+function updateVisibleTokensFirstSignal() {
+    // 查找可视区域内需要更新的token
+    const now = Date.now();
+    const visibleRows = Array.from(document.querySelectorAll('.token-row')).filter(row => {
+        // 检查是否在可视区域内
+        const rect = row.getBoundingClientRect();
+        if (!(rect.top < window.innerHeight && rect.bottom > 0)) return false;
+        
+        // 检查是否已超过更新间隔（1分钟）
+        const lastUpdate = parseInt(row.dataset.lastFirstSignalUpdate || '0', 10);
+        return (now - lastUpdate >= 60 * 1000);
+    });
+    
+    // 如果有可视区域内需要更新的token，依次更新
+    if (visibleRows.length > 0 && tryIncreaseFirstSignalUpdateCount()) {
+        // 每次只更新一个token的首次信号
+        const row = visibleRows[0];
+        updateFirstSignalOnly(row);
+    }
+}
+
+// 启动首次信号自动更新器
+function startFirstSignalUpdater() {
+    console.log("启动首次信号自动更新器");
+    
+    // 初始化所有行的时间戳
+    const rows = document.querySelectorAll('.token-row');
+    const now = Date.now();
+    rows.forEach(row => {
+        row.dataset.lastFirstSignalUpdate = now.toString();
+    });
+    
+    // 设置定时器，每3秒检查一次可视区域内的token
+    setInterval(updateVisibleTokensFirstSignal, 3000);
+}
 
 // // ========== 自动刷新频率限制 ========== //
 // let autoRefreshCount = 0;
@@ -440,6 +513,7 @@ document.addEventListener('DOMContentLoaded', function() {
 //     }, AUTO_REFRESH_WINDOW);
 //     return true;
 // }
+
 
 // // ========== 自动刷新可视区token（每次只刷新一个，且每条目1分钟一次） ========== //
 // function isElementInViewport(el) {
@@ -474,4 +548,5 @@ document.addEventListener('DOMContentLoaded', function() {
 //     });
 // });
 // setInterval(autoRefreshOneToken, 2000);
-</script> 
+
+</script>

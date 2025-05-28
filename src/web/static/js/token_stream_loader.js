@@ -400,6 +400,7 @@ function renderTokens(tokens) {
                 trElement.setAttribute('data-chain', token.chain);
                 trElement.setAttribute('data-contract', token.contract);
                 trElement.setAttribute('data-token-symbol', token.token_symbol || '');
+                trElement.setAttribute('data-first-update', token.first_update || '');
             }
             
             // 代币名称和图标
@@ -1119,6 +1120,7 @@ function createTokenRow(token) {
         trElement.setAttribute('data-chain', token.chain);
         trElement.setAttribute('data-contract', token.contract);
         trElement.setAttribute('data-token-symbol', token.token_symbol || '');
+        trElement.setAttribute('data-first-update', token.first_update || '');
     }
     
     // 代币名称和图标
@@ -1324,7 +1326,7 @@ function createTokenRow(token) {
     // 消息覆盖
     safeSetTextContent(row.querySelector('td:nth-child(10)'), formatNumber(token.spread_count || 0));
     
-    // 操作按钮数据
+    // 操作按钮
     const refreshBtn = row.querySelector('.refresh-token-btn');
     if (refreshBtn) {
         refreshBtn.dataset.tokenId = token.id;

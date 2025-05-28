@@ -62,5 +62,51 @@
             console.error('startCheckingNewTokens函数未定义');
         }
     });
+
+    // 确保有renderFirstSeenWithStyle函数可用
+    if (typeof renderFirstSeenWithStyle !== 'function') {
+        // 如果没有，定义一个简单版本的函数
+        function renderFirstSeenWithStyle(dateString) {
+            const formatted = typeof formatDate === 'function' ? formatDate(dateString) : dateString;
+            if (formatted === '刚刚') {
+                return `<span class="first-seen-badge first-seen-now">${formatted}</span>`;
+            } else if (/^\d+m$/.test(formatted)) {
+                return `<span class="first-seen-badge first-seen-min">${formatted}</span>`;
+            } else {
+                return formatted;
+            }
+        }
+    }
+
+    // 格式化日期显示（简化版）
+    if (typeof formatDate !== 'function') {
+        function formatDate(dateString) {
+            if (!dateString) return '未知';
+            
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return '未知';
+                
+                const now = new Date();
+                const diffMs = now - date;
+                const diffSec = Math.floor(diffMs / 1000);
+                const diffMin = Math.floor(diffSec / 60);
+                const diffHour = Math.floor(diffMin / 60);
+                const diffDay = Math.floor(diffHour / 24);
+                
+                if (diffSec < 60) {
+                    return '刚刚';
+                } else if (diffMin < 60) {
+                    return `${diffMin}m`;
+                } else if (diffHour < 24) {
+                    return `${diffHour}h`;
+                } else {
+                    return `${diffDay}d`;
+                }
+            } catch (e) {
+                return '未知';
+            }
+        }
+    }
 </script>
 {% endblock %} 
