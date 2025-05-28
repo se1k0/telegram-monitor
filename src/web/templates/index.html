@@ -103,6 +103,10 @@
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
         border: 1px solid var(--gray-200);
     }
+
+    .chain-filter-dropdown{
+        z-index: 9999;
+    }
     
     .search-box {
         position: relative;
@@ -264,6 +268,37 @@
     .view-toggle-btn:hover:not(.active) {
         color: var(--gray-800);
     }
+    
+    /* 仪表盘卡片样式 */
+    .dashboard-card {
+        border-radius: 16px;
+        background: white;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        border: 1px solid var(--gray-200);
+        margin-bottom: 2rem;
+        position: relative;
+        z-index: 10; /* 设置较低的z-index，确保dropdown能够覆盖它 */
+    }
+    
+    .dashboard-card-header {
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--gray-200);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .dashboard-card-title {
+        font-weight: 600;
+        margin-bottom: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .dashboard-card-body {
+        padding: 1.5rem;
+    }
 </style>
 {% endblock %}
 
@@ -280,7 +315,7 @@
                     {% endif %}
                     <div class="search-box flex-grow-1 me-2">
                         <i class="bi bi-search"></i>
-                        <input class="form-control" type="search" placeholder="搜索合约地址或代币符号..." aria-label="Search" name="search" value="{{ search_query }}">
+                        <input class="form-control" type="search" placeholder="搜索代币/合约地址" aria-label="Search" name="search" value="{{ search_query }}">
                     </div>
                     <button class="btn btn-primary search-btn px-4" type="submit">
                         搜索
@@ -361,6 +396,37 @@
 <!-- 复制功能脚本 -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // 修复下拉菜单问题的更好方法
+    const dropdown = document.querySelector('.chain-filter-dropdown');
+    if (dropdown) {
+        // 恢复Bootstrap下拉菜单功能
+        const chainFilterBtn = document.getElementById('chainFilterDropdown');
+        
+        // 当下拉菜单显示时，确保其位于最顶层
+        chainFilterBtn.addEventListener('shown.bs.dropdown', function() {
+            // 将下拉菜单移到body的最后，确保它不会被其他元素的overflow:hidden影响
+            document.body.appendChild(dropdown);
+            
+            // 调整位置和样式
+            const btnRect = chainFilterBtn.getBoundingClientRect();
+            dropdown.style.position = 'fixed';
+            dropdown.style.zIndex = '9999';
+            dropdown.style.top = btnRect.bottom + 'px';
+            dropdown.style.left = btnRect.left + 'px';
+            dropdown.style.minWidth = btnRect.width + 'px';
+            
+            // 添加Bootstrap下拉菜单的基本样式类
+            dropdown.classList.add('dropdown-menu', 'show');
+        });
+        
+        // 当下拉菜单隐藏时，恢复原位
+        chainFilterBtn.addEventListener('hidden.bs.dropdown', function() {
+            // 恢复原有DOM结构
+            chainFilterBtn.parentNode.appendChild(dropdown);
+            dropdown.style = '';
+        });
+    }
+    
     // 初始化Token流式加载器
     if (typeof initTokenStreamLoader === 'function') {
         console.log("初始化Token流式加载器");

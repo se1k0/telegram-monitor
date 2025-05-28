@@ -14,10 +14,11 @@ import time
 import random
 from typing import Dict, Any, List, Optional, Union, Tuple
 from datetime import datetime
+from functools import lru_cache
+import httpx
 
 try:
     from supabase import create_client, Client
-    import httpx
 except ImportError:
     raise ImportError("未安装supabase库，请运行：pip install supabase httpx")
 
@@ -50,19 +51,46 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("未配置Supabase，请在.env文件中设置SUPABASE_URL和SUPABASE_KEY")
     sys.exit(1)
 
-# 初始化Supabase客户端
-supabase: Optional[Client] = None
-supabase_admin: Optional[Client] = None
+# 配置HTTP客户端连接池
+http_client = httpx.AsyncClient(
+    timeout=30.0,  # 设置超时时间
+    limits=httpx.Limits(
+        max_keepalive_connections=5,  # 保持活跃的最大连接数
+        max_connections=10,  # 最大连接数
+        keepalive_expiry=30.0  # 保持连接活跃的时间
+    )
+)
 
+# 使用LRU缓存装饰器来缓存客户端实例
+@lru_cache(maxsize=2)
+def get_supabase_client(url: str, key: str) -> Client:
+    """
+    获取Supabase客户端实例，使用LRU缓存避免重复创建
+    
+    Args:
+        url: Supabase URL
+        key: Supabase API密钥
+        
+    Returns:
+        Client: Supabase客户端实例
+    """
+    try:
+        client = create_client(url, key)
+        logger.info(f"Supabase客户端初始化成功: {url}")
+        return client
+    except Exception as e:
+        logger.error(f"Supabase客户端初始化失败: {str(e)}")
+        raise
+
+# 初始化Supabase客户端
 try:
     # 初始化常规客户端 (anon key) - 用于读取操作
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logger.info(f"Supabase客户端初始化成功: {SUPABASE_URL}")
+    supabase = get_supabase_client(SUPABASE_URL, SUPABASE_KEY)
     
     # 如果有服务角色密钥，初始化管理客户端 (service role key) - 用于写入操作
     if SUPABASE_SERVICE_KEY:
         try:
-            supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+            supabase_admin = get_supabase_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
             logger.info("Supabase管理客户端初始化成功 (使用服务角色密钥)")
         except Exception as admin_init_error:
             logger.warning(f"Supabase管理客户端初始化失败: {str(admin_init_error)}")
@@ -83,9 +111,54 @@ class SupabaseAdapter:
         self.supabase = supabase
         self.supabase_admin = supabase_admin if supabase_admin else supabase
         # 设置重试配置
-        self.max_retries = 5  # 最大重试次数
-        self.base_delay = 1   # 初始延迟秒数
-        self.max_delay = 30   # 最大延迟秒数
+        self.max_retries = 3  # 减少最大重试次数
+        self.base_delay = 0.5  # 减少初始延迟
+        self.max_delay = 10  # 减少最大延迟
+        self._last_operation_time = 0  # 记录上次操作时间
+        self._min_operation_interval = 0.1  # 最小操作间隔（秒）
+        self._connection_check_interval = 300  # 连接检查间隔（秒）
+        self._last_connection_check = 0  # 上次连接检查时间
+        
+    async def _check_connection(self):
+        """检查连接状态并在必要时重新初始化"""
+        current_time = time.time()
+        if current_time - self._last_connection_check < self._connection_check_interval:
+            return
+            
+        try:
+            # 尝试执行一个简单的查询来检查连接
+            await self.execute_query('telegram_channels', 'select', limit=1)
+            self._last_connection_check = current_time
+        except Exception as e:
+            logger.warning(f"连接检查失败，尝试重新初始化连接: {str(e)}")
+            await self._reinitialize_connection()
+            
+    async def _reinitialize_connection(self):
+        """重新初始化数据库连接"""
+        try:
+            global supabase, supabase_admin
+            supabase = get_supabase_client(SUPABASE_URL, SUPABASE_KEY)
+            if SUPABASE_SERVICE_KEY:
+                supabase_admin = get_supabase_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+            else:
+                supabase_admin = supabase
+                
+            # 更新当前实例的连接
+            self.supabase = supabase
+            self.supabase_admin = supabase_admin
+            self._last_connection_check = time.time()
+            logger.info("Supabase 连接已重新初始化")
+        except Exception as e:
+            logger.error(f"重新初始化 Supabase 连接失败: {str(e)}")
+            raise
+        
+    async def _wait_for_rate_limit(self):
+        """等待以满足速率限制"""
+        current_time = time.time()
+        time_since_last_op = current_time - self._last_operation_time
+        if time_since_last_op < self._min_operation_interval:
+            await asyncio.sleep(self._min_operation_interval - time_since_last_op)
+        self._last_operation_time = time.time()
         
     async def execute_query(self, table: str, query_type: str, data: Dict[str, Any] = None, 
                            filters: Dict[str, Any] = None, limit: int = None, fields: List[str] = None,
@@ -110,6 +183,9 @@ class SupabaseAdapter:
         
         while retry_count <= self.max_retries:
             try:
+                # 等待以满足速率限制
+                await self._wait_for_rate_limit()
+                
                 # 重试逻辑：第一次尝试立即执行，后续重试则增加延迟
                 if retry_count > 0:
                     # 计算指数退避延迟时间（带随机抖动）
@@ -195,7 +271,7 @@ class SupabaseAdapter:
                         admin_query = self.supabase_admin.table(table)
                         result = admin_query.insert(data).execute()
                         return result.data
-                    
+                        
                 elif query_type == 'update':
                     if data and filters:
                         # 从data中移除id字段，避免更新主键
@@ -319,19 +395,18 @@ class SupabaseAdapter:
                 retry_count += 1
                 logger.warning(f"远程协议错误 ({retry_count}/{self.max_retries}): {str(e)}")
                 
-                # 最后一次重试也失败
                 if retry_count > self.max_retries:
                     logger.error(f"执行查询失败，已达到最大重试次数 ({self.max_retries}): {query_type} on {table}")
                     break
                 
                 # 尝试重新初始化连接
-                if retry_count > 2:  # 第二次重试后尝试重新初始化连接
+                if retry_count > 1:  # 第二次重试后尝试重新初始化连接
                     try:
                         logger.info("尝试重新初始化 Supabase 连接...")
                         global supabase, supabase_admin
-                        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                        supabase = get_supabase_client(SUPABASE_URL, SUPABASE_KEY)
                         if SUPABASE_SERVICE_KEY:
-                            supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+                            supabase_admin = get_supabase_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
                         else:
                             supabase_admin = supabase
                         
@@ -1003,15 +1078,15 @@ class SupabaseAdapter:
             logger.error(f"检查消息是否存在时出错: {str(e)}")
             return False
 
-# 创建单例实例
+# 获取适配器实例的单例函数
 _adapter = None
 
 def get_adapter() -> SupabaseAdapter:
     """
-    获取Supabase适配器实例
+    获取Supabase适配器的单例实例
     
     Returns:
-        SupabaseAdapter实例
+        SupabaseAdapter: 数据库适配器实例
     """
     global _adapter
     if _adapter is None:

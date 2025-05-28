@@ -339,7 +339,7 @@ class TelegramListener:
             if self.client:
                 try:
                     if not await self.client.is_user_authorized():
-                        logger.warning("session未授权")
+                        logger.warning("session未授权，需要重新登录")
                         return False
                 except Exception as e:
                     logger.error(f"检查授权状态时出错: {str(e)}")
@@ -352,9 +352,9 @@ class TelegramListener:
             return False
 
     async def _handle_session_expiry(self):
-        """处理session过期的情况"""
+        """处理session异常情况（文件损坏、未授权等）"""
         try:
-            logger.warning("检测到session可能已过期,尝试恢复...")
+            logger.warning("检测到session异常,尝试恢复...")
             
             # 1. 首先尝试从备份恢复
             if await self.restore_session():
@@ -384,21 +384,41 @@ class TelegramListener:
             # 2. 如果备份恢复失败,创建新的session
             logger.info("备份恢复失败,创建新的session...")
             
-            # 删除旧的session文件
+            # 确保旧客户端的连接已完全关闭
+            await TelegramClientFactory.disconnect_client()
+            
+            # 等待一段时间确保文件不再被占用
+            await asyncio.sleep(5)
+            
+            # 删除旧的session文件，添加重试机制
             session_files = [os.path.abspath(f"{self.session_path}.session"), os.path.abspath(f"{self.session_path}.session-journal")]
-            for file in session_files:
-                if os.path.exists(file):
-                    try:
-                        os.remove(file)
-                        logger.info(f"已删除旧的session文件: {file}")
-                    except Exception as e:
-                        logger.error(f"删除旧的session文件失败: {str(e)}")
+            max_retries = 3
+            retry_delay = 2
+            
+            for retry in range(max_retries):
+                try:
+                    for file in session_files:
+                        if os.path.exists(file):
+                            try:
+                                os.remove(file)
+                                logger.info(f"已删除旧的session文件: {file}")
+                            except Exception as e:
+                                if retry < max_retries - 1:
+                                    logger.warning(f"删除session文件失败，将在{retry_delay}秒后重试: {str(e)}")
+                                    await asyncio.sleep(retry_delay)
+                                    continue
+                                else:
+                                    logger.error(f"删除旧的session文件失败: {str(e)}")
+                    break  # 如果所有文件都成功删除，跳出重试循环
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        logger.warning(f"删除session文件时出错，将在{retry_delay}秒后重试: {str(e)}")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(f"删除session文件失败，已达到最大重试次数: {str(e)}")
             
             # 重新初始化session路径
             self._init_session_path()
-            
-            # 确保旧客户端的连接已关闭
-            await TelegramClientFactory.disconnect_client()
             
             # 重新创建客户端
             self.client = await TelegramClientFactory.get_client(
@@ -434,7 +454,7 @@ class TelegramListener:
                     return False
             return True
         except Exception as e:
-            logger.error(f"处理session过期时出错: {str(e)}")
+            logger.error(f"处理session异常时出错: {str(e)}")
             return False
     
     @async_retry(max_retries=3, delay=2, exceptions=(ConnectionError, TimeoutError))
@@ -920,29 +940,39 @@ class TelegramListener:
                 promotion_count=promotion_count
             )
             
-            # 检查是否需要创建新代币
-            if "error" in result and "数据库中未找到该代币" in result["error"]:
-                # 创建新代币
-                logger.info(f"未找到代币 {chain}/{contract_address}，开始创建新代币")
-
-                result["channel_id"] = channel_id
-                result["risk_level"] = risk_level
-                result["message_id"] = message_id
-                # 创建新代币
-                result = await self.create_token(result)
+            # 检查API调用结果
+            if "error" in result:
+                error_msg = result.get("error", "")
                 
-                if "error" in result:
-                    logger.warning(f"创建新代币失败: {result.get('error')}")
+                # 只有在确认是"数据库中未找到该代币"且API成功获取到数据的情况下才创建新token
+                if "数据库中未找到该代币" in error_msg and not any(x in error_msg for x in ["无法获取代币数据", "API错误"]):
+                    # 检查result中是否包含足够的数据来创建token
+                    if result.get("marketCap") is not None or result.get("price") is not None or result.get("symbol"):
+                        # 创建新代币
+                        logger.info(f"未找到代币 {chain}/{contract_address}，开始创建新代币")
+                        result["channel_id"] = channel_id
+                        result["risk_level"] = risk_level
+                        result["message_id"] = message_id
+                        # 创建新代币
+                        result = await self.create_token(result)
+                        
+                        if "error" in result:
+                            logger.warning(f"创建新代币失败: {result.get('error')}")
+                            return
+                            
+                        logger.info(f"成功创建新代币 {chain}/{contract_address}")
+                    else:
+                        logger.warning(f"未从API获取到足够的代币数据，跳过创建: {chain}/{contract_address}")
+                        return
+                else:
+                    # 其他API错误情况，记录错误并跳过
+                    logger.warning(f"处理代币信息失败: {error_msg}")
                     return
-                    
-                logger.info(f"成功创建新代币 {chain}/{contract_address}")
             
             # 处理成功更新或创建的结果
             if "error" not in result:
                 await self._save_token_mark(chain, contract_address, message_id, channel_id, result)
-            else:
-                logger.warning(f"处理代币信息失败: {result.get('error')}")
-                
+            
         except Exception as e:
             logger.error(f"更新或创建代币时出错: {str(e)}")
             import traceback as tb
@@ -1622,7 +1652,6 @@ class TelegramListener:
                 'from_group': False,  # 默认不是来自群组
                 'channel_id': token_data.get('channel_id'),
                 'image_url': token_data.get('image_url'),
-                'last_calculated_change_pct': 0,  # 初始价格变化百分比为0
                 'last_calculation_time': current_time,
                 
                 # 价格和市值趋势分析字段
@@ -1633,7 +1662,7 @@ class TelegramListener:
                 'volume_24h': 0,  # 初始24小时交易量为0
                 'volume_1h': token_data.get('volume_1h', 0),
                 'liquidity': token_data.get('liquidity', 0),
-                'holders_count': token_data.get('holders_count', 0),
+                'holders_count': token_data.get('holders_count', 0),  # 使用API获取的持有者数量
                 
                 # 1小时交易数据
                 'buys_1h': token_data.get('buys_1h', 0),

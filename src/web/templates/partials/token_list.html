@@ -38,6 +38,15 @@
                             </span>
                         </div>
                     </th>
+                    <th class="text-nowrap d-none d-lg-table-cell">
+                        <div class="d-flex align-items-center">
+                            首次信号
+                            <span class="sort-btn" data-sort="first_seen">
+                                <i class="bi bi-caret-up-fill"></i>
+                                <i class="bi bi-caret-down-fill"></i>
+                            </span>
+                        </div>
+                    </th>
                     <th class="text-nowrap d-none d-md-table-cell">
                         <div class="d-flex align-items-center">
                             市值
@@ -65,8 +74,8 @@
                             </span>
                         </div>
                     </th>
-                    <th class="text-nowrap d-none d-xl-table-cell">
-                        <div class="d-flex align-items-center">
+                    <th class="text-nowrap d-none d-xl-table-cell text-center">
+                        <div class="d-flex align-items-center justify-content-center">
                             买入/卖出
                             <span class="sort-btn" data-sort="buys_sells">
                                 <i class="bi bi-caret-up-fill"></i>
@@ -85,7 +94,7 @@
                     </th>
                     <th class="text-nowrap d-none d-xl-table-cell">
                         <div class="d-flex align-items-center">
-                            社区覆盖
+                            覆盖人数
                             <span class="sort-btn" data-sort="community_reach">
                                 <i class="bi bi-caret-up-fill"></i>
                                 <i class="bi bi-caret-down-fill"></i>
@@ -94,23 +103,14 @@
                     </th>
                     <th class="text-nowrap d-none d-xl-table-cell">
                         <div class="d-flex align-items-center">
-                            消息覆盖
+                            覆盖社群
                             <span class="sort-btn" data-sort="spread_count">
                                 <i class="bi bi-caret-up-fill"></i>
                                 <i class="bi bi-caret-down-fill"></i>
                             </span>
                         </div>
                     </th>
-                    <th class="text-nowrap d-none d-lg-table-cell">
-                        <div class="d-flex align-items-center">
-                            首次发现
-                            <span class="sort-btn" data-sort="first_seen">
-                                <i class="bi bi-caret-up-fill"></i>
-                                <i class="bi bi-caret-down-fill"></i>
-                            </span>
-                        </div>
-                    </th>
-                    <th class="text-nowrap">操作</th>
+                    <th class="text-nowrap">信号详情</th>
                 </tr>
             </thead>
             <tbody id="tokens-container">
@@ -256,6 +256,14 @@
             <span class="badge-chain CHAIN_CLASS">TOKEN_CHAIN</span>
         </td>
         
+        <!-- 首次发现 -->
+        <td class="d-none d-lg-table-cell text-nowrap">
+            <div class="d-flex align-items-center">
+                <i class="bi bi-clock me-1 text-muted"></i>
+                <span class="small">TOKEN_FIRST_SEEN</span>
+            </div>
+        </td>
+        
         <!-- 市值 -->
         <td class="d-none d-md-table-cell fw-medium">TOKEN_MARKET_CAP</td>
         
@@ -266,10 +274,11 @@
         <td class="d-none d-lg-table-cell fw-medium">TOKEN_VOLUME</td>
         
         <!-- 买入/卖出 -->
-        <td class="d-none d-xl-table-cell">
-            <div class="d-flex align-items-center">
-                <span class="me-2 buy-count">TOKEN_BUYS<i class="bi bi-arrow-up-short"></i></span>
-                <span class="sell-count">TOKEN_SELLS<i class="bi bi-arrow-down-short"></i></span>
+        <td class="d-none d-xl-table-cell text-center">
+            <div class="d-flex align-items-center justify-content-center">
+                <span class="buy-count">TOKEN_BUYS</span>
+                <span class="mx-1">/</span>
+                <span class="sell-count">TOKEN_SELLS</span>
             </div>
         </td>
         
@@ -281,14 +290,6 @@
         
         <!-- 消息覆盖 -->
         <td class="d-none d-xl-table-cell">TOKEN_SPREAD_COUNT</td>
-        
-        <!-- 首次发现 -->
-        <td class="d-none d-lg-table-cell text-nowrap">
-            <div class="d-flex align-items-center">
-                <i class="bi bi-clock me-1 text-muted"></i>
-                <span class="small">TOKEN_FIRST_SEEN</span>
-            </div>
-        </td>
         
         <!-- 操作 -->
         <td>
@@ -391,50 +392,50 @@ document.addEventListener('DOMContentLoaded', function() {
     initTooltips();
 });
 
-// ========== 自动刷新频率限制 ========== //
-let autoRefreshCount = 0;
-const AUTO_REFRESH_LIMIT = 25;
-const AUTO_REFRESH_WINDOW = 60 * 1000; // 1分钟
-function tryIncreaseAutoRefreshCount() {
-    if (autoRefreshCount >= AUTO_REFRESH_LIMIT) return false;
-    autoRefreshCount++;
-    setTimeout(() => {
-        autoRefreshCount--;
-    }, AUTO_REFRESH_WINDOW);
-    return true;
-}
+// // ========== 自动刷新频率限制 ========== //
+// let autoRefreshCount = 0;
+// const AUTO_REFRESH_LIMIT = 25;
+// const AUTO_REFRESH_WINDOW = 60 * 1000; // 1分钟
+// function tryIncreaseAutoRefreshCount() {
+//     if (autoRefreshCount >= AUTO_REFRESH_LIMIT) return false;
+//     autoRefreshCount++;
+//     setTimeout(() => {
+//         autoRefreshCount--;
+//     }, AUTO_REFRESH_WINDOW);
+//     return true;
+// }
 
-// ========== 自动刷新可视区token（每次只刷新一个，且每条目1分钟一次） ========== //
-function isElementInViewport(el) {
-    const rect = el.getBoundingClientRect();
-    return (
-        rect.top < window.innerHeight &&
-        rect.bottom > 0
-    );
-}
-let autoRefreshQueue = [];
-function autoRefreshOneToken() {
-    if (autoRefreshQueue.length === 0) {
-        const now = Date.now();
-        autoRefreshQueue = Array.from(document.querySelectorAll('.token-row')).filter(row => {
-            if (!isElementInViewport(row)) return false;
-            const lastRefresh = parseInt(row.dataset.lastAutoRefresh || '0', 10);
-            return (now - lastRefresh >= 60 * 1000);
-        });
-    }
-    if (autoRefreshQueue.length > 0) {
-        if (!tryIncreaseAutoRefreshCount()) return; // 超过限制则不刷新
-        const row = autoRefreshQueue.shift();
-        refreshTokenData(row);
-        row.dataset.lastAutoRefresh = Date.now().toString();
-    }
-}
-document.addEventListener('DOMContentLoaded', function() {
-    const rows = document.querySelectorAll('.token-row');
-    const now = Date.now();
-    rows.forEach(row => {
-        row.dataset.lastAutoRefresh = now.toString();
-    });
-});
-setInterval(autoRefreshOneToken, 2000);
+// // ========== 自动刷新可视区token（每次只刷新一个，且每条目1分钟一次） ========== //
+// function isElementInViewport(el) {
+//     const rect = el.getBoundingClientRect();
+//     return (
+//         rect.top < window.innerHeight &&
+//         rect.bottom > 0
+//     );
+// }
+// let autoRefreshQueue = [];
+// function autoRefreshOneToken() {
+//     if (autoRefreshQueue.length === 0) {
+//         const now = Date.now();
+//         autoRefreshQueue = Array.from(document.querySelectorAll('.token-row')).filter(row => {
+//             if (!isElementInViewport(row)) return false;
+//             const lastRefresh = parseInt(row.dataset.lastAutoRefresh || '0', 10);
+//             return (now - lastRefresh >= 60 * 1000);
+//         });
+//     }
+//     if (autoRefreshQueue.length > 0) {
+//         if (!tryIncreaseAutoRefreshCount()) return; // 超过限制则不刷新
+//         const row = autoRefreshQueue.shift();
+//         refreshTokenData(row);
+//         row.dataset.lastAutoRefresh = Date.now().toString();
+//     }
+// }
+// document.addEventListener('DOMContentLoaded', function() {
+//     const rows = document.querySelectorAll('.token-row');
+//     const now = Date.now();
+//     rows.forEach(row => {
+//         row.dataset.lastAutoRefresh = now.toString();
+//     });
+// });
+// setInterval(autoRefreshOneToken, 2000);
 </script> 

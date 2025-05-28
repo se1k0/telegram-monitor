@@ -18,6 +18,7 @@ from src.api.dex_screener_api import get_token_pools, DexScreenerAPI
 from src.database.models import Token
 from src.utils.error_handler import retry, safe_execute
 from src.database.db_factory import get_db_adapter
+from src.api.das_api import DASAPI
 
 # 设置日志记录
 logger = logging.getLogger(__name__)
@@ -71,23 +72,38 @@ class TokenMarketUpdater:
             logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
             return {"error": "未找到代币交易对"}
             
+        # 添加API返回数据的详细日志
+        # logger.info(f"DEX API原始返回数据: {pools_data}")
+        
         # 查找市值最高的池
         max_market_cap = 0
         max_liquidity = 0
         dex_screener_url = None
         price = None
         first_price = None
+        symbol = None
+        telegram_url = None  # 新增：初始化telegram_url
+        twitter_url = None   # 新增：初始化twitter_url
+        website_url = None   # 新增：初始化website_url
         
         for pair in pairs:
+            # 添加每个交易对的详细日志
+            # logger.info(f"处理交易对数据: {pair}")
+
+            if not symbol and pair.get("baseToken") and "symbol" in pair.get("baseToken", {}):
+                symbol = pair["baseToken"]["symbol"]
+            
             # 获取市值数据
             market_cap = pair.get("marketCap", 0)
             if market_cap and float(market_cap) > max_market_cap:
                 max_market_cap = float(market_cap)
+                logger.info(f"更新最大市值: {max_market_cap}")
                 
             # 获取流动性数据
             liquidity = pair.get("liquidity", {}).get("usd", 0)
             if liquidity and float(liquidity) > max_liquidity:
                 max_liquidity = float(liquidity)
+                logger.info(f"更新最大流动性: {max_liquidity}")
                 
             # 获取价格
             if not price and "priceUsd" in pair:
@@ -103,6 +119,49 @@ class TokenMarketUpdater:
                 pair_address = pair.get("pairAddress", "")
                 if chain_path and pair_address:
                     dex_screener_url = f"https://dexscreener.com/{chain_path}/{pair_address}"
+            
+            # 获取代币图像URL
+            if not dex_screener_url and pair.get("info") and pair.get("info").get("imageUrl"):
+                dex_screener_url = pair.get("info").get("imageUrl")
+                logger.info(f"从DEX API获取到代币图像URL: {dex_screener_url}")
+            
+            # 获取交易数据
+            if "txns" in pair and "h1" in pair["txns"]:
+                txns_1h = pair["txns"]["h1"]
+                buys = txns_1h.get("buys", 0)
+                sells = txns_1h.get("sells", 0)
+                
+                # 累加交易数据
+                total_buys_1h += buys
+                total_sells_1h += sells
+                
+                # 计算1小时交易量
+                if 'volume' in pair and 'h1' in pair['volume']:
+                    volume_h1_data = pair['volume']['h1']
+                    if 'USD' in volume_h1_data:
+                        volume_1h = float(volume_h1_data['USD'])
+                        total_volume_1h += volume_1h
+            
+            # 新增：提取社交链接
+            if pair.get("info") and pair["info"].get("websites"):
+                for w in pair["info"]["websites"]:
+                    url = w.get("url", "")
+                    if not telegram_url and ("t.me/" in url or "telegram" in url):
+                        telegram_url = url
+                    elif not twitter_url and ("twitter.com/" in url or "x.com/" in url):
+                        twitter_url = url
+                    elif not website_url and (url.startswith("http") and not any(x in url for x in ["t.me/", "telegram", "twitter.com/", "x.com/"])):
+                        website_url = url
+        
+        # 在判断之前添加汇总日志
+        logger.info(f"DEX API数据解析汇总:")
+        logger.info(f"- 最大市值: {max_market_cap}")
+        logger.info(f"- 价格: {price}")
+        logger.info(f"- 代币符号: {symbol}")
+        logger.info(f"- 最大流动性: {max_liquidity}")
+        logger.info(f"- 1小时交易量: {volume_1h}")
+        logger.info(f"- 1小时买入次数: {total_buys_1h}")
+        logger.info(f"- 1小时卖出次数: {total_sells_1h}")
         
         # 获取目标代币
         token = self.session.query(Token).filter(
@@ -127,6 +186,13 @@ class TokenMarketUpdater:
                 if dex_screener_url:
                     token.dexscreener_url = dex_screener_url
                 
+                if telegram_url:
+                    token.telegram_url = telegram_url
+                if twitter_url:
+                    token.twitter_url = twitter_url
+                if website_url:
+                    token.website_url = website_url
+                
                 self.session.commit()
                 logger.info(f"成功更新代币 {chain}/{contract} 的市值和流动性数据")
                 logger.info(f"市值: {max_market_cap}, 上一小时市值: {token.market_cap_1h}, 流动性: {max_liquidity}")
@@ -137,7 +203,10 @@ class TokenMarketUpdater:
                     "marketCap1h": token.market_cap_1h,
                     "liquidity": max_liquidity,
                     "price": price,
-                    "dexScreenerUrl": dex_screener_url
+                    "dexScreenerUrl": dex_screener_url,
+                    "telegram_url": telegram_url,
+                    "twitter_url": twitter_url,
+                    "website_url": website_url
                 }
                 
             except Exception as e:
@@ -514,9 +583,9 @@ class TokenMarketUpdater:
             token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
             
             if isinstance(token_result, list) and len(token_result) > 0:
-                token_info = token_result[0]
-                token_symbol = token_info.get('token_symbol', '未知')
-                last_update = token_info.get('latest_update', '未知')
+                token = token_result[0]
+                token_symbol = token.get('token_symbol', '未知')
+                last_update = token.get('latest_update', '未知')
                 
                 # 如果代币存在但DEX API没有数据，则删除该代币及其相关数据
                 logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，将尝试从数据库中删除")
@@ -557,6 +626,9 @@ class TokenMarketUpdater:
         first_price = None
         symbol = None  # 初始化symbol变量
         holders_count = 0  # 初始化holders_count变量
+        telegram_url = None  # 新增：初始化telegram_url
+        twitter_url = None   # 新增：初始化twitter_url
+        website_url = None   # 新增：初始化website_url
         
         for pair in pairs:
             # 获取代币符号（如果尚未获取）
@@ -604,6 +676,22 @@ class TokenMarketUpdater:
                     if 'USD' in volume_h1_data:
                         volume_1h = float(volume_h1_data['USD'])
                         total_volume_1h += volume_1h
+            
+            # 获取代币图像URL
+            if not dex_screener_url and pair.get("info") and pair.get("info").get("imageUrl"):
+                dex_screener_url = pair.get("info").get("imageUrl")
+                logger.info(f"从DEX API获取到代币图像URL: {dex_screener_url}")
+            
+            # 新增：提取社交链接
+            if pair.get("info") and pair["info"].get("websites"):
+                for w in pair["info"]["websites"]:
+                    url = w.get("url", "")
+                    if not telegram_url and ("t.me/" in url or "telegram" in url):
+                        telegram_url = url
+                    elif not twitter_url and ("twitter.com/" in url or "x.com/" in url):
+                        twitter_url = url
+                    elif not website_url and (url.startswith("http") and not any(x in url for x in ["t.me/", "telegram", "twitter.com/", "x.com/"])):
+                        website_url = url
         
         try:
             # 获取数据库适配器
@@ -626,6 +714,9 @@ class TokenMarketUpdater:
                 token = token_result[0]
                 prev_market_cap = token.get('market_cap')
             
+            # 获取当前时间
+            current_time = datetime.now().isoformat()
+            
             # 准备更新数据
             token_data = {
                 'market_cap_1h': prev_market_cap,  # 当前值变为1小时前值
@@ -635,7 +726,9 @@ class TokenMarketUpdater:
                 'buys_1h': total_buys_1h,
                 'sells_1h': total_sells_1h,
                 'volume_1h': total_volume_1h,
-                'price': price
+                'price': price,
+                'latest_update': current_time,
+                'from_api': 'DEX'  # 标记数据来源
             }
             
             # 计算并添加涨跌幅数据
@@ -643,7 +736,6 @@ class TokenMarketUpdater:
                 change_pct = ((max_market_cap - prev_market_cap) / prev_market_cap) * 100
                 token_data['change_pct_value'] = change_pct
                 token_data['change_percentage'] = f"{'+' if change_pct > 0 else ''}{change_pct:.2f}%"
-                token_data['last_calculated_change_pct'] = change_pct
                 logger.info(f"计算涨跌幅: {token_data['change_percentage']} (现在: {max_market_cap}, 1小时前: {prev_market_cap})")
             else:
                 logger.info(f"无法计算涨跌幅: prev_market_cap={prev_market_cap}, max_market_cap={max_market_cap}")
@@ -671,6 +763,14 @@ class TokenMarketUpdater:
                 if prev_market_cap is None:
                     token_data['first_price'] = first_price
             
+            # 新增：写入社交链接
+            if telegram_url:
+                token_data['telegram_url'] = telegram_url
+            if twitter_url:
+                token_data['twitter_url'] = twitter_url
+            if website_url:
+                token_data['website_url'] = website_url
+            
             # 更新数据库
             await db_adapter.execute_query(
                 'tokens',
@@ -695,7 +795,10 @@ class TokenMarketUpdater:
                 "sells_1h": total_sells_1h,
                 "volume_1h": total_volume_1h,
                 "price": price,
-                "dexScreenerUrl": dex_screener_url
+                "dexScreenerUrl": dex_screener_url,
+                "telegram_url": telegram_url,
+                "twitter_url": twitter_url,
+                "website_url": website_url
             }
             
         except Exception as e:
@@ -810,6 +913,9 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
     Returns:
         Dict[str, Any]: 包含更新结果的字典
     """
+    # 只在函数开头生成一次当前时间
+    current_time = datetime.now().isoformat()
+    
     # 初始化结果
     result = {
         "success": False,
@@ -822,6 +928,8 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
     
     try:
         from src.api.dex_screener_api import get_token_pools
+        from src.api.das_api import DASAPI
+        from src.database.db_factory import get_db_adapter
         
         # 标准化链ID
         chain_id = _normalize_chain_id(chain)
@@ -832,70 +940,84 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
         # 获取代币流动池
         pools_data = get_token_pools(chain_id, contract)
         
-        # 如果API返回错误，直接返回
-        if isinstance(pools_data, dict) and "error" in pools_data:
-            logger.error(f"DEX Screener API错误: {pools_data['error']}")
-            return {"error": f"DEX Screener API错误: {pools_data['error']}"}
+        # 如果API返回错误或返回空列表，尝试使用 DAS API
+        if (isinstance(pools_data, dict) and "error" in pools_data) or (isinstance(pools_data, list) and len(pools_data) == 0):
+            error_reason = pools_data.get("error", "未找到交易对") if isinstance(pools_data, dict) else "未找到交易对"
+            logger.warning(f"DEX Screener API {error_reason}，尝试使用 DAS API")
+            
+            # 初始化 DAS API
+            das_api = DASAPI()
+            asset_data = das_api.get_asset(contract)
+            
+            if asset_data:
+                # 转换 DAS API 数据为代币数据格式
+                token_data = das_api.convert_to_token_data(asset_data, chain, contract, message_id)
+                if token_data:
+                    token_data['from_api'] = 'HELIUS'  # 标记数据来源
+                    # 保存到数据库
+                    db_adapter = get_db_adapter()
+                    save_result = await db_adapter.save_token(token_data)
+                    if save_result:
+                        logger.info(f"使用 DAS API 数据成功保存代币: {chain}/{contract}")
+                        return {
+                            "success": True,
+                            "marketCap": token_data.get('market_cap', 0),
+                            "liquidity": token_data.get('liquidity', 0),
+                            "price": token_data.get('price', 0),
+                            "from_api": "HELIUS"
+                        }
+            
+            # 如果 DAS API 也失败，判断 token 是否存在于 tokens 表
+            logger.warning(f"无法从 DEX Screener 和 DAS API 获取数据，检查是否需要删除 tokens 表中的记录: {chain}/{contract}")
+            db_adapter = get_db_adapter()
+            token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract}, limit=1)
+            if isinstance(token_result, list) and len(token_result) > 0:
+                # token 存在，执行删除
+                logger.info(f"token 已存在于 tokens 表，执行删除: {chain}/{contract}")
+                from src.api.token_market_updater import delete_token_data
+                delete_result = await delete_token_data(chain, contract, double_check=False)
+                if delete_result.get('success'):
+                    logger.info(f"成功删除无效代币 {chain}/{contract}，并记录到 hidden_tokens")
+                else:
+                    logger.error(f"删除代币 {chain}/{contract} 失败: {delete_result.get('error', '未知错误')}")
+            # 无论是否存在，都插入 hidden_tokens
+            hidden_token_data = {
+                'chain': chain,
+                'contract': contract,
+                'message_id': message_id,
+                'timestamp': current_time
+            }
+            await db_adapter.execute_query('hidden_tokens', 'insert', data=hidden_token_data)
+            return {"error": f"无法获取代币数据，{error_reason}，已处理 hidden_tokens", "chain": chain, "contract": contract}
         
         # 处理API返回的数据
         # 根据API文档，token-pairs/v1/{chainId}/{tokenAddress}返回的是交易对数组
-        pairs = pools_data  # 直接使用返回的数据
+        pairs = pools_data
         
-        if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
-            logger.warning(f"未找到代币 {chain}/{contract} 的交易对")
-            
-            # 检查代币是否存在于数据库中
-            from src.database.db_factory import get_db_adapter
-            db_adapter = get_db_adapter()
-            token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
-            
-            if isinstance(token_result, list) and len(token_result) > 0:
-                token_info = token_result[0]
-                token_symbol = token_info.get('token_symbol', '未知')
-                last_update = token_info.get('latest_update', '未知')
-                
-                # 如果代币存在但DEX API没有数据，则删除该代币及其相关数据
-                logger.info(f"代币 {token_symbol} ({chain}/{contract}) 在DEX上不存在，将尝试从数据库中删除")
-                logger.info(f"代币详情 - 符号: {token_symbol}, 最后更新: {last_update}")
-                
-                delete_result = await delete_token_data(chain, contract, double_check=True)
-                
-                if delete_result['success']:
-                    deleted_info = delete_result.get('deleted_token_data', {})
-                    logger.info(f"成功删除无效代币 {token_symbol} ({chain}/{contract})")
-                    logger.info(f"已删除代币信息 - 首次记录: {deleted_info.get('first_update')}, 最后更新: {deleted_info.get('latest_update')}")
-                    
-                    return {
-                        "success": False, 
-                        "deleted": True, 
-                        "token_symbol": token_symbol,
-                        "message": "代币在DEX上不存在，已从数据库中删除", 
-                        "deleted_info": deleted_info,
-                        "error": "未找到交易对"
-                    }
-                else:
-                    logger.error(f"删除代币 {token_symbol} ({chain}/{contract}) 失败: {delete_result.get('error', '未知错误')}")
-                    return {
-                        "success": False, 
-                        "error": "未找到交易对，尝试删除代币失败: " + delete_result.get('error', '未知错误')
-                    }
-            
-            return {"error": "未找到交易对"}
+        # 添加API返回数据的详细日志
+        # logger.info(f"DEX API原始返回数据: {pools_data}")
         
-        # 提取关键数据
-        max_market_cap = 0  # 市值
-        max_liquidity = 0   # 流动性
-        price = None        # 价格
-        first_price = None  # 首次价格
+        # 初始化变量
+        max_market_cap = 0
+        max_liquidity = 0
+        price = None
+        first_price = None
         dex_screener_url = None
-        volume_1h = 0       # 1小时交易量
-        buys_1h = 0         # 1小时买入交易数
-        sells_1h = 0        # 1小时卖出交易数
-        symbol = None       # 代币符号
-        image_url = None    # 代币图像URL
+        symbol = None
+        image_url = None
+        buys_1h = 0
+        sells_1h = 0
+        volume_1h = 0
+        holders_count = 0
+        telegram_url = None  # 新增：初始化telegram_url
+        twitter_url = None   # 新增：初始化twitter_url
+        website_url = None   # 新增：初始化website_url
         
         # 从交易对中提取数据
         for pair in pairs:
+            # 添加每个交易对的详细日志
+            # logger.info(f"处理交易对数据: {pair}")
+            
             # 尝试提取代币符号
             if not symbol and pair.get("baseToken"):
                 baseToken = pair.get("baseToken", {})
@@ -907,15 +1029,18 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             market_cap = pair.get("marketCap", 0)
             if market_cap and float(market_cap) > max_market_cap:
                 max_market_cap = float(market_cap)
+                logger.info(f"更新最大市值: {max_market_cap}")
                 
             # 获取流动性数据
             liquidity = pair.get("liquidity", {}).get("usd", 0)
             if liquidity and float(liquidity) > max_liquidity:
                 max_liquidity = float(liquidity)
+                logger.info(f"更新最大流动性: {max_liquidity}")
                 
             # 获取价格
             if not price and "priceUsd" in pair:
                 price = float(pair["priceUsd"])
+                logger.info(f"获取到价格: {price}")
 
             # 获取首次价格
             if not first_price and "priceNative" in pair:
@@ -932,53 +1057,46 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             if not image_url and pair.get("info") and pair.get("info").get("imageUrl"):
                 image_url = pair.get("info").get("imageUrl")
                 logger.info(f"从DEX API获取到代币图像URL: {image_url}")
-                
-            # 获取1小时交易量
-            if pair.get("volume") and pair.get("volume").get("h1"):
-                current_volume_1h = float(pair.get("volume").get("h1", 0))
-                volume_1h = max(volume_1h, current_volume_1h)
-                
-            # 获取1小时交易数据
-            if pair.get("txns") and pair.get("txns").get("h1"):
-                txns_h1 = pair.get("txns").get("h1", {})
-                buys_1h += txns_h1.get("buys", 0)
-                sells_1h += txns_h1.get("sells", 0)
+            
+            # 获取交易数据
+            if 'txns' in pair and 'h1' in pair['txns']:
+                h1_data = pair['txns']['h1']
+                buys_1h += h1_data.get('buys', 0)
+                sells_1h += h1_data.get('sells', 0)
+            
+            # 获取交易量数据
+            if 'volume' in pair and 'h1' in pair['volume']:
+                volume_1h += float(pair['volume']['h1'] or 0)
+            
+            # 新增：提取社交链接
+            if pair.get("info") and pair["info"].get("websites"):
+                for w in pair["info"]["websites"]:
+                    url = w.get("url", "")
+                    if not telegram_url and ("t.me/" in url or "telegram" in url):
+                        telegram_url = url
+                    elif not twitter_url and ("twitter.com/" in url or "x.com/" in url):
+                        twitter_url = url
+                    elif not website_url and (url.startswith("http") and not any(x in url for x in ["t.me/", "telegram", "twitter.com/", "x.com/"])):
+                        website_url = url
+        
+        # 在判断之前添加汇总日志
+        logger.info(f"DEX API数据解析汇总:")
+        logger.info(f"- 最大市值: {max_market_cap}")
+        logger.info(f"- 价格: {price}")
+        logger.info(f"- 代币符号: {symbol}")
+        logger.info(f"- 最大流动性: {max_liquidity}")
+        logger.info(f"- 1小时交易量: {volume_1h}")
+        logger.info(f"- 1小时买入次数: {buys_1h}")
+        logger.info(f"- 1小时卖出次数: {sells_1h}")
         
         # 获取数据库适配器
-        from src.database.db_factory import get_db_adapter
         db_adapter = get_db_adapter()
-        
-        # 检查token是否存在
-        token = None
         token_result = await db_adapter.execute_query('tokens', 'select', filters={'chain': chain, 'contract': contract})
         
+        # 初始化token变量
+        token = None
         if isinstance(token_result, list) and len(token_result) > 0:
             token = token_result[0]
-            logger.info(f"找到现有代币: {chain}/{contract}")
-            
-            # 检查是否从API获取到了市值，没有则使用现有市值
-            if max_market_cap <= 0 and token.get('market_cap'):
-                max_market_cap = token.get('market_cap')
-                logger.warning(f"API未返回市值，使用现有市值: {max_market_cap}")
-        
-        # 获取Solana代币的持有者数量（如果是Solana链）
-        holders_count = 0
-        community_reach = 0
-        spread_count = 0
-        
-        if chain == "SOL":
-            try:
-                from src.api.das_api import get_token_holders_count
-                holders_count = get_token_holders_count(contract)
-                logger.info(f"获取到SOL代币持有者数量: {holders_count}")
-            except Exception as e:
-                logger.error(f"获取持有者数量失败: {str(e)}")
-        
-        # 尝试获取社区覆盖
-        # 这部分逻辑单独优化，避免在这里做复杂计算
-        
-        # 添加详细日志
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # 获取市值和社区覆盖数量
         result["marketCap"] = max_market_cap
@@ -1007,7 +1125,8 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
                 'market_cap_formatted': _format_market_cap(max_market_cap),
                 'liquidity': max_liquidity,
                 'price': price,
-                'latest_update': current_time
+                'latest_update': current_time,
+                'from_api': 'DEX'  # 标记数据来源
             }
             
             # 如果从DEX API获取到了代币符号，则更新数据库中的代币符号
@@ -1055,6 +1174,17 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
             if dex_screener_url:
                 token_data['dexscreener_url'] = dex_screener_url
             
+            # 新增：写入社交链接
+            if telegram_url:
+                token_data['telegram_url'] = telegram_url
+                result['telegram_url'] = telegram_url
+            if twitter_url:
+                token_data['twitter_url'] = twitter_url
+                result['twitter_url'] = twitter_url
+            if website_url:
+                token_data['website_url'] = website_url
+                result['website_url'] = website_url
+            
             # 更新数据库
             update_result = await db_adapter.execute_query('tokens', 'update', data=token_data, filters={'chain': chain, 'contract': contract})
             
@@ -1062,36 +1192,71 @@ async def update_token_market_data_async(chain: str, contract: str, message_id: 
                 logger.error(f"更新代币数据失败: {update_result.get('error')}")
                 return {"error": f"更新代币数据失败: {update_result.get('error')}"}
             
-            logger.info(f"成功更新代币 {chain}/{contract} 的数据")
             result["success"] = True
-            result["marketCap1h"] = token.get('market_cap')
-            
             return result
-        else:
-            # 数据库中未找到代币，返回错误信息
-            logger.warning(f"数据库中未找到代币: {chain}/{contract}")
             
-            # 返回包含代币基本信息的错误响应，以便调用者可以使用这些信息创建新代币
-            return {
-                "error": "数据库中未找到该代币",
-                "chain": chain,
-                "contract": contract,
-                "symbol": symbol or '',
-                "marketCap": max_market_cap,
-                "liquidity": max_liquidity,
-                "price": price,
-                "first_price": first_price,
-                "dexScreenerUrl": dex_screener_url,
-                "image_url": image_url,
-                "buys_1h": buys_1h,
-                "sells_1h": sells_1h,
-                "volume_1h": volume_1h,
-                "holders_count": holders_count
-            }
-    
+        else:
+            # 数据库中未找到该代币，但已成功从API获取到数据
+            if max_market_cap > 0 or price is not None or symbol:
+                logger.info(f"数据库中未找到代币，但已从API获取到数据: {chain}/{contract}")
+                
+                # 尝试从DAS API获取持有者数量（仅对SOL链代币）
+                holders_count = 0
+                if chain == 'SOL':
+                    try:
+                        from src.api.das_api import get_token_holders_count
+                        # 使用线程池执行同步操作，避免阻塞
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(get_token_holders_count, contract)
+                            api_holders_count = future.result()
+                            if api_holders_count is not None:
+                                holders_count = api_holders_count
+                                logger.info(f"从DAS API获取到持有者数量: {holders_count}")
+                    except Exception as e:
+                        logger.warning(f"尝试获取持有者数量时出错: {str(e)}")
+                
+                # 返回明确的错误消息，告知数据库中未找到该代币但API数据有效
+                result["error"] = f"数据库中未找到该代币 {chain}/{contract}，但已成功获取API数据"
+                # 添加必要的字段用于创建新代币
+                result["chain"] = chain
+                result["contract"] = contract
+                result["symbol"] = symbol or ''
+                result["marketCap"] = max_market_cap
+                result["price"] = price
+                result["liquidity"] = max_liquidity
+                result["dexScreenerUrl"] = dex_screener_url
+                result["image_url"] = image_url
+                result["first_price"] = first_price
+                result["volume_1h"] = volume_1h
+                result["buys_1h"] = buys_1h
+                result["sells_1h"] = sells_1h
+                result["holders_count"] = holders_count  # 添加持有者数量
+                if telegram_url:
+                    result["telegram_url"] = telegram_url
+                if twitter_url:
+                    result["twitter_url"] = twitter_url
+                if website_url:
+                    result["website_url"] = website_url
+                return result
+            else:
+                # 数据库中未找到该代币，且API返回的数据也不足以创建新代币
+                logger.warning(f"数据库中未找到代币且API数据不足: {chain}/{contract}")
+                # 插入到hidden_tokens表
+                hidden_token_data = {
+                    'chain': chain,
+                    'contract': contract,
+                    'message_id': message_id,
+                    'timestamp': current_time
+                }
+                await db_adapter.execute_query('hidden_tokens', 'insert', data=hidden_token_data)
+                return {"error": f"数据库中未找到代币 {chain}/{contract}，且API数据不足以创建新token", "chain": chain, "contract": contract}
+            
     except Exception as e:
-        logger.error(f"综合更新代币数据时发生错误: {str(e)}")
-        return {"error": str(e)}
+        logger.error(f"更新代币数据时出错: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"error": f"更新代币数据时出错: {str(e)}"}
 
 def _format_market_cap(market_cap: float) -> str:
     """格式化市值显示

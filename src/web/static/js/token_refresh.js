@@ -69,14 +69,22 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     const row = document.querySelector(`tr.token-row[data-chain="${chain}"][data-contract="${contract}"]`);
     if (!row) return;
     
+
+    // 新增：同步刷新"首次发现"列的数值和样式
+    // 这样可以保证每次自动刷新token数据时，"首次发现"天数/分钟等也会实时更新
+    const firstSeenElem = row.querySelector('td:nth-child(3) .small');
+    if (firstSeenElem && tokenData.first_update) {
+        firstSeenElem.innerHTML = renderFirstSeenWithStyle(tokenData.first_update);
+    }
+
     // 更新市值
-    const marketCapCell = row.querySelector('td:nth-child(3)');
+    const marketCapCell = row.querySelector('td:nth-child(4)');
     if (marketCapCell && tokenData.market_cap_formatted) {
         flashIfChanged(marketCapCell, tokenData.market_cap_formatted);
     }
     
     // 计算并更新涨跌幅
-    const changePctCell = row.querySelector('td:nth-child(4)');
+    const changePctCell = row.querySelector('td:nth-child(5)');
     if (changePctCell) {
         const currentMarketCap = parseFloat(tokenData.market_cap) || 0;
         const firstMarketCap = parseFloat(tokenData.first_market_cap) || 0;
@@ -97,7 +105,7 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     }
     
     // 更新成交量
-    const volumeCell = row.querySelector('td:nth-child(5)');
+    const volumeCell = row.querySelector('td:nth-child(6)');
     if (volumeCell && tokenData.volume_1h) {
         let formatted = '';
         if (tokenData.volume_1h >= 1000000) {
@@ -111,12 +119,12 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     }
     
     // 更新买入/卖出
-    const txnsCell = row.querySelector('td:nth-child(6)');
+    const txnsCell = row.querySelector('td:nth-child(7)');
     if (txnsCell) {
         const buysElem = txnsCell.querySelector('.buy-count');
         const sellsElem = txnsCell.querySelector('.sell-count');
         if (buysElem) {
-            const buysHtml = `${tokenData.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
+            const buysHtml = `${tokenData.buys_1h || '0'}`;
             if (buysElem.innerHTML !== buysHtml) {
                 buysElem.innerHTML = buysHtml;
                 buysElem.classList.add('value-flash');
@@ -124,7 +132,7 @@ function updateTokenDataInUI(chain, contract, tokenData) {
             }
         }
         if (sellsElem) {
-            const sellsHtml = `${tokenData.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
+            const sellsHtml = `${tokenData.sells_1h || '0'}`;
             if (sellsElem.innerHTML !== sellsHtml) {
                 sellsElem.innerHTML = sellsHtml;
                 sellsElem.classList.add('value-flash');
@@ -134,7 +142,7 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     }
     
     // 更新持有者数量
-    const holdersCell = row.querySelector('td:nth-child(7)');
+    const holdersCell = row.querySelector('td:nth-child(8)');
     if (holdersCell) {
         if (tokenData.holders_count) {
             flashIfChanged(holdersCell, tokenData.holders_count.toString());
@@ -145,13 +153,13 @@ function updateTokenDataInUI(chain, contract, tokenData) {
     }
     
     // 更新社群覆盖
-    const communityCell = row.querySelector('td:nth-child(8)');
+    const communityCell = row.querySelector('td:nth-child(9)');
     if (communityCell && tokenData.community_reach !== undefined) {
         flashIfChanged(communityCell, formatNumber(tokenData.community_reach || 0));
     }
     
     // 更新消息覆盖
-    const spreadCell = row.querySelector('td:nth-child(9)');
+    const spreadCell = row.querySelector('td:nth-child(10)');
     if (spreadCell && tokenData.spread_count !== undefined) {
         flashIfChanged(spreadCell, (tokenData.spread_count || 0).toString());
     }
@@ -166,12 +174,7 @@ function updateTokenDataInUI(chain, contract, tokenData) {
         }
     }
     
-    // 新增：同步刷新“首次发现”列的数值和样式
-    // 这样可以保证每次自动刷新token数据时，“首次发现”天数/分钟等也会实时更新
-    const firstSeenElem = row.querySelector('td:nth-child(10) .small');
-    if (firstSeenElem && tokenData.first_update) {
-        firstSeenElem.innerHTML = renderFirstSeenWithStyle(tokenData.first_update);
-    }
+
     
     // 刷新行的样式
     if (tokenData.market_cap > tokenData.market_cap_1h) {

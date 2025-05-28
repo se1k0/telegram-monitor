@@ -1557,7 +1557,6 @@ async def update_token_data_background(chain, contract, cache_key):
                 
                 # 保存计算结果到数据库专用字段，确保数据类型正确
                 updated_data = {}
-                updated_data['last_calculated_change_pct'] = to_decimal_or_float(change_pct)  # numeric类型
                 updated_data['last_calculation_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # timestamp类型
             except Exception as e:
                 logger.error(f"后台更新: 计算涨跌幅时出错: {str(e)}")

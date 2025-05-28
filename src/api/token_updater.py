@@ -259,10 +259,6 @@ class TokenDataUpdater:
                     if max_liquidity > 0:
                         updated_data['liquidity'] = max_liquidity            # 流动性
                     
-                    # 只有当计算出涨跌幅时才更新
-                    if change_pct != 0:
-                        updated_data['last_calculated_change_pct'] = change_pct  # 涨跌幅
-                    
                     # 只有当交易数据大于0时才更新
                     if buys_1h > 0:
                         updated_data['buys_1h'] = buys_1h                    # 1小时买入交易数

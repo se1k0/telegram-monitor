@@ -208,8 +208,6 @@ class Token(Base):
     
     image_url = Column(String(255))  # 代币图标URL
 
-    last_calculated_change_pct = Column(DECIMAL(10, 6))  # 最后计算的价格变化百分比，使用DECIMAL类型
-
     last_calculation_time = Column(String(50))  # 最后计算时间
     
 
@@ -263,7 +261,7 @@ class Token(Base):
 
     risk_level = Column(String(20))           # 风险等级
 
-    
+    from_api = Column(String(10))             # 数据来源
 
     __table_args__ = (
 
@@ -325,9 +323,17 @@ class HiddenToken(Base):
 
     __tablename__ = 'hidden_tokens'
 
-    
+    id = Column(Integer, primary_key=True, autoincrement=True)
 
-    token_symbol = Column(String(50), primary_key=True)
+    chain = Column(String(10), nullable=False)
+
+    contract = Column(String(255), nullable=False)
+
+    timestamp = Column(DateTime, nullable=False, default=datetime.now)
+
+    message_id = Column(Integer, nullable=False)
+
+
 
 
 

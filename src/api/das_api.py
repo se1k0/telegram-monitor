@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from decimal import Decimal
 import asyncio
 import aiohttp
+from datetime import datetime
 
 # 加载环境变量
 load_dotenv()
@@ -325,6 +326,114 @@ class DASAPI:
         except Exception as e:
             logger.error(f"获取代币持有者信息时发生异常: {str(e)}")
             return None, None
+
+    def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取资产信息
+        
+        Args:
+            asset_id: 资产ID
+            
+        Returns:
+            Dict[str, Any]: 资产信息，如果获取失败则返回 None
+        """
+        try:
+            url = f"{self.BASE_URL}?api-key={self.api_key}"
+            payload = {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "getAsset",
+                "params": {"id": asset_id}
+            }
+            headers = {"Content-Type": "application/json"}
+            
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            
+            data = response.json()
+            if 'result' in data:
+                return data['result']
+            return None
+            
+        except Exception as e:
+            logger.error(f"获取资产信息失败: {str(e)}")
+            return None
+            
+    def convert_to_token_data(self, asset_data: Dict[str, Any], chain: str, contract: str, message_id: int) -> Dict[str, Any]:
+        """
+        将 DAS API 返回的数据转换为代币数据格式
+        
+        Args:
+            asset_data: DAS API 返回的资产数据
+            chain: 链标识
+            contract: 合约地址
+            message_id: 消息ID
+            
+        Returns:
+            Dict[str, Any]: 转换后的代币数据
+        """
+        try:
+            # 基础数据
+            token_data = {
+                'chain': chain,
+                'contract': contract,
+                'message_id': message_id,
+                'latest_update': datetime.now().isoformat(),
+                'first_update': datetime.now().isoformat(),
+                'market_cap': 0,
+                'market_cap_formatted': '0',
+                'liquidity': 0,
+                'price': 0,
+                'volume_1h': 0,
+                'buys_1h': 0,
+                'sells_1h': 0,
+                'holders_count': 0,
+                'promotion_count': 1,
+                'risk_level': 'unknown'
+            }
+            
+            # 从 DAS API 数据中提取信息
+            if 'content' in asset_data and 'metadata' in asset_data['content']:
+                metadata = asset_data['content']['metadata']
+                token_data.update({
+                    'token_symbol': metadata.get('symbol', ''),
+                    'name': metadata.get('name', ''),
+                    'description': metadata.get('description', '')
+                })
+                
+            # 从 token_info 中提取信息
+            if 'token_info' in asset_data:
+                token_info = asset_data['token_info']
+                if 'price_info' in token_info:
+                    price_info = token_info['price_info']
+                    token_data.update({
+                        'price': float(price_info.get('price_per_token', 0)),
+                        'market_cap': float(token_info.get('supply', 0)) * float(price_info.get('price_per_token', 0)),
+                        'market_cap_formatted': f"{float(token_info.get('supply', 0)) * float(price_info.get('price_per_token', 0)):,.2f}"
+                    })
+                
+            # 从 content 中提取图像 URL
+            if 'content' in asset_data and 'files' in asset_data['content']:
+                for file in asset_data['content']['files']:
+                    if file.get('mime', '').startswith('image/'):
+                        token_data['image_url'] = file.get('uri', '')
+                        break
+            
+            # 对SOL链代币获取持有者数量
+            if chain == 'SOL':
+                try:
+                    holders_count = self.get_token_holders_count(contract)
+                    if holders_count is not None:
+                        token_data['holders_count'] = holders_count
+                        logger.info(f"从DAS API获取到代币 {contract} 的持有者数量: {holders_count}")
+                except Exception as e:
+                    logger.warning(f"获取代币 {contract} 的持有者数量时出错: {str(e)}")
+                        
+            return token_data
+            
+        except Exception as e:
+            logger.error(f"转换代币数据失败: {str(e)}")
+            return None
 
 
 # 创建单例实例供其他模块使用

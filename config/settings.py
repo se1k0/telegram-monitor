@@ -77,15 +77,6 @@ SUPABASE_URL = os.getenv('SUPABASE_URL', '')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY', '')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', '')
 
-# 初始化 Supabase 客户端
-supabase_client = None
-if HAS_SUPABASE and SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print(f"Supabase 客户端初始化成功: {SUPABASE_URL}")
-    except Exception as e:
-        print(f"Supabase 客户端初始化失败: {str(e)}")
-
 # 关键词过滤文件路径
 KEYWORDS_FILE = BASE_DIR / 'config/sensitive_words.txt'
 

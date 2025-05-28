@@ -399,7 +399,7 @@ function renderTokens(tokens) {
                 trElement.dataset.id = token.id || '';
                 trElement.setAttribute('data-chain', token.chain);
                 trElement.setAttribute('data-contract', token.contract);
-                trElement.setAttribute('data-token-symbol', token.token_symbol || token.symbol || '');
+                trElement.setAttribute('data-token-symbol', token.token_symbol || '');
             }
             
             // 代币名称和图标
@@ -407,7 +407,7 @@ function renderTokens(tokens) {
             if (imgElement) {
                 // 设置默认图片
                 imgElement.src = token.image_url || defaultTokenImage.src;
-                imgElement.alt = token.name || token.symbol || 'Token';
+                imgElement.alt = token.name || token.token_symbol || 'Token';
                 // 添加错误处理
                 imgElement.onerror = function() { handleImageError(this); };
             }
@@ -416,7 +416,7 @@ function renderTokens(tokens) {
             const nameElement = row.querySelector('.token-name');
             if (nameElement) {
                 const tokenName = token.name || '';
-                const tokenSymbol = token.token_symbol || token.symbol || '';
+                const tokenSymbol = token.token_symbol || '';
                 nameElement.innerHTML = tokenName + (tokenSymbol ? ` <span class="token-symbol">${tokenSymbol}</span>` : '');
             }
             
@@ -479,7 +479,7 @@ function renderTokens(tokens) {
                 }
                 
                 // 4. 推特搜索链接
-                const tokenSymbol = token.token_symbol || token.symbol || token.name;
+                const tokenSymbol = token.token_symbol || token.name;
                 if (tokenSymbol) {
                     const twitterSearchUrl = `https://x.com/search?q=(${encodeURIComponent('$' + tokenSymbol)}%20OR%20${encodeURIComponent(token.contract)})&src=typed_query&f=live`;
                     socialMediaRow1.appendChild(createSocialLink(twitterSearchUrl, 'bi-search', '推特搜索'));
@@ -497,7 +497,7 @@ function renderTokens(tokens) {
                 
                 // 1. Axiom（仅SOL链）
                 if (chainLower === 'sol') {
-                    const axiomUrl = `https://axiom.trade/meme/${token.contract}`;
+                    const axiomUrl = `https://axiom.trade/t/${token.contract}`;
                     socialMediaRow2.appendChild(createSocialLink(axiomUrl, 'bi-bar-chart', 'Axiom'));
                 }
                 
@@ -528,11 +528,17 @@ function renderTokens(tokens) {
                 chainBadge.classList.add(getChainClass(token.chain));
             }
             
+            // 首次发现
+            const firstSeenElem = row.querySelector('td:nth-child(3) .small');
+            if (firstSeenElem) {
+                firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
+            }
+            
             // 设置各种数值
-            safeSetTextContent(row.querySelector('td:nth-child(3)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
+            safeSetTextContent(row.querySelector('td:nth-child(4)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
             
             // 涨跌幅
-            const changeElem = row.querySelector('td:nth-child(4)');
+            const changeElem = row.querySelector('td:nth-child(5)');
             if (changeElem) {
                 const currentMarketCap = parseFloat(token.market_cap) || 0;
                 const firstMarketCap = parseFloat(token.first_market_cap) || 0;
@@ -547,28 +553,22 @@ function renderTokens(tokens) {
             }
             
             // 成交量
-            safeSetTextContent(row.querySelector('td:nth-child(5)'), formatVolume(token.volume_1h));
+            safeSetTextContent(row.querySelector('td:nth-child(6)'), formatVolume(token.volume_1h));
             
             // 买入/卖出
             const buysElem = row.querySelector('.buy-count');
             const sellsElem = row.querySelector('.sell-count');
-            if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
-            if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
+            if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}`;
+            if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}`;
             
             // 持有者
-            safeSetTextContent(row.querySelector('td:nth-child(7)'), formatNumber(token.holders_count));
+            safeSetTextContent(row.querySelector('td:nth-child(8)'), formatNumber(token.holders_count));
             
-            // 社区覆盖
-            safeSetTextContent(row.querySelector('td:nth-child(8)'), formatNumber(token.community_reach || 0));
+            // 覆盖人数
+            safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.community_reach || 0));
             
             // 消息覆盖
-            safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.spread_count || 0));
-            
-            // 首次发现
-            const firstSeenElem = row.querySelector('td:nth-child(10) .small');
-            if (firstSeenElem) {
-                firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
-            }
+            safeSetTextContent(row.querySelector('td:nth-child(10)'), formatNumber(token.spread_count || 0));
             
             // 操作按钮
             const refreshBtn = row.querySelector('.refresh-token-btn');
@@ -576,7 +576,7 @@ function renderTokens(tokens) {
                 refreshBtn.dataset.tokenId = token.id || '';
                 refreshBtn.dataset.chain = token.chain;
                 refreshBtn.dataset.contract = token.contract;
-                refreshBtn.dataset.tokenSymbol = token.token_symbol || token.symbol || '';
+                refreshBtn.dataset.tokenSymbol = token.token_symbol || '';
             }
             
             const viewBtn = row.querySelector('.view-token-btn');
@@ -1083,7 +1083,7 @@ function createTokenRow(token) {
         trElement.dataset.id = token.id || '';
         trElement.setAttribute('data-chain', token.chain);
         trElement.setAttribute('data-contract', token.contract);
-        trElement.setAttribute('data-token-symbol', token.token_symbol || token.symbol || '');
+        trElement.setAttribute('data-token-symbol', token.token_symbol || '');
     }
     
     // 代币名称和图标
@@ -1091,7 +1091,7 @@ function createTokenRow(token) {
     if (imgElement) {
         // 设置默认图片
         imgElement.src = token.image_url || defaultTokenImage.src;
-        imgElement.alt = token.name || token.symbol || 'Token';
+        imgElement.alt = token.name || token.token_symbol || 'Token';
         // 添加错误处理
         imgElement.onerror = function() { handleImageError(this); };
     }
@@ -1100,7 +1100,7 @@ function createTokenRow(token) {
     const nameElement = row.querySelector('.token-name');
     if (nameElement) {
         const tokenName = token.name || '';
-        const tokenSymbol = token.token_symbol || token.symbol || '';
+        const tokenSymbol = token.token_symbol || '';
         nameElement.innerHTML = tokenName + (tokenSymbol ? ` <span class="token-symbol">${tokenSymbol}</span>` : '');
     }
     
@@ -1163,7 +1163,7 @@ function createTokenRow(token) {
         }
         
         // 4. 推特搜索链接
-        const tokenSymbol = token.token_symbol || token.symbol || token.name;
+        const tokenSymbol = token.token_symbol || token.name;
         if (tokenSymbol) {
             const twitterSearchUrl = `https://x.com/search?q=(${encodeURIComponent('$' + tokenSymbol)}%20OR%20${encodeURIComponent(token.contract)})&src=typed_query&f=live`;
             socialMediaRow1.appendChild(createSocialLink(twitterSearchUrl, 'bi-search', '推特搜索'));
@@ -1181,7 +1181,7 @@ function createTokenRow(token) {
         
         // 1. Axiom（仅SOL链）
         if (chainLower === 'sol') {
-            const axiomUrl = `https://axiom.trade/meme/${token.contract}`;
+            const axiomUrl = `https://axiom.trade/t/${token.contract}`;
             socialMediaRow2.appendChild(createSocialLink(axiomUrl, 'bi-bar-chart', 'Axiom'));
         }
         
@@ -1212,11 +1212,17 @@ function createTokenRow(token) {
         chainBadge.classList.add(getChainClass(token.chain));
     }
     
+    // 首次发现
+    const firstSeenElem = row.querySelector('td:nth-child(3) .small');
+    if (firstSeenElem) {
+        firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
+    }
+    
     // 设置各种数值
-    safeSetTextContent(row.querySelector('td:nth-child(3)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
+    safeSetTextContent(row.querySelector('td:nth-child(4)'), token.market_cap_formatted || formatMarketCap(token.market_cap));
     
     // 涨跌幅
-    const changeElem = row.querySelector('td:nth-child(4)');
+    const changeElem = row.querySelector('td:nth-child(5)');
     if (changeElem) {
         const currentMarketCap = parseFloat(token.market_cap) || 0;
         const firstMarketCap = parseFloat(token.first_market_cap) || 0;
@@ -1231,28 +1237,22 @@ function createTokenRow(token) {
     }
     
     // 成交量
-    safeSetTextContent(row.querySelector('td:nth-child(5)'), token.volume_formatted || formatVolume(token.volume_24h));
+    safeSetTextContent(row.querySelector('td:nth-child(6)'), formatVolume(token.volume_1h));
     
     // 买入/卖出
     const buysElem = row.querySelector('.buy-count');
     const sellsElem = row.querySelector('.sell-count');
-    if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}<i class="bi bi-arrow-up-short"></i>`;
-    if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}<i class="bi bi-arrow-down-short"></i>`;
+    if (buysElem) buysElem.innerHTML = `${token.buys_1h || '0'}`;
+    if (sellsElem) sellsElem.innerHTML = `${token.sells_1h || '0'}`;
     
-    // 持有者数量
-    safeSetTextContent(row.querySelector('td:nth-child(7)'), formatNumber(token.holders_count));
+    // 持有者
+    safeSetTextContent(row.querySelector('td:nth-child(8)'), formatNumber(token.holders_count));
     
-    // 社区覆盖
-    safeSetTextContent(row.querySelector('td:nth-child(8)'), formatNumber(token.community_members));
+    // 覆盖人数
+    safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.community_reach || 0));
     
     // 消息覆盖
-    safeSetTextContent(row.querySelector('td:nth-child(9)'), formatNumber(token.spread_count));
-    
-    // 首次发现时间
-    const firstSeenElem = row.querySelector('td:nth-child(10) .small');
-    if (firstSeenElem) {
-        firstSeenElem.innerHTML = renderFirstSeenWithStyle(token.first_update);
-    }
+    safeSetTextContent(row.querySelector('td:nth-child(10)'), formatNumber(token.spread_count || 0));
     
     // 操作按钮数据
     const refreshBtn = row.querySelector('.refresh-token-btn');
@@ -1260,7 +1260,7 @@ function createTokenRow(token) {
         refreshBtn.dataset.tokenId = token.id;
         refreshBtn.dataset.chain = token.chain;
         refreshBtn.dataset.contract = token.contract;
-        refreshBtn.dataset.tokenSymbol = token.token_symbol || token.symbol || '';
+        refreshBtn.dataset.tokenSymbol = token.token_symbol || '';
     }
     
     const viewBtn = row.querySelector('.view-token-btn');
