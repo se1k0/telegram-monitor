@@ -1571,13 +1571,24 @@ def validate_token_data(token_data: Dict[str, Any]) -> Tuple[bool, str]:
     Returns:
         (bool, str): 是否有效，错误信息
     """
+    allowed_fields = {
+        'id', 'chain', 'token_symbol', 'contract', 'message_id', 'market_cap', 'market_cap_1h',
+        'market_cap_formatted', 'first_market_cap', 'promotion_count', 'likes_count', 'telegram_url',
+        'twitter_url', 'website_url', 'latest_update', 'first_update', 'dexscreener_url', 'from_group',
+        'channel_id', 'image_url', 'last_calculation_time', 'price', 'first_price', 'price_change_24h',
+        'price_change_7d', 'volume_24h', 'volume_1h', 'liquidity', 'holders_count', 'buys_1h', 'sells_1h',
+        'spread_count', 'community_reach', 'sentiment_score', 'positive_words', 'negative_words',
+        'is_trending', 'hype_score', 'risk_level', 'from_api'
+    }
+    # 移除所有不在Token表字段列表中的字段
+    remove_keys = [k for k in token_data if k not in allowed_fields]
+    for k in remove_keys:
+        token_data.pop(k)
     required_fields = ['chain', 'token_symbol', 'contract']
-    
     # 检查必要字段
     for field in required_fields:
         if field not in token_data or not token_data[field]:
             return False, f"缺少必要字段: {field}"
-    
     return True, ""
 
 # 测试函数，用于验证重构是否正常工作

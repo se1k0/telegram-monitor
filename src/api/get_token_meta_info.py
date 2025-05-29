@@ -44,7 +44,6 @@ def get_token_info(token_address: str, api_key: str) -> Dict:
             "metadata": {
                 "name": metadata.get("name"),
                 "symbol": metadata.get("symbol"),
-                "description": metadata.get("description"),
                 "token_standard": metadata.get("token_standard")
             },
             "image_url": links.get("image"),

@@ -397,8 +397,7 @@ class DASAPI:
                 metadata = asset_data['content']['metadata']
                 token_data.update({
                     'token_symbol': metadata.get('symbol', ''),
-                    'name': metadata.get('name', ''),
-                    'description': metadata.get('description', '')
+                    'name': metadata.get('name', '')
                 })
                 
             # 从 token_info 中提取信息

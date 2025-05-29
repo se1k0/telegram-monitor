@@ -238,6 +238,10 @@ class TelegramListener:
         self.last_authorized_check = None
         self.authorized_check_interval = 60  # 每1分钟检查一次授权状态
         self.max_errors = 5  # 增加最大错误次数阈值，防止属性不存在
+        
+        # 添加代币处理缓存
+        self._token_processing_cache = {}  # 用于缓存正在处理的代币
+        self._token_cache_lock = asyncio.Lock()  # 用于保护缓存的并发访问
     
     def _init_session_path(self):
         """初始化session路径,选择最新的可用session或创建新的"""
@@ -927,56 +931,76 @@ class TelegramListener:
             promotion_count: 推广次数
         """
         try:
-            # 获取API助手
-            from src.api.token_market_updater import update_token_market_data_async
+            # 生成缓存键
+            cache_key = f"{chain}:{contract_address}"
             
-            # 更新代币数据
-            result = await update_token_market_data_async(
-                chain, 
-                contract_address, 
-                message_id=message_id, 
-                channel_id=channel_id,
-                risk_level=risk_level,
-                promotion_count=promotion_count
-            )
-            
-            # 检查API调用结果
-            if "error" in result:
-                error_msg = result.get("error", "")
-                
-                # 只有在确认是"数据库中未找到该代币"且API成功获取到数据的情况下才创建新token
-                if "数据库中未找到该代币" in error_msg and not any(x in error_msg for x in ["无法获取代币数据", "API错误"]):
-                    # 检查result中是否包含足够的数据来创建token
-                    if result.get("marketCap") is not None or result.get("price") is not None or result.get("symbol"):
-                        # 创建新代币
-                        logger.info(f"未找到代币 {chain}/{contract_address}，开始创建新代币")
-                        result["channel_id"] = channel_id
-                        result["risk_level"] = risk_level
-                        result["message_id"] = message_id
-                        # 创建新代币
-                        result = await self.create_token(result)
-                        
-                        if "error" in result:
-                            logger.warning(f"创建新代币失败: {result.get('error')}")
-                            return
-                            
-                        logger.info(f"成功创建新代币 {chain}/{contract_address}")
-                    else:
-                        logger.warning(f"未从API获取到足够的代币数据，跳过创建: {chain}/{contract_address}")
-                        return
-                else:
-                    # 其他API错误情况，记录错误并跳过
-                    logger.warning(f"处理代币信息失败: {error_msg}")
+            # 检查缓存中是否正在处理该代币
+            async with self._token_cache_lock:
+                if cache_key in self._token_processing_cache:
+                    logger.info(f"代币 {chain}/{contract_address} 正在处理中，跳过重复处理")
                     return
+                # 将代币添加到处理缓存
+                self._token_processing_cache[cache_key] = True
             
-            # 处理成功更新或创建的结果
-            if "error" not in result:
-                await self._save_token_mark(chain, contract_address, message_id, channel_id, result)
+            try:
+                # 获取API助手
+                from src.api.token_market_updater import update_token_market_data_async
+                
+                # 更新代币数据
+                result = await update_token_market_data_async(
+                    chain, 
+                    contract_address, 
+                    message_id=message_id, 
+                    channel_id=channel_id,
+                    risk_level=risk_level,
+                    promotion_count=promotion_count
+                )
+                
+                # 检查API调用结果
+                if "error" in result:
+                    error_msg = result.get("error", "")
+                    
+                    # 只有在确认是"数据库中未找到该代币"且API成功获取到数据的情况下才创建新token
+                    if "数据库中未找到该代币" in error_msg and not any(x in error_msg for x in ["无法获取代币数据", "API错误"]):
+                        # 检查result中是否包含足够的数据来创建token
+                        if result.get("marketCap") is not None or result.get("price") is not None or result.get("symbol"):
+                            # 创建新代币
+                            logger.info(f"未找到代币 {chain}/{contract_address}，开始创建新代币")
+                            result["channel_id"] = channel_id
+                            result["risk_level"] = risk_level
+                            result["message_id"] = message_id
+                            # 创建新代币
+                            result = await self.create_token(result)
+                            
+                            if "error" in result:
+                                logger.warning(f"创建新代币失败: {result.get('error')}")
+                                return
+                                
+                            logger.info(f"成功创建新代币 {chain}/{contract_address}")
+                        else:
+                            logger.warning(f"未从API获取到足够的代币数据，跳过创建: {chain}/{contract_address}")
+                            return
+                    else:
+                        # 其他API错误情况，记录错误并跳过
+                        logger.warning(f"处理代币信息失败: {error_msg}")
+                        return
+                
+                # 处理成功更新或创建的结果
+                if "error" not in result:
+                    await self._save_token_mark(chain, contract_address, message_id, channel_id, result)
+                
+            finally:
+                # 无论处理成功与否，都从缓存中移除
+                async with self._token_cache_lock:
+                    self._token_processing_cache.pop(cache_key, None)
             
         except Exception as e:
             logger.error(f"更新或创建代币时出错: {str(e)}")
             import traceback as tb
             logger.debug(tb.format_exc())
+            # 确保在发生异常时也从缓存中移除
+            async with self._token_cache_lock:
+                self._token_processing_cache.pop(cache_key, None)
     
     async def _save_token_mark(self, chain, contract_address, message_id, channel_id, token_result):
         """
@@ -1016,11 +1040,62 @@ class TelegramListener:
             mark_result = await db_adapter.save_token_mark(token_mark_data)
             if mark_result:
                 logger.info(f"成功保存代币标记信息: {token_symbol}")
+                
+                # 在保存成功后重新计算spread_count，确保计算最新值
+                try:
+                    # 查询该代币在所有频道的提及情况
+                    mentions = await db_adapter.execute_query(
+                        'tokens_mark', 
+                        'select', 
+                        filters={
+                            'contract': contract_address,
+                            'chain': chain
+                        }
+                    )
+                    
+                    # 计算不同频道的数量
+                    unique_channels = set()
+                    if mentions and isinstance(mentions, list):
+                        for mention in mentions:
+                            if mention and 'channel_id' in mention and mention['channel_id']:
+                                unique_channels.add(mention['channel_id'])
+                    
+                    # 确保当前频道也被计算在内
+                    if channel_id:
+                        unique_channels.add(channel_id)
+                    
+                    # 计算实际的spread_count值
+                    new_spread_count = len(unique_channels)
+                    
+                    # 获取当前代币信息
+                    current_token = await db_adapter.get_token_by_contract(chain, contract_address)
+                    if current_token:
+                        current_spread_count = current_token.get('spread_count', 0) or 0
+                        
+                        # 只有当新值大于当前值时才更新
+                        if new_spread_count > current_spread_count:
+                            # 更新spread_count
+                            update_result = await db_adapter.execute_query(
+                                'tokens',
+                                'update',
+                                data={'spread_count': new_spread_count},
+                                filters={'chain': chain, 'contract': contract_address}
+                            )
+                            
+                            logger.info(f"更新代币 {token_symbol} ({chain}/{contract_address}) 的spread_count: {current_spread_count} -> {new_spread_count}")
+                
+                except Exception as spread_error:
+                    logger.error(f"计算spread_count时出错: {str(spread_error)}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                    
             else:
                 logger.warning(f"保存代币标记信息失败: {token_symbol}")
                 
         except Exception as e:
             logger.error(f"保存代币标记时出错: {str(e)}")
+            import traceback
+            logger.debug(traceback.format_exc())
     
     async def reinitialize_handlers(self):
         """当发生多次错误时，重新初始化处理程序"""
@@ -1539,7 +1614,7 @@ class TelegramListener:
     # 添加新函数: 创建代币
     async def create_token(self, token_data):
         """
-        创建新代币
+        创建新代币，如果已存在则更新
         
         Args:
             token_data: 包含代币信息的字典
@@ -1616,15 +1691,18 @@ class TelegramListener:
                                 if 'channel_id' in mention and mention['channel_id']:
                                     unique_channels.add(mention['channel_id'])
                             
-                            # 更新spread_count为不同频道的数量+1（当前频道）
-                            if len(unique_channels) > 0 and channel_id not in unique_channels:
-                                spread_count = len(unique_channels) + 1
-                            else:
-                                spread_count = len(unique_channels) or 1
+                            # 确保当前频道也被计算在内
+                            if channel_id:
+                                unique_channels.add(channel_id)
+                                
+                            # 更新spread_count为不同频道的数量
+                            spread_count = len(unique_channels)
                                 
                             logger.info(f"代币 {chain}/{contract} 已在 {spread_count} 个频道被提及")
                 except Exception as mention_error:
                     logger.warning(f"获取代币提及次数时出错: {str(mention_error)}")
+                    # 使用默认值
+                    spread_count = 1
             except Exception as stats_error:
                 logger.warning(f"计算代币传播统计数据时出错: {str(stats_error)}")
                 # 使用默认值
@@ -1681,30 +1759,201 @@ class TelegramListener:
                 'risk_level': token_data.get('risk_level')  # 风险等级
             }
             
-            # 插入新代币
-            insert_result = await db_adapter.execute_query('tokens', 'insert', data=new_token_data)
-            
-            if isinstance(insert_result, dict) and insert_result.get('error'):
-                logger.error(f"创建新代币失败: {insert_result.get('error')}")
-                return {"error": f"创建新代币失败: {insert_result.get('error')}"}
-            
-            logger.info(f"成功创建新代币 {token_data.get('chain')}/{token_data.get('contract')}")
-            
-            # 记录历史数据
-            # （已彻底删除 token_history 表相关插入和日志）
-            # 返回成功结果
-            return {
-                "success": True,
-                "is_new": True,  # 标记为新创建的代币
-                "chain": token_data.get('chain'),
-                "contract": token_data.get('contract'),
-                "symbol": token_data.get('symbol', ''),
-                "marketCap": token_data.get('marketCap', 0),
-                "liquidity": token_data.get('liquidity', 0),
-                "price": token_data.get('price'),
-                "dexScreenerUrl": token_data.get('dexScreenerUrl'),
-                "image_url": token_data.get('image_url')
-            }
+            try:
+                # 尝试插入新代币
+                insert_result = await db_adapter.execute_query('tokens', 'insert', data=new_token_data)
+                
+                if isinstance(insert_result, dict) and insert_result.get('error'):
+                    error_msg = insert_result.get('error', '')
+                    
+                    # 检查是否是唯一约束冲突（代币已存在）
+                    if 'unique constraint' in error_msg.lower() or 'duplicate key' in error_msg.lower() or 'already exists' in error_msg.lower():
+                        logger.info(f"代币 {token_data.get('chain')}/{token_data.get('contract')} 已存在，转为更新操作")
+                        
+                        # 获取现有代币信息
+                        existing_token = await db_adapter.execute_query(
+                            'tokens', 
+                            'select', 
+                            filters={
+                                'chain': token_data.get('chain'),
+                                'contract': token_data.get('contract')
+                            },
+                            limit=1
+                        )
+                        
+                        if existing_token and len(existing_token) > 0:
+                            existing_token = existing_token[0]
+                            
+                            # 准备更新数据
+                            update_data = {
+                                'latest_update': current_time,
+                                'message_id': token_data.get('message_id'),  # 更新最新消息ID
+                                'channel_id': token_data.get('channel_id'),  # 更新最新频道ID
+                            }
+                            
+                            # 更新市值和价格（如果有新数据）
+                            if token_data.get('marketCap'):
+                                update_data['market_cap'] = token_data.get('marketCap')
+                                update_data['market_cap_formatted'] = self._format_market_cap(token_data.get('marketCap'))
+                            
+                            if token_data.get('price'):
+                                update_data['price'] = token_data.get('price')
+                            
+                            # 更新其他字段（如果有新数据）
+                            if token_data.get('liquidity'):
+                                update_data['liquidity'] = token_data.get('liquidity')
+                            
+                            if token_data.get('holders_count'):
+                                update_data['holders_count'] = token_data.get('holders_count')
+                            
+                            # 增加推广次数
+                            update_data['promotion_count'] = existing_token.get('promotion_count', 0) + 1
+                            
+                            # 更新spread_count（如果新值更大）
+                            if spread_count > existing_token.get('spread_count', 0):
+                                update_data['spread_count'] = spread_count
+                            
+                            # 执行更新
+                            update_result = await db_adapter.execute_query(
+                                'tokens',
+                                'update',
+                                filters={
+                                    'chain': token_data.get('chain'),
+                                    'contract': token_data.get('contract')
+                                },
+                                data=update_data
+                            )
+                            
+                            if isinstance(update_result, dict) and update_result.get('error'):
+                                logger.error(f"更新代币失败: {update_result.get('error')}")
+                                return {"error": f"更新代币失败: {update_result.get('error')}"}
+                            
+                            logger.info(f"成功更新代币 {token_data.get('chain')}/{token_data.get('contract')}")
+                            
+                            # 返回更新结果
+                            return {
+                                "success": True,
+                                "is_updated": True,
+                                "chain": token_data.get('chain'),
+                                "contract": token_data.get('contract'),
+                                "symbol": token_data.get('symbol', ''),
+                                "marketCap": token_data.get('marketCap', 0),
+                                "liquidity": token_data.get('liquidity', 0),
+                                "price": token_data.get('price'),
+                                "dexScreenerUrl": token_data.get('dexScreenerUrl'),
+                                "image_url": token_data.get('image_url')
+                            }
+                        else:
+                            logger.warning(f"唯一约束冲突，但无法找到现有代币: {token_data.get('chain')}/{token_data.get('contract')}")
+                            return {"error": "唯一约束冲突，但无法找到现有代币"}
+                    else:
+                        # 其他错误
+                        logger.error(f"创建新代币失败: {error_msg}")
+                        return {"error": f"创建新代币失败: {error_msg}"}
+                
+                logger.info(f"成功创建新代币 {token_data.get('chain')}/{token_data.get('contract')}")
+                
+                # 返回成功结果
+                return {
+                    "success": True,
+                    "is_new": True,  # 标记为新创建的代币
+                    "chain": token_data.get('chain'),
+                    "contract": token_data.get('contract'),
+                    "symbol": token_data.get('symbol', ''),
+                    "marketCap": token_data.get('marketCap', 0),
+                    "liquidity": token_data.get('liquidity', 0),
+                    "price": token_data.get('price'),
+                    "dexScreenerUrl": token_data.get('dexScreenerUrl'),
+                    "image_url": token_data.get('image_url')
+                }
+            except Exception as db_error:
+                # 尝试捕获数据库异常
+                error_str = str(db_error).lower()
+                
+                # 检查是否是唯一约束冲突
+                if 'unique constraint' in error_str or 'duplicate key' in error_str or 'already exists' in error_str:
+                    logger.info(f"插入时发生冲突，代币 {token_data.get('chain')}/{token_data.get('contract')} 已存在，转为更新操作")
+                    
+                    # 获取现有代币信息
+                    try:
+                        existing_token = await db_adapter.execute_query(
+                            'tokens', 
+                            'select', 
+                            filters={
+                                'chain': token_data.get('chain'),
+                                'contract': token_data.get('contract')
+                            },
+                            limit=1
+                        )
+                        
+                        if existing_token and len(existing_token) > 0:
+                            existing_token = existing_token[0]
+                            
+                            # 准备更新数据
+                            update_data = {
+                                'latest_update': current_time,
+                                'message_id': token_data.get('message_id'),
+                                'channel_id': token_data.get('channel_id'),
+                            }
+                            
+                            # 更新市值和价格（如果有新数据）
+                            if token_data.get('marketCap'):
+                                update_data['market_cap'] = token_data.get('marketCap')
+                                update_data['market_cap_formatted'] = self._format_market_cap(token_data.get('marketCap'))
+                            
+                            if token_data.get('price'):
+                                update_data['price'] = token_data.get('price')
+                            
+                            # 更新其他字段（如果有新数据）
+                            if token_data.get('liquidity'):
+                                update_data['liquidity'] = token_data.get('liquidity')
+                            
+                            if token_data.get('holders_count'):
+                                update_data['holders_count'] = token_data.get('holders_count')
+                            
+                            # 增加推广次数
+                            update_data['promotion_count'] = existing_token.get('promotion_count', 0) + 1
+                            
+                            # 更新spread_count（如果新值更大）
+                            if spread_count > existing_token.get('spread_count', 0):
+                                update_data['spread_count'] = spread_count
+                            
+                            # 执行更新
+                            update_result = await db_adapter.execute_query(
+                                'tokens',
+                                'update',
+                                filters={
+                                    'chain': token_data.get('chain'),
+                                    'contract': token_data.get('contract')
+                                },
+                                data=update_data
+                            )
+                            
+                            logger.info(f"成功更新代币 {token_data.get('chain')}/{token_data.get('contract')}")
+                            
+                            # 返回更新结果
+                            return {
+                                "success": True,
+                                "is_updated": True,
+                                "chain": token_data.get('chain'),
+                                "contract": token_data.get('contract'),
+                                "symbol": token_data.get('symbol', ''),
+                                "marketCap": token_data.get('marketCap', 0),
+                                "liquidity": token_data.get('liquidity', 0),
+                                "price": token_data.get('price'),
+                                "dexScreenerUrl": token_data.get('dexScreenerUrl'),
+                                "image_url": token_data.get('image_url')
+                            }
+                        else:
+                            logger.warning(f"唯一约束冲突，但无法找到现有代币: {token_data.get('chain')}/{token_data.get('contract')}")
+                            return {"error": "唯一约束冲突，但无法找到现有代币"}
+                    except Exception as update_error:
+                        logger.error(f"冲突后尝试更新代币时出错: {str(update_error)}")
+                        return {"error": f"冲突后尝试更新代币时出错: {str(update_error)}"}
+                else:
+                    # 重新抛出非冲突相关的异常
+                    logger.error(f"创建代币时发生未知异常: {str(db_error)}")
+                    return {"error": f"创建代币时发生未知异常: {str(db_error)}"}
                 
         except Exception as e:
             logger.error(f"创建新代币时发生错误: {str(e)}")

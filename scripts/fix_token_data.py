@@ -125,18 +125,7 @@ async def calculate_community_stats(db_adapter, chain, contract):
     spread_count = 0
     community_reach = 0
     
-    # 计算传播次数
-    spread_count_result = await db_adapter.execute_query(
-        'tokens_mark', 
-        'select',
-        filters={'chain': chain, 'contract': contract},
-        count='exact'
-    )
-    
-    if isinstance(spread_count_result, int):
-        spread_count = spread_count_result
-    
-    # 获取所有提到该代币的频道
+    # 获取所有提到该代币的频道ID
     channel_ids_result = await db_adapter.execute_query(
         'tokens_mark',
         'select',
@@ -149,6 +138,9 @@ async def calculate_community_stats(db_adapter, chain, contract):
         for item in channel_ids_result:
             if item and 'channel_id' in item and item['channel_id']:
                 unique_channel_ids.add(item['channel_id'])
+        
+        # 计算传播次数为不同频道的数量
+        spread_count = len(unique_channel_ids)
         
         # 计算社区覆盖人数
         for channel_id in unique_channel_ids:
@@ -191,9 +183,11 @@ async def fix_token_data(tokens_to_fix, dry_run=False, force=False):
             # 只有当社群数据大于0时才更新
             if community_stats['spread_count'] > 0:
                 fixed_data['spread_count'] = community_stats['spread_count']
+                logger.info(f"更新 {symbol} 传播次数: {token_info['current'].get('spread_count', 0)} -> {community_stats['spread_count']}")
             
             if community_stats['community_reach'] > 0:
                 fixed_data['community_reach'] = community_stats['community_reach']
+                logger.info(f"更新 {symbol} 社群覆盖: {token_info['current'].get('community_reach', 0)} -> {community_stats['community_reach']}")
             
             # 设置最后更新时间
             fixed_data['latest_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -207,7 +201,7 @@ async def fix_token_data(tokens_to_fix, dry_run=False, force=False):
                 current_value = token_info['current'].get(key)
                 logger.info(f" - {key}: {current_value} -> {value}")
             
-            # 执行修复
+            # 如果不是dry_run模式，执行更新
             if not dry_run:
                 update_result = await db_adapter.execute_query(
                     'tokens',
@@ -217,21 +211,20 @@ async def fix_token_data(tokens_to_fix, dry_run=False, force=False):
                 )
                 
                 if isinstance(update_result, dict) and update_result.get('error'):
-                    logger.error(f"修复代币 {symbol} 失败: {update_result.get('error')}")
+                    logger.error(f"更新代币 {symbol} (ID={token_id}) 失败: {update_result.get('error')}")
                     error_count += 1
                 else:
-                    logger.info(f"✅ 代币 {symbol} 已成功修复")
+                    logger.info(f"成功修复代币 {symbol} (ID={token_id})")
                     success_count += 1
             else:
-                logger.info("模拟模式: 未执行实际修复")
+                logger.info(f"[DRY RUN] 将更新代币 {symbol} (ID={token_id})")
                 success_count += 1
                 
         except Exception as e:
-            logger.error(f"修复代币 {symbol} 时出错: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"修复代币 {symbol} (ID={token_id}) 时出错: {str(e)}")
             error_count += 1
     
+    logger.info(f"修复完成: 成功 {success_count} 个, 失败 {error_count} 个")
     return success_count, error_count
 
 async def main_async():

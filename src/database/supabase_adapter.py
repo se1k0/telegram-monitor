@@ -527,10 +527,26 @@ class SupabaseAdapter:
             是否成功
         """
         try:
+            # 只保留Token表允许的字段
+            allowed_fields = {
+                'id', 'chain', 'token_symbol', 'contract', 'message_id', 'market_cap', 'market_cap_1h',
+                'market_cap_formatted', 'first_market_cap', 'promotion_count', 'likes_count', 'telegram_url',
+                'twitter_url', 'website_url', 'latest_update', 'first_update', 'dexscreener_url', 'from_group',
+                'channel_id', 'image_url', 'last_calculation_time', 'price', 'first_price', 'price_change_24h',
+                'price_change_7d', 'volume_24h', 'volume_1h', 'liquidity', 'holders_count', 'buys_1h', 'sells_1h',
+                'spread_count', 'community_reach', 'sentiment_score', 'positive_words', 'negative_words',
+                'is_trending', 'hype_score', 'risk_level', 'from_api'
+            }
+            token_data = {k: v for k, v in token_data.items() if k in allowed_fields}
+            
             # 确保token_data是字典
             if not isinstance(token_data, dict):
                 logger.error(f"token_data必须是字典，但收到了: {type(token_data)}")
                 return False
+            
+            # 移除 description 字段（如果存在）
+            if 'description' in token_data:
+                token_data.pop('description')
             
             # 格式化日期时间字段
             for key, value in token_data.items():
