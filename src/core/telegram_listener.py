@@ -45,7 +45,8 @@ from src.database.db_handler import (
     process_message_batch, token_batch,
     process_batches, cleanup_batch_tasks,
     save_telegram_message,
-    extract_chain_from_message
+    extract_chain_from_message,
+    normalize_evm_address
 )
 import config.settings as config
 from src.utils.utils import parse_market_cap, format_market_cap
@@ -812,6 +813,8 @@ class TelegramListener:
             # 循环处理每个合约地址，兼容单合约情况
             for contract_info in contract_infos:
                 contract_address = contract_info.get('contract_address')
+                # 标准化合约地址
+                contract_address = normalize_evm_address(contract_address)
                 chain = contract_info.get('chain', 'UNKNOWN')
                 # 如果链未知，尝试识别链
                 if chain == 'UNKNOWN':

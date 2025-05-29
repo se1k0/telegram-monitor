@@ -784,22 +784,27 @@ def extract_promotion_info(message_text: str, date: datetime, chain: str = None,
         for url in urls:
             contract, detected_chain = extract_contract_from_url(url)
             if contract:
+                # 标准化合约地址
+                normalized_contract = normalize_evm_address(contract)
                 # 只保留第一次出现的来源
-                if contract not in address_info_map:
-                    address_info_map[contract] = {'source': 'url', 'url': url, 'chain': detected_chain}
+                if normalized_contract not in address_info_map:
+                    address_info_map[normalized_contract] = {'source': 'url', 'url': url, 'chain': detected_chain}
                     # === 只在"收集新地址"阶段输出日志 ===
                     if detected_chain:
                         logger.info(f"从URL '{url}' 检测到链: {detected_chain}")
                         if detected_chain == 'SOL':
-                            logger.info(f"从URL直接提取到Solana格式地址: {contract}")
+                            logger.info(f"从URL直接提取到Solana格式地址: {normalized_contract}")
                         elif detected_chain in EVM_CHAINS:
-                            logger.info(f"从URL直接提取到EVM格式地址: {contract}, 链: {detected_chain}")
+                            logger.info(f"从URL直接提取到EVM格式地址: {normalized_contract}, 链: {detected_chain}")
         # 2.2 从文本中正则提取合约地址
         for pattern in CONTRACT_PATTERNS:
             for match in re.finditer(pattern, cleaned_text):
                 potential_address = match.group(1) if '(' in pattern else match.group(0)
-                if potential_address and potential_address not in address_info_map:
-                    address_info_map[potential_address] = {'source': 'regex', 'url': None, 'chain': None}
+                if potential_address:
+                    # 标准化合约地址
+                    normalized_address = normalize_evm_address(potential_address)
+                    if normalized_address not in address_info_map:
+                        address_info_map[normalized_address] = {'source': 'regex', 'url': None, 'chain': None}
         # 3. 对每个唯一合约地址，独立走一遍原有主流程
         for contract_address, info_dict in address_info_map.items():
             # === 以下为原有extract_promotion_info主流程，针对当前contract_address ===
@@ -1741,3 +1746,22 @@ def test_message_extraction():
     }
     
     return test_results
+
+def normalize_evm_address(address: str) -> str:
+    """
+    标准化 EVM 合约地址
+    
+    Args:
+        address: 原始合约地址
+        
+    Returns:
+        str: 标准化后的地址（全小写）
+    """
+    if not address:
+        return address
+    
+    # 如果是 EVM 地址（以 0x 开头），转换为小写
+    if address.startswith('0x'):
+        return address.lower()
+    
+    return address
