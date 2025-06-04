@@ -482,7 +482,8 @@ class TelegramListener:
             active_channels = self.channel_manager.get_active_channels()
             
             if not active_channels:
-                logger.warning("未找到活跃频道，请手动添加频道")
+                logger.warning("未找到活跃频道，需要添加频道才能开始监听")
+                logger.info("您可以手动添加频道或启用自动发现功能")
                 return False
             
             # 注册消息处理器
@@ -1124,14 +1125,15 @@ class TelegramListener:
             return
             
         if not self.channel_discovery:
-            logger.warning("频道发现器未初始化，无法执行自动发现功能")
+            logger.warning("频道发现器未初始化，正在初始化...")
             try:
-                # 尝试重新初始化频道发现器
+                # 初始化频道发现器
                 from src.core.channel_discovery import ChannelDiscovery
                 self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
-                logger.info("已重新初始化频道发现器")
+                logger.info("已初始化频道发现器")
             except Exception as e:
-                logger.error(f"重新初始化频道发现器失败: {str(e)}")
+                logger.error(f"初始化频道发现器失败: {str(e)}")
+                logger.debug(tb.format_exc())
                 return
             
         try:
@@ -1206,8 +1208,43 @@ class TelegramListener:
             self.channel_manager = ChannelManager(self.client)
             
             # 设置频道监听
-            if not await self.setup_channels():
-                logger.error("设置频道监听失败")
+            setup_success = await self.setup_channels()
+            
+            # 如果没有找到活跃频道，尝试自动发现频道
+            if not setup_success and self.auto_discovery_enabled:
+                logger.info("未找到活跃频道，尝试自动发现新频道...")
+                
+                # 初始化频道发现器
+                if not self.channel_discovery:
+                    try:
+                        from src.core.channel_discovery import ChannelDiscovery
+                        self.channel_discovery = ChannelDiscovery(self.client, self.channel_manager)
+                        logger.info("已初始化频道发现器")
+                    except Exception as e:
+                        logger.error(f"初始化频道发现器失败: {str(e)}")
+                        # 即使初始化失败，我们也继续启动其他功能
+                
+                # 尝试自动发现并添加频道
+                if self.channel_discovery:
+                    try:
+                        new_channels = await self.channel_discovery.auto_add_channels(
+                            min_members=self.min_members,
+                            max_channels=self.max_auto_channels
+                        )
+                        
+                        if new_channels:
+                            logger.info(f"自动添加了 {len(new_channels)} 个新频道")
+                            # 再次尝试设置频道监听
+                            setup_success = await self.setup_channels()
+                        else:
+                            logger.info("没有发现符合条件的新频道")
+                    except Exception as e:
+                        logger.error(f"自动发现频道时出错: {str(e)}")
+                        logger.debug(tb.format_exc())
+            
+            # 如果最终还是没有找到活跃频道，返回失败
+            if not setup_success:
+                logger.error("无法设置频道监听，请手动添加至少一个频道")
                 return False
             
             # 启动自动发现频道任务
@@ -1349,13 +1386,10 @@ class TelegramListener:
         
         while self.is_running:
             try:
-                # 先等待一段时间，避免启动后立即开始发现
-                await asyncio.sleep(60)  # 启动后等待60秒再开始发现
-                
+                # 检查是否需要限制执行频率
                 current_time = datetime.now()
-                # 限制自动发现的频率，避免短时间内多次执行
                 if last_discovery_time and (current_time - last_discovery_time).total_seconds() < 300:
-                    logger.info(f"距离上次自动发现仅过去了 {(current_time - last_discovery_time).total_seconds():.1f} 秒，跳过本次执行")
+                    logger.info(f"距离上次自动发现仅过去了 {(current_time - last_discovery_time).total_seconds():.1f} 秒，等待下一次执行")
                     await asyncio.sleep(60)
                     continue
                 
