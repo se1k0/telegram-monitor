@@ -357,51 +357,77 @@ function handleImageError(img) {
 }
 
 /**
+ * 标准化 EVM 合约地址
+ * @param {string} address - 原始地址
+ * @returns {string} - 标准化后的地址
+ */
+function normalizeEVMAddress(address) {
+    if (!address) return address;
+    // 如果是 EVM 地址（以 0x 开头），转换为小写
+    if (address.startsWith('0x')) {
+        return address.toLowerCase();
+    }
+    return address;
+}
+
+/**
  * 渲染代币到UI
  * @param {Array} tokens 代币数据数组
  */
 function renderTokens(tokens) {
     // 确保tokens是数组且有内容
     if (!Array.isArray(tokens) || tokens.length === 0) {
-        console.log("没有代币数据可渲染");
+        console.warn('没有代币数据可显示');
         return;
     }
     
-    const container = document.getElementById('tokens-container');
-    if (!container) {
-        console.error('找不到tokens-container元素');
+    // 获取表格体
+    const tbody = document.querySelector('#tokenTable tbody');
+    if (!tbody) {
+        console.error('找不到代币表格体元素');
         return;
     }
     
-    const template = document.getElementById('token-row-template');
-    if (!template) {
-        console.error('找不到token-row-template元素');
-        return;
-    }
+    // 清空现有内容
+    tbody.innerHTML = '';
     
-    // 创建文档片段，提高性能
-    const fragment = document.createDocumentFragment();
-    
+    // 渲染每个代币
     tokens.forEach(token => {
         try {
-            // 跳过无效的代币数据
-            if (!token || !token.contract || !token.chain) {
-                console.warn('跳过无效的代币数据', token);
-                return;
-            }
+            // 标准化合约地址
+            const normalizedContract = normalizeEVMAddress(token.contract);
             
-            // 克隆模板
-            const row = document.importNode(template.content, true);
-            
-            // 填充代币数据
-            const trElement = row.querySelector('tr');
-            if (trElement) {
-                trElement.dataset.id = token.id || '';
-                trElement.setAttribute('data-chain', token.chain);
-                trElement.setAttribute('data-contract', token.contract);
-                trElement.setAttribute('data-token-symbol', token.token_symbol || '');
-                trElement.setAttribute('data-first-update', token.first_update || '');
-            }
+            // 创建新行
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>
+                    <div class="d-flex align-items-center">
+                        <span class="token-symbol me-2">${token.symbol || '?'}</span>
+                        <span class="badge bg-primary badge-chain">${token.chain || 'Unknown'}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="d-flex align-items-center">
+                        <span class="token-address" data-address="${normalizedContract}">${formatAddress(normalizedContract)}</span>
+                        <button class="btn btn-sm btn-outline-secondary copy-btn ms-2" data-address="${normalizedContract}" title="复制合约地址">
+                            <i class="bi bi-clipboard"></i>
+                        </button>
+                    </div>
+                </td>
+                <td>${formatNumber(token.marketCap)}</td>
+                <td>${formatNumber(token.price)}</td>
+                <td class="${token.priceChange >= 0 ? 'text-success' : 'text-danger'}">${formatNumber(token.priceChange)}%</td>
+                <td>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-outline-primary view-detail-btn" data-chain="${token.chain}" data-contract="${normalizedContract}">
+                            <i class="bi bi-info-circle"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary refresh-token-btn" data-chain="${token.chain}" data-contract="${normalizedContract}">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                </td>
+            `;
             
             // 代币名称和图标
             const imgElement = row.querySelector('img');
@@ -422,15 +448,15 @@ function renderTokens(tokens) {
             }
             
             // 合约地址
-            const addressElem = row.querySelector('[data-address]');
+            const addressElem = row.querySelector('.token-address');
             if (addressElem) {
-                addressElem.textContent = formatAddress(token.contract);
-                addressElem.dataset.address = token.contract;
+                addressElem.textContent = formatAddress(normalizedContract);
+                addressElem.dataset.address = normalizedContract;
             }
             
             const copyBtn = row.querySelector('.copy-btn');
             if (copyBtn) {
-                copyBtn.dataset.address = token.contract;
+                copyBtn.dataset.address = normalizedContract;
                 // 绑定点击事件，复制合约地址，兼容所有系统
                 copyBtn.onclick = function(event) {
                     event.preventDefault();
@@ -482,7 +508,7 @@ function renderTokens(tokens) {
                 // 4. 推特搜索链接
                 const tokenSymbol = token.token_symbol || token.name;
                 if (tokenSymbol) {
-                    const twitterSearchUrl = `https://x.com/search?q=(${encodeURIComponent('$' + tokenSymbol)}%20OR%20${encodeURIComponent(token.contract)})&src=typed_query&f=live`;
+                    const twitterSearchUrl = `https://x.com/search?q=(${encodeURIComponent('$' + tokenSymbol)}%20OR%20${encodeURIComponent(normalizedContract)})&src=typed_query&f=live`;
                     socialMediaRow1.appendChild(createSocialLink(twitterSearchUrl, 'bi-search', '推特搜索'));
                 }
             }
@@ -498,26 +524,26 @@ function renderTokens(tokens) {
                 
                 // 1. Axiom（仅SOL链）
                 if (chainLower === 'sol') {
-                    const axiomUrl = `https://axiom.trade/t/${token.contract}`;
+                    const axiomUrl = `https://axiom.trade/t/${normalizedContract}`;
                     socialMediaRow2.appendChild(createSocialLink(axiomUrl, 'bi-bar-chart', 'Axiom'));
                 }
                 
                 // 2. Debot（支持solana、bsc、base链）
                 if (['sol', 'solana', 'bsc', 'base'].includes(chainLower)) {
                     const debotChain = chainLower === 'sol' ? 'solana' : chainLower;
-                    const debotUrl = `https://debot.ai/token/${debotChain}/${token.contract}`;
+                    const debotUrl = `https://debot.ai/token/${debotChain}/${normalizedContract}`;
                     socialMediaRow2.appendChild(createSocialLink(debotUrl, 'bi-robot', 'Debot'));
                 }
                 
                 // 3. GMGN（支持sol、bsc、base链）
                 if (['sol', 'bsc', 'base'].includes(chainLower)) {
-                    const gmgnUrl = `https://gmgn.ai/${chainLower}/token/${token.contract}`;
+                    const gmgnUrl = `https://gmgn.ai/${chainLower}/token/${normalizedContract}`;
                     socialMediaRow2.appendChild(createSocialLink(gmgnUrl, 'bi-graph-up', 'GMGN'));
                 }
                 
                 // 4. PumpFun（仅SOL链）
                 if (chainLower === 'sol') {
-                    const pumpfunUrl = `https://pump.fun/coin/${token.contract}`;
+                    const pumpfunUrl = `https://pump.fun/coin/${normalizedContract}`;
                     socialMediaRow2.appendChild(createSocialLink(pumpfunUrl, 'bi-rocket', 'PumpFun'));
                 }
             }
@@ -606,38 +632,12 @@ function renderTokens(tokens) {
             // 消息覆盖
             safeSetTextContent(row.querySelector('td:nth-child(10)'), formatNumber(token.spread_count || 0));
             
-            // 操作按钮
-            const refreshBtn = row.querySelector('.refresh-token-btn');
-            if (refreshBtn) {
-                refreshBtn.dataset.tokenId = token.id || '';
-                refreshBtn.dataset.chain = token.chain;
-                refreshBtn.dataset.contract = token.contract;
-                refreshBtn.dataset.tokenSymbol = token.token_symbol || '';
-            }
-            
-            const viewBtn = row.querySelector('.view-token-btn');
-            if (viewBtn) {
-                viewBtn.dataset.tokenId = token.id || '';
-            }
-            
             // 追加到片段
-            fragment.appendChild(row);
+            tbody.appendChild(row);
         } catch (error) {
             console.error('渲染代币行时出错:', error, token);
         }
     });
-    
-    // 一次性添加所有元素到DOM
-    container.appendChild(fragment);
-    
-    // 初始化新添加元素上的工具提示
-    try {
-        if (typeof initTooltips === 'function') {
-            initTooltips();
-        }
-    } catch (error) {
-        console.error('初始化工具提示失败:', error);
-    }
     
     // 添加对详情按钮的事件处理
     attachTokenDetailClickHandlers();

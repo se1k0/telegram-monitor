@@ -594,6 +594,9 @@ class ChannelManager:
             
             for channel in channels:
                 try:
+                    # 添加基础延迟，避免触发频率限制
+                    await asyncio.sleep(2)
+                    
                     channel_id = channel.get('channel_id')
                     channel_username = channel.get('channel_username')
                     
@@ -604,40 +607,59 @@ class ChannelManager:
                     identifier = channel_username or channel_id
                     logger.info(f"正在更新频道: {identifier}")
                     
-                    # 验证频道
-                    channel_info = await self.verify_channel(identifier)
+                    # 添加重试机制
+                    max_retries = 3
+                    retry_delay = 2  # 初始延迟2秒
                     
-                    if not channel_info or not channel_info.get('exists', False):
-                        logger.warning(f"频道 {identifier} 不存在或无法访问")
-                        continue
-                    
-                    # 更新频道信息
-                    update_data = {
-                        'last_updated': datetime.now().isoformat(),
-                        'channel_name': channel_info.get('name'),
-                        'member_count': channel_info.get('member_count', 0),
-                        'is_group': channel_info.get('is_group', False),
-                        'is_supergroup': channel_info.get('is_supergroup', False)
-                    }
-                    
-                    # 如果有username，更新username
-                    if channel_info.get('username'):
-                        update_data['channel_username'] = channel_info.get('username')
-                    
-                    # 更新数据库
-                    try:
-                        await self.db_adapter.execute_query(
-                            'telegram_channels',
-                            'update',
-                            filters={'channel_id': channel_id},
-                            data=update_data
-                        )
-                        logger.info(f"已更新频道 {identifier} 的信息")
-                        
-                        # 添加到更新后的频道列表
-                        updated_channels.append({**channel, **update_data})
-                    except Exception as db_error:
-                        logger.error(f"更新频道 {identifier} 数据库信息时出错: {str(db_error)}")
+                    for retry in range(max_retries):
+                        try:
+                            # 验证频道
+                            channel_info = await self.verify_channel(identifier)
+                            
+                            if not channel_info or not channel_info.get('exists', False):
+                                logger.warning(f"频道 {identifier} 不存在或无法访问")
+                                break
+                            
+                            # 更新频道信息
+                            update_data = {
+                                'last_updated': datetime.now().isoformat(),
+                                'channel_name': channel_info.get('name'),
+                                'member_count': channel_info.get('member_count', 0),
+                                'is_group': channel_info.get('is_group', False),
+                                'is_supergroup': channel_info.get('is_supergroup', False)
+                            }
+                            
+                            # 如果有username，更新username
+                            if channel_info.get('username'):
+                                update_data['channel_username'] = channel_info.get('username')
+                            
+                            # 更新数据库
+                            try:
+                                await self.db_adapter.execute_query(
+                                    'telegram_channels',
+                                    'update',
+                                    filters={'channel_id': channel_id},
+                                    data=update_data
+                                )
+                                logger.info(f"已更新频道 {identifier} 的信息")
+                                
+                                # 添加到更新后的频道列表
+                                updated_channels.append({**channel, **update_data})
+                                break  # 成功更新，跳出重试循环
+                            except Exception as db_error:
+                                logger.error(f"更新频道 {identifier} 数据库信息时出错: {str(db_error)}")
+                                break  # 数据库错误不需要重试
+                            
+                        except Exception as e:
+                            if "wait" in str(e).lower() and retry < max_retries - 1:
+                                # 如果是等待错误，使用指数退避
+                                wait_time = retry_delay * (2 ** retry)
+                                logger.warning(f"更新频道 {identifier} 时遇到频率限制，等待 {wait_time} 秒后重试")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                logger.error(f"更新频道 {identifier} 时出错: {str(e)}")
+                                break
                 
                 except Exception as e:
                     logger.error(f"更新频道 {channel.get('channel_id') or channel.get('channel_username')} 时出错: {str(e)}")

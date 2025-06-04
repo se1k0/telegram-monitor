@@ -2368,6 +2368,107 @@ async def api_refresh_token(chain, contract):
             "contract": contract
         }), 500
 
+# 导入messages API
+from src.api.messages_api import query_messages
+
+@app.route('/api/messages', methods=['GET'])
+@async_route
+async def api_messages():
+    """
+    查询消息API接口
+    
+    支持的查询参数:
+    - channel_ids: 频道ID列表，可多选，格式如?channel_ids=123,456,789
+    - start_date: 开始日期，ISO格式，如2023-01-01T00:00:00
+    - end_date: 结束日期，ISO格式，如2023-12-31T23:59:59
+    - limit: 返回结果的最大数量，默认1000
+    
+    返回:
+    JSON格式的消息列表
+    """
+    try:
+        # 获取查询参数
+        channel_ids_param = request.args.get('channel_ids', '')
+        start_date_param = request.args.get('start_date')
+        end_date_param = request.args.get('end_date')
+        limit_param = request.args.get('limit', '1000')
+        
+        # 解析频道ID列表
+        channel_ids = None
+        if channel_ids_param:
+            try:
+                # 分割并转换为整数列表
+                channel_ids = [int(cid.strip()) for cid in channel_ids_param.split(',') if cid.strip()]
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "无效的channel_ids参数，请使用逗号分隔的整数列表"
+                }), 400
+        
+        # 解析日期参数
+        start_date = None
+        if start_date_param:
+            try:
+                start_date = datetime.fromisoformat(start_date_param.replace('Z', '+00:00'))
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "无效的start_date参数，请使用ISO格式（YYYY-MM-DDTHH:MM:SS）"
+                }), 400
+        
+        end_date = None
+        if end_date_param:
+            try:
+                end_date = datetime.fromisoformat(end_date_param.replace('Z', '+00:00'))
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "无效的end_date参数，请使用ISO格式（YYYY-MM-DDTHH:MM:SS）"
+                }), 400
+        
+        # 解析limit参数
+        limit = 1000
+        if limit_param:
+            try:
+                limit = int(limit_param)
+                # 确保limit在合理范围内
+                if limit <= 0:
+                    limit = 1000
+                elif limit > 10000:  # 设置一个上限，防止过大的查询
+                    limit = 10000
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "无效的limit参数，请使用整数"
+                }), 400
+        
+        # 调用查询函数
+        result = await query_messages(
+            channel_ids=channel_ids,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit
+        )
+        
+        # 添加额外的元数据
+        result["api_version"] = "1.0"
+        result["timestamp"] = datetime.now().isoformat()
+        
+        # 返回JSON结果
+        return jsonify(result)
+    
+    except Exception as e:
+        logger.error(f"API查询消息失败: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        return jsonify({
+            "success": False,
+            "error": f"查询失败: {str(e)}",
+            "api_version": "1.0",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 if __name__ == '__main__':
     # 确保必要的目录存在
     os.makedirs('./logs', exist_ok=True)

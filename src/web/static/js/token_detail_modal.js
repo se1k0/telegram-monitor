@@ -212,6 +212,9 @@ document.addEventListener('DOMContentLoaded', function() {
     window.openTokenDetailModal = function(chain, contract) {
         console.log(`准备打开token详情模态框: ${chain}/${contract}`);
         
+        // 标准化合约地址
+        const normalizedContract = normalizeEVMAddress(contract);
+        
         // 检查模态框是否存在
         const modalElement = document.getElementById('tokenDetailModal');
         if (!modalElement) {
@@ -222,7 +225,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 存储当前查询的链和合约地址，用于重试
         modalElement.setAttribute('data-chain', chain);
-        modalElement.setAttribute('data-contract', contract);
+        modalElement.setAttribute('data-contract', normalizedContract);
         
         // 检查必要的DOM元素
         const requiredElements = [
@@ -280,7 +283,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // 加载代币数据
         setTimeout(() => {
             // 延迟10ms执行，确保模态框已完全显示
-            fetchTokenDetail(chain, contract);
+            fetchTokenDetail(chain, normalizedContract);
         }, 10);
     };
     
@@ -401,6 +404,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error("响应数据中缺少token对象");
             }
             
+            // 标准化合约地址
+            const normalizedContract = normalizeEVMAddress(contract);
+            
             // 更新模态框标题
             document.getElementById('tokenDetailModalLabel').textContent = `${token.token_symbol || 'Unknown'} 详情`;
             
@@ -413,14 +419,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const contractElement = document.getElementById('tokenContract');
             
             // 检查合约地址是否存在
-            let displayAddress = token.contract || 'Unknown';
+            let displayAddress = normalizedContract || 'Unknown';
             if (displayAddress && displayAddress !== 'Unknown' && displayAddress.length > 15) {
-                displayAddress = `${token.contract.substring(0, 8)}...${token.contract.substring(token.contract.length - 6)}`;
+                displayAddress = `${normalizedContract.substring(0, 8)}...${normalizedContract.substring(normalizedContract.length - 6)}`;
             }
             
             contractElement.innerHTML = `
-                <span title="${token.contract || ''}">${displayAddress}</span>
-                <button class="btn btn-outline-secondary copy-address-btn" data-contract="${token.contract || ''}" title="复制合约地址">
+                <span title="${normalizedContract || ''}">${displayAddress}</span>
+                <button class="btn btn-outline-secondary copy-address-btn" data-contract="${normalizedContract || ''}" title="复制合约地址">
                     <i class="bi bi-clipboard"></i>
                 </button>
             `;
