@@ -1,0 +1,24 @@
+{
+    "telegram": {
+        "api_id": your_api_id,
+        "api_hash": "your_api_hash"
+    },
+    "database": {
+        "uri": "sqlite:///data/telegram_data.db"
+    },
+    "web_server": {
+        "host": "0.0.0.0",
+        "port": 5000,
+        "debug": false
+    },
+    "discovery": {
+        "enabled": true,
+        "interval": 3600,
+        "min_members": 0,
+        "max_channels": 200,
+        "excluded_channels": [
+            "my_test_channel",
+            "temporary_channel"
+        ]
+    }
+}
